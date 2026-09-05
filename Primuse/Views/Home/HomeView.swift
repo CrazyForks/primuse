@@ -200,6 +200,7 @@ struct HomeView: View {
     @AppStorage("primuse.home.mode") private var homeModeRawValue = HomeMode.music.rawValue
     @AppStorage("primuse.home.showRadio") private var showRadioOnHome = true
     @State private var showRadioBatchAdd = false
+    @State private var discoveryModel = HomeDiscoveryModel()
 
     private var homeMode: HomeMode {
         guard showRadioOnHome else { return .music }
@@ -209,7 +210,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 20) {
                     if homeMode == .radio {
                         radioModeContent
                             .transition(homeFaceTransition)
@@ -235,6 +236,9 @@ struct HomeView: View {
                     onLibraryRevisionChange: scheduleDebouncedHomeRefresh,
                     onPlaylistRevisionChange: refreshHomeSnapshotForPlaylistChange
                 )
+                if homeMode == .music, showFolders || showListeningRanking {
+                    HomeDiscoveryObserver(model: discoveryModel)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .primusePlaybackHistoryDidChange)) { _ in
                 refreshHomeSnapshot(force: true)
@@ -357,6 +361,7 @@ struct HomeView: View {
             }
             #endif
         }
+        .environment(discoveryModel)
     }
 
     // MARK: - Content
@@ -369,6 +374,8 @@ struct HomeView: View {
     @AppStorage("primuse.home.showContinueListening") private var showContinueListening: Bool = true
     @AppStorage("primuse.home.showQuickAccess") private var showQuickAccess: Bool = true
     @AppStorage("primuse.home.showPlaylists") private var showPlaylists: Bool = true
+    @AppStorage("primuse.home.showFolders") private var showFolders = true
+    @AppStorage("primuse.home.showListeningRanking") private var showListeningRanking = true
     @AppStorage(HomeSectionConfiguration.orderKey) private var homeSectionOrderRawValue = ""
     @AppStorage(LibraryPinStorage.defaultsKey) private var quickAccessRawValue = ""
     @AppStorage(LibraryDisplayConfiguration.quickAccessLimitKey)
@@ -501,6 +508,10 @@ struct HomeView: View {
             if showPlaylists, !homeSnapshot.playlists.isEmpty {
                 playlistsSection
             }
+        case .folders:
+            if showFolders { HomeFoldersSection() }
+        case .listeningRanking:
+            if showListeningRanking { HomeListeningRankingSection() }
         case .topArtists:
             if showTopArtists, !homeSnapshot.topArtists.isEmpty {
                 artistsSection
@@ -1435,7 +1446,18 @@ struct HomeView: View {
     ) -> HomeSnapshot {
         let snapshotStartedAt = Date()
         let recentSongs = makeRecentSongs()
-        let summary = PlayHistoryStore.shared.summary(in: .week)
+        let calendar = Calendar.current
+        let interval = HomeListeningPeriod.week.interval(now: Date(), calendar: calendar)
+        let weekEntries = PlayHistoryStore.shared.entries.filter {
+            $0.playedAt >= interval.start && $0.playedAt <= interval.end
+                && library.unobservedVisibleSong(id: $0.songID) != nil
+        }
+        let summary = PlayHistoryStore.Summary(
+            totalPlays: weekEntries.count,
+            totalSec: weekEntries.reduce(0) { $0 + $1.listenedSec },
+            activeDays: Set(weekEntries.map { calendar.startOfDay(for: $0.playedAt) }).count,
+            uniqueSongs: Set(weekEntries.map(\.songID)).count
+        )
         let topArtistHistory = PlayHistoryStore.shared.topArtists(in: .month, limit: 8)
         let allPlaylists = library.playlists
         let likedPlaylist = allPlaylists.first {

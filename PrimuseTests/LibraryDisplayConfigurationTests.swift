@@ -6,6 +6,22 @@ import SwiftUI
 @testable import Primuse
 
 final class LibraryDisplayConfigurationTests: XCTestCase {
+    func testHomeDiscoverySectionsMigrateWithoutReorderingExistingSections() {
+        let original: [HomeSectionKind] = [.stats, .playlists, .continueListening, .quickAccess]
+        let decoded = HomeSectionConfiguration.decode(HomeSectionConfiguration.encode(original))
+        XCTAssertEqual(decoded.filter { original.contains($0) }, original)
+        XCTAssertEqual(Array(decoded.prefix(4)), [.stats, .playlists, .folders, .listeningRanking])
+        XCTAssertEqual(Set(decoded).count, decoded.count)
+        XCTAssertEqual(Set(decoded), Set(HomeSectionKind.allCases))
+    }
+
+    func testHomeDiscoveryCustomizedPositionsSurviveRoundTrip() {
+        let original: [HomeSectionKind] = [.listeningRanking, .stats, .folders, .playlists]
+        let decoded = HomeSectionConfiguration.decode(HomeSectionConfiguration.encode(original))
+        XCTAssertEqual(Array(decoded.prefix(original.count)), original)
+        XCTAssertEqual(HomeSectionConfiguration.decode(""), HomeSectionConfiguration.defaultOrder)
+    }
+
     func testFreshLibraryUsesRecommendationFirst() {
         XCTAssertEqual(
             LibraryDisplayConfiguration.decodeSectionOrder(""),

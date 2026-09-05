@@ -6,6 +6,8 @@ enum HomeSectionKind: String, CaseIterable, Codable, Identifiable {
     case quickAccess
     case forYou
     case playlists
+    case folders
+    case listeningRanking
     case topArtists
     case recentlyAdded
     case stats
@@ -24,6 +26,8 @@ enum HomeSectionKind: String, CaseIterable, Codable, Identifiable {
         case .quickAccess: return "home_section_quick_access"
         case .forYou: return "home_section_for_you"
         case .playlists: return "home_section_playlists"
+        case .folders: return LocalizedStringKey(HomeDiscoveryText.string("folders"))
+        case .listeningRanking: return LocalizedStringKey(HomeDiscoveryText.string("ranking"))
         case .topArtists: return "home_section_top_artists"
         case .recentlyAdded: return "home_section_recently_added"
         case .stats: return "stats_title"
@@ -37,6 +41,8 @@ enum HomeSectionKind: String, CaseIterable, Codable, Identifiable {
         case .quickAccess: return "pin"
         case .forYou: return "sparkles"
         case .playlists: return "music.note.list"
+        case .folders: return "folder"
+        case .listeningRanking: return "chart.bar.fill"
         case .topArtists: return "music.mic"
         case .recentlyAdded: return "clock.badge.checkmark"
         case .stats: return "chart.bar.xaxis"
@@ -50,6 +56,8 @@ enum HomeSectionConfiguration {
         .continueListening,
         .radio,
         .quickAccess,
+        .folders,
+        .listeningRanking,
         .forYou,
         .playlists,
         .topArtists,
@@ -67,7 +75,18 @@ enum HomeSectionConfiguration {
         }
 
         var seen = Set<HomeSectionKind>()
-        let known = stored.filter { seen.insert($0).inserted }
+        var known = stored.filter { seen.insert($0).inserted }
+        if !known.isEmpty {
+            // Keep existing sections in the user's order while introducing
+            // the two related modules together beside their library shortcuts.
+            if seen.insert(.folders).inserted {
+                let anchor = known.firstIndex(of: .playlists) ?? known.firstIndex(of: .quickAccess)
+                known.insert(.folders, at: anchor.map { $0 + 1 } ?? 0)
+            }
+            if seen.insert(.listeningRanking).inserted {
+                known.insert(.listeningRanking, at: (known.firstIndex(of: .folders) ?? 0) + 1)
+            }
+        }
         let missing = defaultOrder.filter { seen.insert($0).inserted }
         return known + missing
     }
@@ -89,6 +108,8 @@ struct HomeSectionsSettingsView: View {
     @AppStorage("primuse.home.showRadio") private var showRadio = true
     @AppStorage("primuse.home.showQuickAccess") private var showQuickAccess = true
     @AppStorage("primuse.home.showPlaylists") private var showPlaylists = true
+    @AppStorage("primuse.home.showFolders") private var showFolders = true
+    @AppStorage("primuse.home.showListeningRanking") private var showListeningRanking = true
     @AppStorage(HomeSectionConfiguration.orderKey) private var sectionOrderRawValue = ""
 
     private var sectionOrder: [HomeSectionKind] {
@@ -146,6 +167,8 @@ struct HomeSectionsSettingsView: View {
         case .quickAccess: return $showQuickAccess
         case .forYou: return $showForYou
         case .playlists: return $showPlaylists
+        case .folders: return $showFolders
+        case .listeningRanking: return $showListeningRanking
         case .topArtists: return $showTopArtists
         case .recentlyAdded: return $showRecentlyAdded
         case .stats: return $showStatsGlimpse
