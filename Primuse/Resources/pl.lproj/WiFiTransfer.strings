@@ -152,3 +152,5 @@
 "discoveryNetwork" = "Brak dostępnej sieci lokalnej. Połącz się z Wi-Fi lub Ethernet i spróbuj ponownie.";
 "discoveryUnavailable" = "Wyszukiwanie urządzeń jest chwilowo niedostępne. Spróbuj ponownie lub wpisz adres odbiorcy.";
 "discoveryConfiguration" = "W tej wersji brakuje deklaracji usługi Bonjour. Zainstaluj pełną wersję i otwórz ją ponownie.";
+"receivingDevice" = "Urządzenie odbierające";
+"chooseReceiver" = "Wybierz urządzenie odbierające";

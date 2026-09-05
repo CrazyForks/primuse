@@ -152,3 +152,5 @@
 "discoveryNetwork" = "لا توجد شبكة محلية متاحة. اتصل بشبكة Wi-Fi أو Ethernet ثم أعد المحاولة.";
 "discoveryUnavailable" = "اكتشاف الأجهزة القريبة غير متاح مؤقتًا. أعد المحاولة أو أدخل عنوان الاستقبال.";
 "discoveryConfiguration" = "يفتقد هذا الإصدار تصريح خدمة Bonjour. ثبّت إصدارًا كاملًا وأعد فتحه.";
+"receivingDevice" = "جهاز الاستقبال";
+"chooseReceiver" = "اختر جهاز الاستقبال";

@@ -2,6 +2,8 @@ import Foundation
 
 public enum WiFiTransferPage {
     public static let english: [String: String] = [
+        "receivingDevice": "Receiving device",
+        "chooseReceiver": "Choose a receiving device",
         "libraryTreeHint": "Grouped by music source and album. Select songs, then send.",
         "libraryLoadMore": "Show more",
         "libraryUngrouped": "No album",

@@ -154,3 +154,5 @@
 "discoveryNetwork" = "利用可能なローカルネットワークがありません。Wi-Fi または有線ネットワークに接続して再試行してください。";
 "discoveryUnavailable" = "近くのデバイスの検出は一時的に利用できません。再試行するか、受信アドレスを入力してください。";
 "discoveryConfiguration" = "このアプリには Bonjour サービス宣言がありません。完全なバージョンをインストールして開き直してください。";
+"receivingDevice" = "受信デバイス";
+"chooseReceiver" = "受信デバイスを選択";

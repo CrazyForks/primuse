@@ -83,7 +83,8 @@ struct WiFiTransferView: View {
             }
         }
         #else
-        .frame(width: 980, height: 640)
+        .frame(minWidth: 820, idealWidth: 1040, minHeight: 540, idealHeight: 740)
+        .presentationSizing(.fitted)
         #endif
         .interactiveDismissDisabled()
         .alert(WiFiTransferText.string("requestTitle"), isPresented: Binding(
@@ -142,14 +143,14 @@ struct WiFiTransferView: View {
 
     #if os(macOS)
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Image(systemName: "laptopcomputer.and.iphone")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(PMColor.brand).frame(width: 42, height: 42)
-                .background(PMColor.brand.opacity(0.11), in: .rect(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(WiFiTransferText.string("nativeTitle")).font(.system(size: 18, weight: .semibold))
-                Text(WiFiTransferText.string("nativeSubtitle")).font(.system(size: 12))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(PMColor.brand).frame(width: 34, height: 34)
+                .background(PMColor.brand.opacity(0.11), in: .rect(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(WiFiTransferText.string("nativeTitle")).font(.system(size: 16, weight: .semibold))
+                Text(WiFiTransferText.string("nativeSubtitle")).font(.system(size: 11.5))
                     .foregroundStyle(PMColor.textMuted).lineLimit(2)
             }
             Spacer(minLength: 20)
@@ -159,7 +160,7 @@ struct WiFiTransferView: View {
                     .background(PMColor.glassBtn, in: .circle)
             }.buttonStyle(.plain).keyboardShortcut(.cancelAction)
                 .accessibilityLabel(WiFiTransferText.string("done"))
-        }.padding(.horizontal, 22).padding(.vertical, 18)
+        }.padding(.horizontal, 20).padding(.vertical, 12)
             .background(PMColor.bgElev)
             .overlay(alignment: .bottom) { Rectangle().fill(PMColor.divider).frame(height: 0.5) }
     }
@@ -175,8 +176,11 @@ struct WiFiTransferView: View {
         #if os(macOS)
         .controlSize(.regular)
         .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 4)
+        #else
+        .frame(maxWidth: 360)
+        .padding(.horizontal, 16).padding(.vertical, 10)
         #endif
-        .padding(.horizontal, 22).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("wifiTransfer.mode")
         .disabled(receiver.running || sender.busy)

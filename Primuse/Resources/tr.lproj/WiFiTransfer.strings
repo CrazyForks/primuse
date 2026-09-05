@@ -152,3 +152,5 @@
 "discoveryNetwork" = "Erişilebilir yerel ağ yok. Wi-Fi veya Ethernet ağına bağlanıp yeniden deneyin.";
 "discoveryUnavailable" = "Yakındaki cihazları bulma geçici olarak kullanılamıyor. Yeniden deneyin veya alıcı adresini girin.";
 "discoveryConfiguration" = "Bu sürümde Bonjour hizmet bildirimi eksik. Tam bir sürüm yükleyip yeniden açın.";
+"receivingDevice" = "Alıcı cihaz";
+"chooseReceiver" = "Alıcı cihaz seçin";

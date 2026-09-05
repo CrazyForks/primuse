@@ -244,9 +244,10 @@ struct WiFiTransferSendView: View {
     @State private var expectedPeerID: String?
     @State private var showImporter = false
     @State private var pickFolder = false
-    @State private var manualConnection = true
+    @State private var showConnection = false
     @State private var pickerError: String?
     @State private var dropTargeted = false
+    @State private var isSearching = false
 
     private var canSend: Bool { (!sender.files.isEmpty || !sender.selectedSongIDs.isEmpty) && code.count == 6 && !address.isEmpty && !sender.busy }
 
@@ -255,16 +256,18 @@ struct WiFiTransferSendView: View {
             GeometryReader { geometry in
                 if geometry.size.width >= 680 {
                     HStack(alignment: .top, spacing: 20) {
-                        musicPane.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        ScrollView { devicePane.padding(.bottom, 12) }.frame(width: 260)
-                    }.padding(18)
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            musicPane.frame(height: max(380, geometry.size.height * 0.7))
-                            devicePane
-                        }.padding(16)
+                        musicPane(compact: false).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        ScrollView { devicePane }.frame(width: 250)
                     }
+                    .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+                } else {
+                    VStack(spacing: 12) {
+                        #if os(iOS)
+                        if !isSearching { connectionSummary }
+                        #endif
+                        musicPane(compact: true).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .padding(.horizontal, 16).padding(.bottom, 12)
                 }
             }
             footer
@@ -276,19 +279,32 @@ struct WiFiTransferSendView: View {
             case .failure(let error): pickerError = WiFiTransferText.error(error)
             }
         }
+        #if os(iOS)
+        .sheet(isPresented: $showConnection) { connectionSheet }
+        #endif
+        .onChange(of: address) { _, value in
+            if !discovery.peers.contains(where: { $0.address == value && $0.id == expectedPeerID }) {
+                expectedPeerID = nil
+            }
+        }
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
     }
 
-    private var musicPane: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func musicPane(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !compact || !isSearching {
             HStack {
-                TransferSectionHeading(title: String(localized: "sidebar_all_songs"))
+                Text(String(localized: "sidebar_all_songs"))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
                 fileActions
+            }
             }
             WiFiTransferLibraryTree(selected: Binding(get: { sender.selectedSongIDs },
                                                        set: { if !sender.busy { sender.selectedSongIDs = $0 } }),
-                                    model: sender.libraryTree)
+                                    model: sender.libraryTree,
+                                    onSearchFocusChange: { isSearching = $0 })
                 .disabled(sender.busy)
                 .frame(maxHeight: .infinity)
                 .dropDestination(for: URL.self) { urls, _ in
@@ -340,112 +356,201 @@ struct WiFiTransferSendView: View {
             }
         } label: {
             Label(WiFiTransferText.string("files"), systemImage: "plus")
-                .font(.callout.weight(.semibold))
-                #if os(iOS)
-                .frame(minHeight: 28)
-                #endif
+                .font(.subheadline)
+                .frame(minHeight: TransferAppearance.compactTarget)
         }
         #if os(macOS)
         .menuStyle(.borderlessButton)
         #endif
-        .buttonStyle(TransferButtonStyle())
+        .buttonStyle(.plain)
+        .foregroundStyle(TransferAppearance.accent)
         .fixedSize(horizontal: true, vertical: false)
         .disabled(sender.busy)
         .accessibilityIdentifier("transfer.addMusic")
     }
 
+    private var selectedPeer: WiFiTransferPeer? {
+        discovery.peers.first { $0.id == expectedPeerID }
+    }
+
+    private var refreshButton: some View {
+        Button { discovery.start() } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.subheadline)
+                .frame(width: TransferAppearance.compactTarget, height: TransferAppearance.compactTarget)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain).disabled(sender.busy)
+        .accessibilityLabel(WiFiTransferText.string("refresh"))
+    }
+
     private var devicePane: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                TransferSectionHeading(title: WiFiTransferText.string("nearby"))
-                Button { discovery.start() } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .medium))
-                        .frame(width: TransferAppearance.compactTarget, height: TransferAppearance.compactTarget).contentShape(.rect)
-                }.buttonStyle(.plain).disabled(sender.busy)
-                    .accessibilityLabel(WiFiTransferText.string("refresh"))
+                Text(WiFiTransferText.string("receivingDevice")).font(.subheadline.weight(.semibold))
+                Spacer()
+                refreshButton
             }
             VStack(spacing: 0) {
                 if discovery.peers.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 20, weight: .regular))
-                            .foregroundStyle(TransferAppearance.muted)
-                        Text(WiFiTransferText.string("noDevices")).font(.system(size: TransferAppearance.bodySize, weight: .medium))
-                        Text(WiFiTransferText.string("discoveryHint"))
-                            .font(.system(size: TransferAppearance.captionSize))
-                            .foregroundStyle(TransferAppearance.muted).multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }.padding(14).frame(maxWidth: .infinity)
+                    Label(WiFiTransferText.string("noDevices"), systemImage: "laptopcomputer.and.iphone")
+                        .font(.system(size: TransferAppearance.bodySize))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+                        .padding(.horizontal, 12)
                 } else {
                     ScrollView {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 0) {
                             ForEach(discovery.peers) { peer in
-                                Button {
-                                    address = peer.address
-                                    expectedPeerID = peer.id
-                                    manualConnection = false
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: TransferAppearance.deviceIcon(peer.identity.platform))
-                                            .font(.system(size: 25, weight: .light)).frame(width: 36)
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(peer.identity.name).font(.system(size: TransferAppearance.bodySize, weight: .semibold)).lineLimit(1)
-                                            Text(peer.identity.platform).font(.system(size: TransferAppearance.captionSize))
-                                                .foregroundStyle(TransferAppearance.muted)
-                                        }
-                                        Spacer(minLength: 2)
-                                        if expectedPeerID == peer.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(TransferAppearance.accent) }
-                                    }.padding(12).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-                                        .background(expectedPeerID == peer.id ? TransferAppearance.accent.opacity(0.09) : .clear, in: .rect(cornerRadius: 8))
-                                        .contentShape(.rect)
-                                }.buttonStyle(.plain).disabled(sender.busy)
+                                peerButton(peer).padding(.horizontal, 12)
+                                    .background(expectedPeerID == peer.id ? TransferAppearance.accent.opacity(0.08) : .clear)
+                                if peer.id != discovery.peers.last?.id { Divider().padding(.leading, 46) }
                             }
-                        }.padding(6)
-                    }.frame(height: min(CGFloat(discovery.peers.count) * 76 + 12, 180))
+                        }
+                    }.frame(height: min(CGFloat(discovery.peers.count) * 58, 174))
                 }
             }
-            .background(TransferAppearance.surface, in: .rect(cornerRadius: 12))
-            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(TransferAppearance.line, lineWidth: 0.5) }
+            .background(TransferAppearance.surface, in: .rect(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(TransferAppearance.line, lineWidth: 0.5) }
+            Text(WiFiTransferText.string("discoveryHint"))
+                .font(.system(size: TransferAppearance.captionSize))
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
-            DisclosureGroup(isExpanded: $manualConnection) {
-                TextField("192.168.1.8:12345", text: $address)
-                    .textFieldStyle(.plain).font(.system(size: TransferAppearance.bodySize))
-                    .padding(10).background(TransferAppearance.surface, in: .rect(cornerRadius: 7))
-                    .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(TransferAppearance.line, lineWidth: 1) }
-                    .autocorrectionDisabled().disabled(sender.busy)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never).keyboardType(.URL)
-                    #endif
-                    .accessibilityLabel(WiFiTransferText.string("manualAddress"))
-                    .padding(.top, 8)
-                    .onChange(of: address) { _, value in
-                        if !discovery.peers.contains(where: { $0.address == value && $0.id == expectedPeerID }) { expectedPeerID = nil }
-                    }
-            } label: {
-                Text(WiFiTransferText.string("manualConnection")).font(.system(size: TransferAppearance.captionSize))
-            }.tint(TransferAppearance.muted).disabled(sender.busy)
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(WiFiTransferText.string("code")).font(.system(size: TransferAppearance.bodySize, weight: .semibold))
-                TextField("000000", text: $code)
-                    .textFieldStyle(.plain).font(.system(size: 18, weight: .medium, design: .monospaced))
-                    .tracking(3).multilineTextAlignment(.center)
-                    .padding(.vertical, 10)
-                    .background(TransferAppearance.background, in: .rect(cornerRadius: 8))
-                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(TransferAppearance.line, lineWidth: 1) }
-                    .disabled(sender.busy).accessibilityLabel(WiFiTransferText.string("code"))
-                    #if os(iOS)
-                    .keyboardType(.numberPad).textContentType(.oneTimeCode)
-                    #endif
-                    .onChange(of: code) { _, value in code = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6)) }
-                Text(WiFiTransferText.string("codeHint")).font(.system(size: TransferAppearance.captionSize))
-                    .foregroundStyle(TransferAppearance.muted).fixedSize(horizontal: false, vertical: true)
-            }.modifier(TransferSurface(padding: 14))
-            if let error = discovery.error {
-                Label(WiFiTransferText.string(error), systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(WiFiTransferText.string("manualAddress"))
+                    .font(.system(size: TransferAppearance.captionSize)).foregroundStyle(.secondary)
+                addressField.padding(.horizontal, 10).frame(minHeight: 36)
+                    .background(TransferAppearance.surface, in: .rect(cornerRadius: 6))
+                    .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(TransferAppearance.line, lineWidth: 0.5) }
             }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(WiFiTransferText.string("code"))
+                    .font(.system(size: TransferAppearance.captionSize)).foregroundStyle(.secondary)
+                codeField.padding(.horizontal, 10).frame(minHeight: 36)
+                    .background(TransferAppearance.surface, in: .rect(cornerRadius: 6))
+                    .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(TransferAppearance.line, lineWidth: 0.5) }
+                Text(WiFiTransferText.string("codeHint"))
+                    .font(.system(size: TransferAppearance.captionSize)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            discoveryFeedback
         }
     }
+
+    private func peerButton(_ peer: WiFiTransferPeer) -> some View {
+        Button {
+            address = peer.address
+            expectedPeerID = peer.id
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: TransferAppearance.deviceIcon(peer.identity.platform))
+                    .font(.title3).foregroundStyle(TransferAppearance.accent).frame(width: 26)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(peer.identity.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                    Text(peer.identity.platform).font(.caption).foregroundStyle(.secondary)
+                }.foregroundStyle(TransferAppearance.text)
+                Spacer(minLength: 4)
+                if expectedPeerID == peer.id {
+                    Image(systemName: "checkmark").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TransferAppearance.accent)
+                }
+            }.frame(maxWidth: .infinity, minHeight: 58, alignment: .leading).contentShape(.rect)
+        }.buttonStyle(.plain).disabled(sender.busy)
+    }
+
+    private var addressField: some View {
+        TextField("192.168.1.8:12345", text: $address)
+            .textFieldStyle(.plain).font(.subheadline)
+            .autocorrectionDisabled().disabled(sender.busy)
+            #if os(iOS)
+            .textInputAutocapitalization(.never).keyboardType(.URL)
+            #endif
+            .accessibilityLabel(WiFiTransferText.string("manualAddress"))
+            .accessibilityIdentifier("transfer.address")
+    }
+
+    private var codeField: some View {
+        TextField("000000", text: $code)
+            .textFieldStyle(.plain).font(.body.monospaced()).tracking(2)
+            .disabled(sender.busy).accessibilityLabel(WiFiTransferText.string("code"))
+            .accessibilityIdentifier("transfer.code")
+            #if os(iOS)
+            .keyboardType(.numberPad).textContentType(.oneTimeCode)
+            #endif
+            .onChange(of: code) { _, value in code = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6)) }
+    }
+
+    @ViewBuilder private var discoveryFeedback: some View {
+        if let error = discovery.error {
+            Label(WiFiTransferText.string(error), systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    #if os(iOS)
+    private var connectionSummary: some View {
+        Button { showConnection = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: selectedPeer.map { TransferAppearance.deviceIcon($0.identity.platform) } ?? "laptopcomputer.and.iphone")
+                    .font(.title3).foregroundStyle(TransferAppearance.accent).frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(address.isEmpty ? WiFiTransferText.string("chooseReceiver") : selectedPeer?.identity.name ?? address)
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                    Text(address.isEmpty ? WiFiTransferText.string("sameNetwork") : code.count == 6 ? WiFiTransferText.string("receivingDevice") : WiFiTransferText.string("codeHint"))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+            .background(TransferAppearance.surface, in: .rect(cornerRadius: 12))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain).disabled(sender.busy)
+        .accessibilityIdentifier("transfer.receiver")
+    }
+
+    private var connectionSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if discovery.peers.isEmpty {
+                        Label(WiFiTransferText.string("noDevices"), systemImage: "laptopcomputer.and.iphone")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(discovery.peers) { peer in peerButton(peer) }
+                    }
+                } header: {
+                    HStack {
+                        Text(WiFiTransferText.string("nearby"))
+                        Spacer()
+                        refreshButton
+                    }
+                } footer: {
+                    Text(WiFiTransferText.string("discoveryHint"))
+                }
+                Section(WiFiTransferText.string("manualAddress")) { addressField }
+                Section { codeField } header: {
+                    Text(WiFiTransferText.string("code"))
+                } footer: {
+                    Text(WiFiTransferText.string("codeHint"))
+                }
+                discoveryFeedback
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(WiFiTransferText.string("receivingDevice"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(WiFiTransferText.string("done")) { showConnection = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+    #endif
 
     private var progressSummary: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -481,7 +586,7 @@ struct WiFiTransferSendView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(String(format: WiFiTransferText.string("librarySelectedSummary"), sender.selectedSongIDs.count, sender.externalFiles.count))
-                    .font(.system(size: TransferAppearance.captionSize, weight: .medium))
+                    .font(.caption.weight(.medium))
                 if !sender.destinationName.isEmpty && sender.completed > 0 {
                     Text(sender.destinationName).font(.system(size: TransferAppearance.captionSize)).foregroundStyle(TransferAppearance.muted)
                 }
@@ -501,7 +606,7 @@ struct WiFiTransferSendView: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(.horizontal, 22).padding(.vertical, 14)
+        .padding(.horizontal, 20).padding(.vertical, 10)
         .background(TransferAppearance.surface)
         .overlay(alignment: .top) { Rectangle().fill(TransferAppearance.line).frame(height: 0.5) }
     }

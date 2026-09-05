@@ -9,24 +9,37 @@ struct WiFiTransferLibraryTree: View {
     @Environment(\.isEnabled) private var isEnabled
     @Binding var selected: Set<String>
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
     let model: TransferLibraryTreeModel
+    var onSearchFocusChange: (Bool) -> Void = { _ in }
 
     private var enabledSources: [MusicSource] { sources.sources.filter { $0.isEnabled && !$0.isDeleted } }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(WiFiTransferText.string("librarySearch"), text: $query)
                     .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit { searchFocused = false }
                     .accessibilityIdentifier("transfer.library.search")
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                         .accessibilityLabel(String(localized: "clear"))
                 }
+                if !selected.isEmpty {
+                    Divider().frame(height: 16)
+                    Button(String(localized: "clear")) { model.setSelection([]) }
+                        .buttonStyle(.plain).foregroundStyle(TransferAppearance.accent)
+                        .accessibilityIdentifier("transfer.library.clear")
+                }
             }
-            .font(.callout).padding(14)
+            .font(TransferTreeLayout.titleFont)
+            .padding(.horizontal, 12)
+            .frame(minHeight: TransferTreeLayout.searchHeight)
             Divider()
             TransferLibraryWindow(model: model)
                 .id(model.scrollReset)
@@ -37,16 +50,6 @@ struct WiFiTransferLibraryTree: View {
                             .foregroundStyle(.secondary).padding(24)
                     }
                 }
-            Divider()
-            HStack {
-                Text(WiFiTransferText.string("libraryTreeHint"))
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                if !selected.isEmpty {
-                    Button(String(localized: "clear")) { model.setSelection([]) }
-                        .buttonStyle(.plain).font(.caption)
-                }
-            }.padding(12)
             if let error = model.error {
                 TransferFeedback(text: error, isError: true).padding(12)
             }
@@ -70,9 +73,10 @@ struct WiFiTransferLibraryTree: View {
                 commit: { selected = $0 })
         }
         .onChange(of: query) { _, _ in model.cancelSelection() }
+        .onChange(of: searchFocused) { _, value in onSearchFocusChange(value) }
         .onChange(of: selected) { _, value in model.updateSelection(value) }
         .onChange(of: isEnabled) { _, enabled in if !enabled { model.cancelSelection() } }
-        .onDisappear { model.cancel() }
+        .onDisappear { model.cancel(); onSearchFocusChange(false) }
         .background(TransferAppearance.surface)
         .clipShape(.rect(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(TransferAppearance.line, lineWidth: 0.5) }
@@ -403,7 +407,11 @@ private struct TransferLibraryWindow: View {
     let model: TransferLibraryTreeModel
     @State private var firstVisibleRow = 0
     @State private var viewportHeight = 480.0
-    @ScaledMetric(relativeTo: .callout) private var rowHeight = 54.0
+    #if os(macOS)
+    private let rowHeight = 40.0
+    #else
+    @ScaledMetric(relativeTo: .subheadline) private var rowHeight = 54.0
+    #endif
 
     var body: some View {
         let rows = model.rows
@@ -415,11 +423,17 @@ private struct TransferLibraryWindow: View {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: Double(range.lowerBound) * rowHeight).accessibilityHidden(true)
                 ForEach(nodes) { node in
-                    row(node).frame(height: rowHeight)
+                    row(node)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: rowHeight)
+                        .background(rowBackground(node))
                 }
                 Color.clear.frame(height: Double(rows.count - range.upperBound) * rowHeight).accessibilityHidden(true)
             }
         }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.interactively)
+        #endif
         .onScrollGeometryChange(for: Metrics.self) { geometry in
             let row = Int(max(0, geometry.visibleRect.minY) / max(1, rowHeight))
             return Metrics(firstRow: row / SongListScrollWindow.rowStride * SongListScrollWindow.rowStride,
@@ -447,7 +461,7 @@ private struct TransferLibraryWindow: View {
         switch node {
         case .source(let id):
             if let source = model.sourceByID[id] {
-                HStack(spacing: 10) {
+                HStack(spacing: 6) {
                     disclosure(expanded: model.sourceExpanded(id), title: source.name) { model.toggleSource(id) }
                     let count = model.sourceSelectedCounts[id, default: 0]
                     TransferTreeCheckbox(state: .init(selectedCount: count, songCount: model.indices[id]?.eligibleCount ?? Int.max),
@@ -455,35 +469,36 @@ private struct TransferLibraryWindow: View {
                         model.selectParent(sourceID: id, group: nil)
                     }
                     Image(systemName: source.type == .local ? "internaldrive" : "externaldrive.connected.to.line.below")
-                        .foregroundStyle(TransferAppearance.accent)
-                    Text(source.name).font(.callout.weight(.semibold)).lineLimit(1)
+                        .font(TransferTreeLayout.titleFont)
+                        .foregroundStyle(TransferAppearance.accent).frame(width: TransferTreeLayout.iconWidth)
+                    Text(source.name).font(TransferTreeLayout.titleFont.weight(.semibold)).lineLimit(1)
                     Spacer(minLength: 4)
                     if model.loadingSources.contains(id) { ProgressView().controlSize(.small) }
                     Text("\(model.indices[id]?.songCount ?? source.count)")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .font(TransferTreeLayout.detailFont.monospacedDigit()).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 12)
-                .background(TransferAppearance.background.opacity(0.65))
+                .padding(.horizontal, 10)
             }
         case .album(let group):
             if let album = model.indices[group.sourceID]?.albumsByID[group] {
                 let title = group.album?.albumTitle ?? WiFiTransferText.string("libraryUngrouped")
-                HStack(spacing: 10) {
+                HStack(spacing: 6) {
                     disclosure(expanded: model.albumExpanded(group), title: title) { model.toggleAlbum(group) }
                     TransferTreeCheckbox(state: .init(selectedCount: model.selectedCounts[group, default: 0], songCount: album.eligibleCount),
                                          title: title, disabled: model.selecting || album.eligibleCount == 0) {
                         model.selectParent(sourceID: group.sourceID, group: group)
                     }
-                    Image(systemName: "square.stack").foregroundStyle(.secondary)
+                    Image(systemName: "square.stack").font(TransferTreeLayout.titleFont)
+                        .foregroundStyle(.secondary).frame(width: TransferTreeLayout.iconWidth)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(title).font(.callout).lineLimit(1)
+                        Text(title).font(TransferTreeLayout.titleFont).lineLimit(1)
                         if let artist = group.album?.artistName, !artist.isEmpty {
-                            Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(artist).font(TransferTreeLayout.detailFont).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
                     Spacer(minLength: 4)
-                    Text("\(album.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                }.padding(.leading, 24).padding(.trailing, 12)
+                    Text("\(album.count)").font(TransferTreeLayout.detailFont.monospacedDigit()).foregroundStyle(.secondary)
+                }.padding(.leading, 10 + TransferTreeLayout.indent).padding(.trailing, 10)
             }
         case .song(let id, let group):
             if let song = library.unobservedVisibleSong(id: id), let source = model.sourceByID[group.sourceID] {
@@ -501,41 +516,51 @@ private struct TransferLibraryWindow: View {
                     .buttonStyle(.plain).font(.callout)
                 if model.loadingGroups.contains(group) { ProgressView().controlSize(.small) }
                 Spacer()
-            }.padding(.leading, 58)
+            }.padding(.leading, TransferTreeLayout.songInset)
         }
     }
 
     private func disclosure(expanded: Bool, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                .font(.caption.weight(.semibold)).frame(width: 24, height: 32)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: TransferTreeLayout.disclosureWidth, height: TransferTreeLayout.controlHeight).contentShape(.rect)
         }.buttonStyle(.plain).accessibilityLabel(title)
     }
 
     private func songRow(_ song: Song, source: TransferLibraryTreeModel.Source) -> some View {
         let reason = WiFiTransferFilePreparation.unavailableReason(song: song, sourceType: source.type)
         let checked = model.selected.contains(song.id)
-        return HStack(spacing: 10) {
+        return HStack(spacing: 6) {
             TransferTreeCheckbox(state: checked ? .all : .none, title: song.title,
                                  disabled: !checked && (reason != nil || model.selected.count >= WiFiTransferLibraryGrouping.selectionLimit)) {
                 var selected = model.selected
                 if checked { selected.remove(song.id) } else { selected.insert(song.id) }
                 model.setSelection(selected)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(song.title).font(.callout).lineLimit(1)
+            Image(systemName: "music.note").font(TransferTreeLayout.titleFont)
+                .foregroundStyle(.secondary).frame(width: TransferTreeLayout.iconWidth)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title).font(TransferTreeLayout.titleFont).lineLimit(1)
                 Text(reason.map(WiFiTransferText.string) ?? song.artistName ?? "")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(TransferTreeLayout.detailFont).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             if song.fileSize > 0 {
                 Text(ByteCountFormatter.string(fromByteCount: song.fileSize, countStyle: .file))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(TransferTreeLayout.detailFont.monospacedDigit()).foregroundStyle(.secondary)
             }
         }
-        .padding(.leading, 58).padding(.trailing, 12)
-        .background(checked ? TransferAppearance.accent.opacity(0.07) : .clear)
+        .padding(.leading, TransferTreeLayout.songInset).padding(.trailing, 10)
         .opacity(reason == nil ? 1 : 0.6)
+    }
+
+    private func rowBackground(_ node: TransferTreeNode) -> Color {
+        switch node {
+        case .source: TransferAppearance.background
+        case .song(let id, _): model.selected.contains(id) ? TransferAppearance.accent.opacity(0.08) : .clear
+        default: .clear
+        }
     }
 
     private struct Metrics: Equatable { let firstRow: Int; let height: Double }
@@ -553,9 +578,9 @@ private struct TransferTreeCheckbox: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: state == .all ? "checkmark.square.fill" : state == .partial ? "minus.square.fill" : "square")
-                .font(.system(size: 18, weight: .regular))
+                .font(.system(size: TransferTreeLayout.checkboxSize, weight: .regular))
                 .foregroundStyle(state == .none ? Color.secondary : TransferAppearance.accent)
-                .frame(width: 28, height: 32).contentShape(.rect)
+                .frame(width: TransferTreeLayout.checkboxWidth, height: TransferTreeLayout.controlHeight).contentShape(.rect)
         }
         .buttonStyle(.plain).disabled(disabled)
         .accessibilityLabel(title)
@@ -563,4 +588,29 @@ private struct TransferTreeCheckbox: View {
         .accessibilityAddTraits(state == .all ? .isSelected : [])
     }
 }
+
+private enum TransferTreeLayout {
+    static let indent: CGFloat = 14
+    #if os(macOS)
+    static let titleFont = Font.system(size: 12.5)
+    static let detailFont = Font.system(size: 10.5)
+    static let searchHeight: CGFloat = 38
+    static let disclosureWidth: CGFloat = 18
+    static let checkboxWidth: CGFloat = 24
+    static let checkboxSize: CGFloat = 15
+    static let controlHeight: CGFloat = 32
+    static let iconWidth: CGFloat = 18
+    #else
+    static let titleFont = Font.subheadline
+    static let detailFont = Font.caption
+    static let searchHeight: CGFloat = 48
+    static let disclosureWidth: CGFloat = 28
+    static let checkboxWidth: CGFloat = 28
+    static let checkboxSize: CGFloat = 20
+    static let controlHeight: CGFloat = 44
+    static let iconWidth: CGFloat = 24
+    #endif
+    static var songInset: CGFloat { 10 + indent * 2 + disclosureWidth + 6 }
+}
+
 #endif

@@ -154,3 +154,5 @@
 "discoveryNetwork" = "Aucun réseau local accessible. Connectez-vous au Wi-Fi ou à Ethernet, puis réessayez.";
 "discoveryUnavailable" = "La recherche d’appareils est temporairement indisponible. Réessayez ou saisissez l’adresse de réception.";
 "discoveryConfiguration" = "Cette version ne déclare pas le service Bonjour. Installez une version complète et rouvrez-la.";
+"receivingDevice" = "Appareil destinataire";
+"chooseReceiver" = "Choisir un appareil destinataire";

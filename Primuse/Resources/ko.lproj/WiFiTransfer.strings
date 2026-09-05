@@ -154,3 +154,5 @@
 "discoveryNetwork" = "사용 가능한 로컬 네트워크가 없습니다. Wi-Fi 또는 이더넷에 연결한 후 다시 시도하세요.";
 "discoveryUnavailable" = "주변 기기 검색을 일시적으로 사용할 수 없습니다. 다시 시도하거나 수신 주소를 입력하세요.";
 "discoveryConfiguration" = "현재 앱에 Bonjour 서비스 선언이 없습니다. 완전한 버전을 설치한 후 다시 여세요.";
+"receivingDevice" = "수신 기기";
+"chooseReceiver" = "수신 기기 선택";

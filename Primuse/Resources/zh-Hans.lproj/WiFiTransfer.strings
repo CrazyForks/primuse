@@ -154,3 +154,5 @@
 "discoveryNetwork" = "当前没有可用的局域网，请连接 Wi-Fi 或有线网络后重试。";
 "discoveryUnavailable" = "附近设备发现暂不可用，请重试或输入接收地址。";
 "discoveryConfiguration" = "当前安装包缺少 Bonjour 服务声明，请安装完整版本后重新打开。";
+"receivingDevice" = "接收设备";
+"chooseReceiver" = "选择接收设备";

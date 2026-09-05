@@ -152,3 +152,5 @@
 "discoveryNetwork" = "No hay una red local accesible. Conéctate a Wi-Fi o Ethernet e intenta de nuevo.";
 "discoveryUnavailable" = "La búsqueda de dispositivos no está disponible temporalmente. Intenta de nuevo o ingresa la dirección de recepción.";
 "discoveryConfiguration" = "Esta versión no declara el servicio Bonjour. Instala una versión completa y vuelve a abrirla.";
+"receivingDevice" = "Dispositivo receptor";
+"chooseReceiver" = "Elegir dispositivo receptor";
