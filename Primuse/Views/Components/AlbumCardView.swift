@@ -3,6 +3,7 @@ import PrimuseKit
 
 struct AlbumCardView: View {
     let album: Album
+    var showsSongCount = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -19,6 +20,12 @@ struct AlbumCardView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+
+                if showsSongCount {
+                    Text("\(album.songCount) \(String(localized: "songs_count"))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }

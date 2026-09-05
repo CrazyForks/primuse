@@ -4720,6 +4720,7 @@ private struct MacSTThemeView: View {
     @Environment(AudioPlayerService.self) private var player
     @State private var autoDetectMaterial = true
     @AppStorage("primuse.home.showRadio") private var showRadioOnHome = true
+    @AppStorage("primuse.home.showRecentlyAdded") private var showRecentlyAddedOnHome = true
     @AppStorage(LibrarySongBrowseModePreference.storageKey)
     private var libraryBrowseModeRawValue = LibrarySongBrowseMode.flat.rawValue
     @AppStorage(LibraryDisplayConfiguration.quickAccessLimitKey)
@@ -5049,6 +5050,10 @@ private struct MacSTThemeView: View {
                         .accessibilityHint(Text("radio_home_visibility_description"))
                 }
                 .settingsAnchor("home.radio")
+                MacSTRow(HomeDiscoveryText.string("recent_albums")) {
+                    MacSTToggle(isOn: $showRecentlyAddedOnHome)
+                }
+                .settingsAnchor("home.recentlyAdded")
             }
         }
 

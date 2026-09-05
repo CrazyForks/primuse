@@ -42,6 +42,32 @@ extension Album: FetchableRecord, PersistableRecord {
     public static var databaseTableName: String { "albums" }
 }
 
+public enum RecentlyAddedAlbumPolicy {
+    public static func sorted(
+        albums: [Album], songs: [Song], limit: Int? = nil
+    ) -> [Album] {
+        var latestDates: [String: Date] = [:]
+        for song in songs {
+            guard let albumID = song.albumID, !albumID.isEmpty else { continue }
+            latestDates[albumID] = max(latestDates[albumID] ?? .distantPast, song.dateAdded)
+        }
+        return sorted(albums: albums, latestDates: latestDates, limit: limit)
+    }
+
+    public static func sorted(
+        albums: [Album], latestDates: [String: Date], limit: Int? = nil
+    ) -> [Album] {
+        let ordered = albums.sorted {
+            let lhs = latestDates[$0.id] ?? .distantPast
+            let rhs = latestDates[$1.id] ?? .distantPast
+            // Imports often give every track the same timestamp. A stable
+            // tie-breaker keeps album cards from moving on metadata refresh.
+            return lhs == rhs ? $0.id < $1.id : lhs > rhs
+        }
+        return limit.map { Array(ordered.prefix(max(0, $0))) } ?? ordered
+    }
+}
+
 public enum AlbumArtworkFallbackPolicy {
     public static func preferredSongID(
         orderedSongIDs: [String],

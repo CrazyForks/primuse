@@ -4,6 +4,27 @@ import Testing
 
 @Suite("Embedded container tag parsing")
 struct EmbeddedTagMetadataParserTests {
+    @Test(arguments: ["ALBUMARTIST", "Album Artist", "album_artist", "WM/AlbumArtist"])
+    func resolvesAlbumArtistAliasesIndependentlyFromTrackArtist(key: String) {
+        let metadata = EmbeddedTagMetadataParser.metadata(fromTagValues: [
+            "ARTIST": ["Track Singer"],
+            key: [" ", "Album Artist", "Guest", "Album Artist"],
+            "ALBUMARTISTSORT": ["Sort Name"],
+        ])
+
+        #expect(metadata.artist == "Track Singer")
+        #expect(metadata.albumArtist == "Album Artist; Guest")
+    }
+
+    @Test func prefersCanonicalAlbumArtistOverConflictingAlias() {
+        let metadata = EmbeddedTagMetadataParser.metadata(fromTagValues: [
+            "ALBUM_ARTIST": ["Custom Artist"],
+            "ALBUM ARTIST": ["Legacy Artist"],
+            "ALBUMARTIST": ["Standard Artist"],
+        ])
+        #expect(metadata.albumArtist == "Standard Artist")
+    }
+
     @Test func parsesAPEv2TextReplayGainAndFrontCoverBeforeID3v1() {
         let image = pngFixture
         let tag = makeAPEv2Tag([

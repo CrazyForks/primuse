@@ -29,7 +29,7 @@ enum HomeSectionKind: String, CaseIterable, Codable, Identifiable {
         case .folders: return LocalizedStringKey(HomeDiscoveryText.string("folders"))
         case .listeningRanking: return LocalizedStringKey(HomeDiscoveryText.string("ranking"))
         case .topArtists: return "home_section_top_artists"
-        case .recentlyAdded: return "home_section_recently_added"
+        case .recentlyAdded: return LocalizedStringKey(HomeDiscoveryText.string("recent_albums"))
         case .stats: return "stats_title"
         }
     }

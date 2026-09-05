@@ -4523,12 +4523,7 @@ final class MusicLibrary {
     }
 
     func recentlyAddedAlbums(limit: Int = 10) -> [Album] {
-        let albumLatestDate = Dictionary(grouping: visibleSongs) { $0.albumID ?? "" }
-            .mapValues { $0.map(\.dateAdded).max() ?? .distantPast }
-        return visibleAlbums
-            .sorted { (albumLatestDate[$0.id] ?? .distantPast) > (albumLatestDate[$1.id] ?? .distantPast) }
-            .prefix(limit)
-            .map { $0 }
+        RecentlyAddedAlbumPolicy.sorted(albums: visibleAlbums, songs: visibleSongs, limit: limit)
     }
 
     func playlist(id: String) -> Playlist? {

@@ -45,6 +45,7 @@ struct MacHomeView: View {
     @Environment(AppUpdateChecker.self) private var updateChecker
     @Environment(RadioStationsStore.self) private var radioStationsStore
     @AppStorage("primuse.home.showRadio") private var showRadio = true
+    @AppStorage("primuse.home.showRecentlyAdded") private var showRecentlyAdded = true
     @State private var selectedRadioID: String?
     @State private var pendingInsecureStation: RadioStation?
 
@@ -170,7 +171,9 @@ struct MacHomeView: View {
                 recommendationSection
             }
             pipelineSection
-            recentlyAddedSection
+            if showRecentlyAdded, !derived.recentlyAddedAlbums.isEmpty {
+                recentlyAddedSection
+            }
             recentlyPlayedSection
             if showRadio, !radioStationsStore.stations.isEmpty {
                 radioSpotlightSection
@@ -377,9 +380,9 @@ struct MacHomeView: View {
         let latestDateByAlbum = songsByAlbum.mapValues { albumSongs in
             albumSongs.lazy.map(\.dateAdded).max() ?? .distantPast
         }
-        snapshot.recentlyAddedAlbums = albums.sorted {
-            (latestDateByAlbum[$0.id] ?? .distantPast) > (latestDateByAlbum[$1.id] ?? .distantPast)
-        }
+        snapshot.recentlyAddedAlbums = RecentlyAddedAlbumPolicy.sorted(
+            albums: albums, latestDates: latestDateByAlbum
+        )
 
         var mosaicPool = recentlyPlayed
         var seenIDs = Set(mosaicPool.map(\.id))
@@ -1167,7 +1170,7 @@ struct MacHomeView: View {
 
     private var recentlyAddedSection: some View {
         VStack(alignment: .leading, spacing: PMSpace.m) {
-            sectionHeader(title: "recently_added",
+            sectionHeader(title: LocalizedStringKey(HomeDiscoveryText.string("recent_albums")),
                           subtitle: "home_recently_added_subtitle",
                           destination: .recentlyAdded)
 
@@ -1179,7 +1182,7 @@ struct MacHomeView: View {
                 spacing: PMSpace.l
             ) {
                 ForEach(derived.recentlyAddedAlbums.prefix(12)) { album in
-                    Button { playAlbum(album) } label: {
+                    NavigationLink(value: album) {
                         albumCard(album)
                     }
                     .buttonStyle(.plain)
@@ -1204,6 +1207,9 @@ struct MacHomeView: View {
                     .foregroundStyle(PMColor.textFaint)
                     .lineLimit(1)
             }
+            Text("\(album.songCount) \(String(localized: "songs_count"))")
+                .font(.system(size: 11))
+                .foregroundStyle(PMColor.textFaint)
         }
     }
 
@@ -1372,7 +1378,7 @@ struct MacHomeView: View {
             VStack(alignment: .leading, spacing: 18) {
                 homeCollectionHeader(
                     eyebrow: "library_title",
-                    title: "recently_added",
+                    title: LocalizedStringKey(HomeDiscoveryText.string("recent_albums")),
                     detail: "\(albums.count) \(String(localized: "albums_count"))",
                     onBack: onBack
                 )
@@ -1545,20 +1551,6 @@ struct MacHomeView: View {
     }
 
     // MARK: - Actions
-
-    private func playAlbum(_ album: Album) {
-        var queue = library.songs(forAlbum: album.id)
-        if queue.count < 20 {
-            let existingIDs = Set(queue.map(\.id))
-            let extra = library.visibleSongs.filter { !existingIDs.contains($0.id) }.shuffled()
-            queue.append(contentsOf: extra)
-        }
-        queue = queue.filteredPlayable()
-        guard let first = queue.first else { return }
-        player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
-    }
 
     private func playSong(_ song: Song) {
         var queue = library.recentlyPlayedSongs(limit: 50)

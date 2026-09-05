@@ -208,19 +208,27 @@ public enum TextEncodingRepair {
     /// 且其他候选显著更合理时才覆盖。这样既兼容误声明的 GBK/Shift_JIS 等标签,
     /// 也不会把 Björk / Mylène 之类的合法西文按 CJK 绝对分数误解码。
     public static func bestDecoding(of data: Data, encodings: [String.Encoding]) -> String? {
+        bestDecoding(of: data, encodings: encodings, preservingNullSeparators: false)
+    }
+
+    private static func bestDecoding(
+        of data: Data,
+        encodings: [String.Encoding],
+        preservingNullSeparators: Bool
+    ) -> String? {
         guard !data.isEmpty else { return nil }
 
-        var candidates: [(encoding: String.Encoding, text: String, score: Int)] = []
+        var candidates: [(encoding: String.Encoding, text: String, score: Int, value: String)] = []
         for encoding in encodings {
             guard let decoded = String(data: data, encoding: encoding) else { continue }
             let cleaned = decoded.replacingOccurrences(of: "\0", with: "")
             guard !cleaned.isEmpty else { continue }
-            candidates.append((encoding, cleaned, plausibility(cleaned)))
+            candidates.append((encoding, cleaned, plausibility(cleaned), preservingNullSeparators ? decoded : cleaned))
         }
 
         if let utf8 = candidates.first(where: { $0.encoding == .utf8 }),
            !utf8.text.unicodeScalars.contains(where: { isDisallowedControl($0.value) }) {
-            return utf8.text
+            return utf8.value
         }
 
         // GB18030's four-byte form has a strict lead-digit-lead-digit shape.
@@ -229,12 +237,12 @@ public enum TextEncodingRepair {
         if containsGB18030FourByteSequence(data),
            let gb18030 = candidates.first(where: { $0.encoding == self.gb18030 }),
            !gb18030.text.unicodeScalars.contains(where: { isDisallowedControl($0.value) }) {
-            return gb18030.text
+            return gb18030.value
         }
 
         if let latin1 = candidates.first(where: { $0.encoding == .isoLatin1 }) {
             if looksCorrupted(latin1.text) {
-                var best: (encoding: String.Encoding, text: String, score: Int)?
+                var best: (encoding: String.Encoding, text: String, score: Int, value: String)?
                 for candidate in candidates where !candidate.text.unicodeScalars.contains(where: {
                     isDisallowedControl($0.value)
                 }) {
@@ -245,7 +253,7 @@ public enum TextEncodingRepair {
                 if let best,
                    best.encoding != .isoLatin1,
                    best.score >= latin1.score + ambiguousMargin {
-                    return best.text
+                    return best.value
                 }
             }
 
@@ -255,18 +263,18 @@ public enum TextEncodingRepair {
             if latin1.text.unicodeScalars.contains(where: { (0x80...0x9F).contains($0.value) }),
                let cp1252 = candidates.first(where: { $0.encoding == .windowsCP1252 }),
                !cp1252.text.unicodeScalars.contains(where: { isDisallowedControl($0.value) }) {
-                return cp1252.text
+                return cp1252.value
             }
-            return latin1.text
+            return latin1.value
         }
 
-        var best: (text: String, score: Int)?
+        var best: (value: String, score: Int)?
         for candidate in candidates {
             if best == nil || candidate.score > best!.score {
-                best = (candidate.text, candidate.score)
+                best = (candidate.value, candidate.score)
             }
         }
-        return best?.text
+        return best?.value
     }
 
     private static func containsGB18030FourByteSequence(_ data: Data) -> Bool {
@@ -301,17 +309,26 @@ public enum TextEncodingRepair {
         let decoded: String?
         switch encodingByte {
         case 0:
-            decoded = bestDecoding(of: payload, encodings: legacyTextEncodings)
-        case 1:
             decoded = bestDecoding(
-                of: payload,
-                encodings: [.utf16, .utf16LittleEndian, .utf16BigEndian]
+                of: payload, encodings: legacyTextEncodings, preservingNullSeparators: true
             )
+        case 1:
+            if payload.starts(with: [0xFF, 0xFE]) || payload.starts(with: [0xFE, 0xFF]) {
+                // A BOM is stronger evidence than plausibility scoring and
+                // applies to every value, including those after a separator.
+                decoded = String(data: payload, encoding: .utf16)
+            } else {
+                decoded = bestDecoding(
+                    of: payload,
+                    encodings: [.utf16, .utf16LittleEndian, .utf16BigEndian],
+                    preservingNullSeparators: true
+                )
+            }
         case 2:
             decoded = String(data: payload, encoding: .utf16BigEndian)
         case 3:
             decoded = String(data: payload, encoding: .utf8)
-                ?? bestDecoding(of: payload, encodings: legacyTextEncodings)
+                ?? bestDecoding(of: payload, encodings: legacyTextEncodings, preservingNullSeparators: true)
         default:
             return []
         }

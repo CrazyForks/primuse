@@ -83,6 +83,7 @@ public enum ID3TextMetadataParser {
         }
 
         var result = ID3TextMetadata()
+        var userTextValues: [String: [String]] = [:]
         var cursor = extendedHeaderLength(in: tag, version: version, flags: data[5])
 
         while cursor < tag.count {
@@ -106,7 +107,7 @@ public enum ID3TextMetadataParser {
                 let payload = recovered?.payload
                     ?? tag.subdata(in: payloadStart..<declaredEnd)
                 cursor = recovered?.nextFrameOffset ?? declaredEnd
-                apply(frameID: frameID, payload: payload, to: &result)
+                apply(frameID: frameID, payload: payload, to: &result, userTextValues: &userTextValues)
                 continue
             }
 
@@ -141,9 +142,16 @@ public enum ID3TextMetadataParser {
             if version == 4, (formatFlags & 0x02) != 0 {
                 payload = removingUnsynchronization(from: payload)
             }
-            apply(frameID: frameID, payload: payload, to: &result)
+            apply(frameID: frameID, payload: payload, to: &result, userTextValues: &userTextValues)
         }
 
+        // TPE2/TP2 remains authoritative regardless of frame order. Custom
+        // Album Artist fields are a fallback for files using tagger mappings.
+        if result.albumArtist == nil, !userTextValues.isEmpty {
+            result.albumArtist = EmbeddedTagMetadataParser.metadata(
+                fromTagValues: userTextValues
+            ).albumArtist
+        }
         if let trailingMetadata {
             fillMissing(in: &result, from: trailingMetadata)
         }
@@ -321,8 +329,15 @@ public enum ID3TextMetadataParser {
     private static func apply(
         frameID: String,
         payload: Data,
-        to result: inout ID3TextMetadata
+        to result: inout ID3TextMetadata,
+        userTextValues: inout [String: [String]]
     ) {
+        if frameID == "TXXX" || frameID == "TXX" {
+            if let field = decodedUserText(payload) {
+                userTextValues[field.key, default: []].append(contentsOf: field.values)
+            }
+            return
+        }
         let values = decodedTextValues(payload)
         guard let value = values.first else { return }
         switch frameID {
@@ -347,6 +362,40 @@ public enum ID3TextMetadataParser {
         default:
             break
         }
+    }
+
+    private static func decodedUserText(_ payload: Data) -> (key: String, values: [String])? {
+        guard let encoding = payload.first, encoding <= 3 else { return nil }
+        let terminatorLength = (encoding == 1 || encoding == 2) ? 2 : 1
+        var cursor = 1
+        while cursor + terminatorLength <= payload.count {
+            if payload[cursor] == 0,
+               terminatorLength == 1 || payload[cursor + 1] == 0 {
+                break
+            }
+            cursor += terminatorLength
+        }
+        let valueStart = cursor + terminatorLength
+        guard valueStart < payload.count,
+              let key = TextEncodingRepair.decodeID3Text(
+                payload.subdata(in: 1..<cursor), encodingByte: encoding
+              ) else { return nil }
+        let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard ["ALBUMARTIST", "ALBUM ARTIST", "ALBUM_ARTIST"].contains(normalizedKey) else {
+            return nil
+        }
+        var valueData = payload.subdata(in: valueStart..<payload.count)
+        // UTF-16 values may omit a second BOM and inherit the description's
+        // byte order; carry it over before decoding that separate string.
+        if encoding == 1, payload.count >= 3 {
+            let bom = payload.subdata(in: 1..<3)
+            let byteOrderMarks = [Data([0xFF, 0xFE]), Data([0xFE, 0xFF])]
+            if byteOrderMarks.contains(bom), !byteOrderMarks.contains(Data(valueData.prefix(2))) {
+                valueData = bom + valueData
+            }
+        }
+        let values = TextEncodingRepair.decodeID3TextValues(valueData, encodingByte: encoding)
+        return values.isEmpty ? nil : (normalizedKey, values)
     }
 
     private static func decodedText(_ frame: Data) -> String? {

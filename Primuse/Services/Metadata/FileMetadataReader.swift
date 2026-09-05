@@ -331,7 +331,7 @@ enum FileMetadataReader {
                      .quickTimeMetadataAlbum,
                      .quickTimeUserDataAlbum:
                     metadata.albumTitle = metadata.albumTitle ?? decodedText(value)
-                case .iTunesMetadataAlbumArtist:
+                case .iTunesMetadataAlbumArtist, .id3MetadataBand:
                     metadata.albumArtist = metadata.albumArtist ?? decodedText(value)
                 case .iTunesMetadataCoverArt, .quickTimeMetadataArtwork:
                     if metadata.coverArtData == nil, let data = value as? Data {
@@ -741,7 +741,11 @@ enum FileMetadataReader {
             metadata.artist = preferredMetadataText(current: metadata.artist, rawID3: text?.artist)
         }
         metadata.albumTitle = preferredMetadataText(current: metadata.albumTitle, rawID3: text?.albumTitle)
-        metadata.albumArtist = preferredMetadataText(current: metadata.albumArtist, rawID3: text?.albumArtist)
+        if let albumArtists = text?.albumArtists, albumArtists.count > 1 {
+            metadata.albumArtist = albumArtists.joined(separator: "; ")
+        } else {
+            metadata.albumArtist = preferredMetadataText(current: metadata.albumArtist, rawID3: text?.albumArtist)
+        }
         metadata.trackNumber = metadata.trackNumber ?? text?.trackNumber
         metadata.discNumber = metadata.discNumber ?? text?.discNumber
         metadata.year = metadata.year ?? text?.year
@@ -1546,6 +1550,12 @@ enum FileMetadataReader {
             return result
         }
 
+        let repairedComments = comments.mapValues { values in
+            values.map { repairLegacyChineseMojibake($0) }
+        }
+        let tagMetadata = EmbeddedTagMetadataParser.metadata(
+            fromTagValues: repairedComments
+        )
         result.title = result.title ?? first("TITLE")
         let artists = all("ARTIST")
         result.sourceArtistNames = artists.isEmpty ? nil : artists
@@ -1554,38 +1564,32 @@ enum FileMetadataReader {
         } else {
             result.artist = result.artist
                 ?? artists.first
-                ?? first("ALBUMARTIST", "ALBUM ARTIST")
+                ?? tagMetadata.albumArtist
         }
         result.albumTitle = result.albumTitle ?? first("ALBUM")
-        result.albumArtist = result.albumArtist ?? first("ALBUMARTIST", "ALBUM ARTIST")
+        result.albumArtist = result.albumArtist ?? tagMetadata.albumArtist
         result.trackNumber = result.trackNumber ?? leadingInt(first("TRACKNUMBER", "TRACK"))
         result.discNumber = result.discNumber ?? leadingInt(first("DISCNUMBER", "DISC"))
         result.year = result.year ?? parseYear(first("DATE", "YEAR"))
         result.genre = result.genre ?? first("GENRE")
-        let repairedComments = comments.mapValues { values in
-            values.map { repairLegacyChineseMojibake($0) }
-        }
-        let lyricMetadata = EmbeddedTagMetadataParser.metadata(
-            fromTagValues: repairedComments
-        )
         if result.lyricsText == nil {
-            result.lyricsText = lyricMetadata.lyrics
-            result.lyricsLanguageCode = lyricMetadata.lyricsLanguageCode
-        } else if result.lyricsText == lyricMetadata.lyrics,
+            result.lyricsText = tagMetadata.lyrics
+            result.lyricsLanguageCode = tagMetadata.lyricsLanguageCode
+        } else if result.lyricsText == tagMetadata.lyrics,
                   result.lyricsLanguageCode == nil {
-            result.lyricsLanguageCode = lyricMetadata.lyricsLanguageCode
+            result.lyricsLanguageCode = tagMetadata.lyricsLanguageCode
         }
         if result.translatedLyricsText == nil {
-            result.translatedLyricsText = lyricMetadata.translatedLyrics
-            result.translatedLyricsLanguageCode = lyricMetadata.translatedLyricsLanguageCode
-        } else if result.translatedLyricsText == lyricMetadata.translatedLyrics,
+            result.translatedLyricsText = tagMetadata.translatedLyrics
+            result.translatedLyricsLanguageCode = tagMetadata.translatedLyricsLanguageCode
+        } else if result.translatedLyricsText == tagMetadata.translatedLyrics,
                   result.translatedLyricsLanguageCode == nil {
-            result.translatedLyricsLanguageCode = lyricMetadata.translatedLyricsLanguageCode
+            result.translatedLyricsLanguageCode = tagMetadata.translatedLyricsLanguageCode
         }
-        result.languageTaggedLyrics.merge(lyricMetadata.languageTaggedLyrics) {
+        result.languageTaggedLyrics.merge(tagMetadata.languageTaggedLyrics) {
             current, _ in current
         }
-        result.languageTaggedTranslations.merge(lyricMetadata.languageTaggedTranslations) {
+        result.languageTaggedTranslations.merge(tagMetadata.languageTaggedTranslations) {
             current, _ in current
         }
         result.replayGainTrackGain = result.replayGainTrackGain ?? parseReplayGainDB(first("REPLAYGAIN_TRACK_GAIN"))

@@ -3,6 +3,149 @@ import PrimuseKit
 import XCTest
 @testable import Primuse
 
+@MainActor
+final class FileAlbumArtistLibraryTests: XCTestCase {
+    func testLocalAndRangeTagsGroupDifferentSingersIntoOneAlbum() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AlbumArtistTags-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for format in ["mp3", "flac"] {
+            for key in ["ALBUMARTIST", "Album Artist", "ALBUM_ARTIST"] {
+                var localSongs: [Song] = []
+                var rangeSongs: [Song] = []
+                for (index, singer) in ["Singer One", "Singer Two"].enumerated() {
+                    let data = tagFixture(format: format, key: key, singer: singer)
+                    let url = directory.appendingPathComponent("\(index).\(format)")
+                    try data.write(to: url)
+                    let local = await FileMetadataReader.read(from: url)
+                    let range = await FileMetadataReader.read(from: data, fileExtension: format)
+                    for metadata in [local, range] {
+                        XCTAssertEqual(metadata.artist, singer, "\(format)/\(key)")
+                        XCTAssertEqual(metadata.albumArtist, "Various Artists", "\(format)/\(key)")
+                    }
+                    localSongs.append(song(id: "\(index)", metadata: local))
+                    rangeSongs.append(song(id: "\(index)", metadata: range))
+                }
+                for songs in [localSongs, rangeSongs] {
+                    let grouped = MusicLibrary.computeAlbumsAndArtists(songs: songs)
+                    XCTAssertEqual(grouped.albums.count, 1, "\(format)/\(key)")
+                    XCTAssertEqual(grouped.albums.first?.artistName, "Various Artists")
+                    XCTAssertEqual(grouped.albums.first?.songCount, 2)
+                    XCTAssertEqual(Set(grouped.artists.map(\.name)), ["Singer One", "Singer Two"])
+                }
+            }
+        }
+    }
+
+    func testStandardMP3TagAlbumArtistKeepsAllValues() async throws {
+        let data = tagFixture(
+            format: "mp3", key: "TPE2", singer: "Singer",
+            albumArtist: "Host\0Guest"
+        )
+        let metadata = await FileMetadataReader.read(from: data, fileExtension: "mp3")
+        XCTAssertEqual(metadata.artist, "Singer")
+        XCTAssertEqual(metadata.albumArtist, "Host; Guest")
+    }
+
+    func testRereadAlbumArtistRemovesPreviouslySplitAlbums() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AlbumArtistRebuild-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = MusicLibrary(storageDirectory: directory, artistNameConfiguration: .defaultValue)
+        let originals = ["Singer One", "Singer Two"].enumerated().map { index, singer in
+            song(id: "\(index)", metadata: .init(
+                artist: singer, albumTitle: "Compilation", albumArtist: singer
+            ))
+        }
+        library.addSongs(originals, affectedSourceIDs: ["local-tags"])
+        for _ in 0..<200 where library.albums.count != 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(library.albums.count, 2)
+
+        var corrected: [Song] = []
+        for original in originals {
+            let metadata = await FileMetadataReader.read(
+                from: tagFixture(format: "flac", key: "ALBUM_ARTIST", singer: original.artistName!),
+                fileExtension: "flac"
+            )
+            var updated = original
+            updated.albumArtistName = metadata.albumArtist
+            corrected.append(updated)
+        }
+        library.replaceSongs(corrected)
+        for _ in 0..<200 where library.albums.count != 1 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(library.albums.count, 1)
+        XCTAssertEqual(library.albums.first?.artistName, "Various Artists")
+        XCTAssertEqual(library.albums.first?.songCount, 2)
+        XCTAssertEqual(Set(library.songs.compactMap(\.albumID)).count, 1)
+        XCTAssertEqual(Set(library.songs.compactMap(\.artistName)), ["Singer One", "Singer Two"])
+        _ = await library.persistNowAndWait()
+    }
+
+    func testMissingAlbumArtistDoesNotMergeUnrelatedSameTitleAlbums() {
+        let songs = ["Singer One", "Singer Two"].enumerated().map { index, singer in
+            song(id: "\(index)", metadata: .init(artist: singer, albumTitle: "Greatest Hits"))
+        }
+        XCTAssertEqual(MusicLibrary.computeAlbumsAndArtists(songs: songs).albums.count, 2)
+    }
+
+    private func song(id: String, metadata: FileMetadataReader.Metadata) -> Song {
+        Song(
+            id: id, title: id, albumTitle: metadata.albumTitle,
+            artistName: metadata.artist,
+            albumArtistName: AlbumGroupingPolicy.resolvedAlbumArtistName(
+                albumArtistName: metadata.albumArtist, trackArtistName: metadata.artist
+            ),
+            duration: 180, fileFormat: .mp3, filePath: "\(id).mp3", sourceID: "local-tags"
+        )
+    }
+
+    private func tagFixture(
+        format: String, key: String, singer: String, albumArtist: String = "Various Artists"
+    ) -> Data {
+        func uint32(_ value: Int, littleEndian: Bool = false) -> Data {
+            let shifts = littleEndian ? [0, 8, 16, 24] : [24, 16, 8, 0]
+            return Data(shifts.map { UInt8((value >> $0) & 0xFF) })
+        }
+        if format == "flac" {
+            let comments = ["TITLE=Track", "ARTIST=\(singer)", "ALBUM=Compilation", "\(key)=\(albumArtist)"]
+            var block = uint32(6, littleEndian: true) + Data("Mp3tag".utf8)
+            block.append(uint32(comments.count, littleEndian: true))
+            for comment in comments {
+                let bytes = Data(comment.utf8)
+                block.append(uint32(bytes.count, littleEndian: true))
+                block.append(bytes)
+            }
+            // A complete metadata region suffices even without audio frames.
+            var file = Data("fLaC".utf8)
+            file.append(contentsOf: [0, 0, 0, 34])
+            file.append(Data(repeating: 0, count: 34))
+            file.append(0x84)
+            file.append(uint32(block.count).suffix(3))
+            file.append(block)
+            return file
+        }
+        let fields = [("TIT2", "Track"), ("TPE1", singer), ("TALB", "Compilation"),
+                      (key == "TPE2" ? "TPE2" : "TXXX", key == "TPE2" ? albumArtist : "\(key)\0\(albumArtist)")]
+        var body = Data()
+        for (id, value) in fields {
+            let payload = Data([1]) + value.data(using: .utf16)!
+            body.append(Data(id.utf8))
+            body.append(uint32(payload.count))
+            body.append(contentsOf: [0, 0])
+            body.append(payload)
+        }
+        let size = Data([21, 14, 7, 0].map { UInt8((body.count >> $0) & 0x7F) })
+        return Data([0x49, 0x44, 0x33, 3, 0, 0]) + size + body
+    }
+}
+
 final class ArtistNameLibraryTests: XCTestCase {
     func testCatalogSearchFindsAlbumWithoutMatchingSongs() {
         let album = Album(id: "album", title: "独立专辑名称", artistName: "Artist")

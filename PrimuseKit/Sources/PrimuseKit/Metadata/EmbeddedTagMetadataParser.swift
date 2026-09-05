@@ -827,6 +827,10 @@ public enum EmbeddedTagMetadataParser {
         }
 
         let artists = all("ARTIST", "AUTHOR", "WM/AUTHOR", "IART")
+        let albumArtists = all("ALBUMARTIST")
+            ?? all("ALBUM ARTIST")
+            ?? all("ALBUM_ARTIST")
+            ?? all("WM/ALBUMARTIST")
         let track = first("TRACKNUMBER", "TRACK", "WM/TRACKNUMBER", "IPRT", "ITRK")
         let disc = first("DISCNUMBER", "DISC", "WM/PARTOFSET")
         let date = first("DATE", "YEAR", "WM/YEAR", "ICRD")
@@ -836,9 +840,7 @@ public enum EmbeddedTagMetadataParser {
             artist: artists?.joined(separator: "; "),
             artists: artists,
             albumTitle: first("ALBUM", "ALBUMTITLE", "WM/ALBUMTITLE", "IPRD"),
-            albumArtist: first(
-                "ALBUMARTIST", "ALBUM ARTIST", "ALBUM_ARTIST", "WM/ALBUMARTIST"
-            ),
+            albumArtist: albumArtists?.joined(separator: "; "),
             trackNumber: track.flatMap(leadingInteger),
             discNumber: disc.flatMap(leadingInteger),
             year: date.flatMap(year),

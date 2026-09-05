@@ -30,6 +30,60 @@ private struct PersistedHomeAlbumTile: Codable, Sendable {
     let artworkSongID: String?
 }
 
+private struct RecentlyAddedAlbumsView: View {
+    @Environment(MusicLibrary.self) private var library
+    @State private var albums: [Album] = []
+    @State private var isPrepared = false
+    @State private var query = ""
+
+    private var filteredAlbums: [Album] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return albums }
+        return albums.filter {
+            $0.title.localizedCaseInsensitiveContains(text)
+                || ($0.artistName?.localizedCaseInsensitiveContains(text) ?? false)
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            if !isPrepared {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 200)
+            } else if albums.isEmpty {
+                EmptyStateView(titleKey: "no_albums", descriptionKey: "no_albums_desc", systemImage: "square.stack")
+            } else if filteredAlbums.isEmpty {
+                ContentUnavailableView.search(text: query)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16, alignment: .top)], spacing: 20) {
+                    ForEach(filteredAlbums) { album in
+                        NavigationLink {
+                            AlbumDetailView(album: album)
+                                .navigationTitle(album.title)
+                        } label: {
+                            AlbumCardView(album: album, showsSongCount: true)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .navigationTitle(HomeDiscoveryText.string("recent_albums"))
+        .searchable(text: $query, prompt: Text("filter_albums_placeholder"))
+        .task(id: library.searchRevision) {
+            let visibleSongs = library.visibleSongs
+            let visibleAlbums = library.visibleAlbums
+            let sorted = await Task.detached(priority: .utility) {
+                RecentlyAddedAlbumPolicy.sorted(albums: visibleAlbums, songs: visibleSongs)
+            }.value
+            guard !Task.isCancelled else { return }
+            albums = sorted
+            isPrepared = true
+        }
+    }
+}
+
 private struct PersistedHomeRecommendation: Codable, Sendable {
     let songID: String
     let score: Double
@@ -1600,13 +1654,11 @@ struct HomeView: View {
             }
         }
 
-        return albums
-            .sorted {
-                let left = accumulators[$0.id]?.latestDate ?? .distantPast
-                let right = accumulators[$1.id]?.latestDate ?? .distantPast
-                return left > right
-            }
-            .prefix(limit)
+        return RecentlyAddedAlbumPolicy.sorted(
+            albums: albums,
+            latestDates: accumulators.mapValues(\.latestDate),
+            limit: limit
+        )
             .map { album in
                 let accumulator = accumulators[album.id]
                 return HomeAlbumTile(
@@ -2303,60 +2355,39 @@ struct HomeView: View {
 
     // MARK: - Recently Added Albums
 
-    /// 最近添加 ── 改成 2 列竖向 list 卡片样式 (跟 forYou 横滑大封面错开,
-    /// 避免两个 section 视觉一样导致用户混淆)。
-    /// 每行: 小封面 + 标题 + 艺术家。点行播放整张专辑。
     private var recentlyAddedAlbumsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("recently_added")
-                .font(.title3).fontWeight(.bold)
-                .padding(.horizontal, 20)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(HomeDiscoveryText.string("recent_albums"))
+                    .font(.title3).fontWeight(.bold)
+                Spacer()
+                NavigationLink {
+                    RecentlyAddedAlbumsView()
+                } label: {
+                    Text("home_section_view_all")
+                        .font(.subheadline)
+                }
+                .accessibilityIdentifier("home.recentAlbums.viewAll")
+            }
 
-            // iPad regular size class 多列展开,iPhone / 小窗保持 2 列
             LazyVGrid(
                 columns: sizeClass == .regular
-                    ? [GridItem(.adaptive(minimum: 220), spacing: 12)]
+                    ? [GridItem(.adaptive(minimum: 150), spacing: 16, alignment: .top)]
                     : [
-                        GridItem(.flexible(), spacing: 12),
-                        GridItem(.flexible(), spacing: 12),
+                        GridItem(.flexible(), spacing: 16, alignment: .top),
+                        GridItem(.flexible(), spacing: 16, alignment: .top),
                     ],
-                spacing: 12
+                spacing: 20
             ) {
                 ForEach(homeSnapshot.recentlyAddedAlbums.prefix(sizeClass == .regular ? 12 : 6)) { tile in
-                    Button { playAlbum(tile.album) } label: {
-                        recentlyAddedRow(tile: tile)
+                    NavigationLink(value: tile.album) {
+                        AlbumCardView(album: tile.album, showsSongCount: true)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 20)
         }
-    }
-
-    /// 一行的紧凑卡片: 小封面 + 标题 / 艺术家 (2 行 lineLimit)。
-    @ViewBuilder
-    private func recentlyAddedRow(tile: HomeAlbumTile) -> some View {
-        let album = tile.album
-        HStack(spacing: 10) {
-            AlbumArtworkView(album: album, size: 56, cornerRadius: 6)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(album.title)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(album.artistName ?? "")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(8)
-        #if os(iOS)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-        #else
-        .background(Color(NSColor.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-        #endif
+        .padding(.horizontal, 20)
     }
 
     // MARK: - Top Artists
@@ -2442,27 +2473,6 @@ struct HomeView: View {
             .padding(.horizontal, 24)
             Spacer()
         }.frame(maxWidth: .infinity)
-    }
-
-    private func playAlbum(_ album: Album) {
-        // Get songs for the tapped album directly
-        var queueSongs = library.songs(forAlbum: album.id)
-
-        // Build queue: tapped album's songs first, then supplement
-        if queueSongs.count < 20 {
-            let existingIDs = Set(queueSongs.map(\.id))
-            let extra = library.visibleSongs.filter { !existingIDs.contains($0.id) }.shuffled()
-            queueSongs.append(contentsOf: extra)
-        }
-        queueSongs = queueSongs.filteredPlayable()
-        // The playable filter may drop the album's first track (cloud
-        // Phase A bare song). Pull `firstSong` from the filtered list so
-        // we never hand the player an entry that isn't in its queue.
-        guard let firstSong = queueSongs.first else { return }
-
-        player.shuffleEnabled = false
-        player.setQueue(queueSongs, startAt: 0)
-        Task { await player.play(song: firstSong) }
     }
 
     private func playSong(_ song: Song) {

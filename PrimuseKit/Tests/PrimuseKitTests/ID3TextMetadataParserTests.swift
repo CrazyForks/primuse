@@ -2,6 +2,92 @@ import Foundation
 import Testing
 @testable import PrimuseKit
 
+@Test(arguments: [2, 3, 4], [UInt8(0), 1, 2, 3])
+func parsesAlbumArtistSeparatelyFromTrackArtist(version: Int, encoding: UInt8) throws {
+    let metadata = try #require(ID3TextMetadataParser.parse(albumArtistTag(
+        version: version,
+        encoding: encoding,
+        fields: [(version == 2 ? "TP1" : "TPE1", "Track Singer"),
+                 (version == 2 ? "TP2" : "TPE2", "Album Artist")]
+    )))
+
+    #expect(metadata.artist == "Track Singer")
+    #expect(metadata.albumArtist == "Album Artist")
+    #expect(metadata.albumArtists == ["Album Artist"])
+}
+
+@Test(arguments: [UInt8(0), 1, 2, 3])
+func preservesNullSeparatedAlbumArtistsAcrossTextEncodings(encoding: UInt8) throws {
+    let metadata = try #require(ID3TextMetadataParser.parse(albumArtistTag(
+        version: 4,
+        encoding: encoding,
+        fields: [("TPE1", "Singer One\0Singer Two"), ("TPE2", "Host\0Guest")]
+    )))
+    #expect(metadata.artists == ["Singer One", "Singer Two"])
+    #expect(metadata.artist == "Singer One; Singer Two")
+    #expect(metadata.albumArtists == ["Host", "Guest"])
+    #expect(metadata.albumArtist == "Host; Guest")
+}
+
+@Test(arguments: [2, 3, 4], ["ALBUMARTIST", "Album Artist", "album_artist"])
+func parsesCustomAlbumArtistWithoutChangingTrackArtist(version: Int, key: String) throws {
+    let metadata = try #require(ID3TextMetadataParser.parse(albumArtistTag(
+        version: version,
+        encoding: version == 4 ? 3 : 1,
+        fields: [(version == 2 ? "TP1" : "TPE1", "歌曲艺人"),
+                 (version == 2 ? "TXX" : "TXXX", "\(key)\0专辑艺人")]
+    )))
+
+    #expect(metadata.artist == "歌曲艺人")
+    #expect(metadata.albumArtist == "专辑艺人")
+}
+
+@Test(arguments: [false, true])
+func standardAlbumArtistOverridesCustomFieldsRegardlessOfOrder(customFirst: Bool) {
+    let standard = textFrame("TPE2", "Standard Artist")
+    let custom = textFrame("TXXX", "ALBUMARTIST\0Custom Artist")
+    let metadata = ID3TextMetadataParser.parse(makeID3v23Tag(
+        customFirst ? [custom, standard] : [standard, custom]
+    ))
+
+    #expect(metadata?.albumArtist == "Standard Artist")
+}
+
+@Test func customAlbumArtistPreservesMultipleValuesAndIgnoresSortFields() {
+    let metadata = ID3TextMetadataParser.parse(makeID3v24Tag([
+        textFrameV24("TPE2", " \0"),
+        textFrameV24("TXXX", "ALBUMARTISTSORT\0Sort Artist"),
+        textFrameV24("TXXX", "ALBUMARTIST\0Artist A\0Artist B"),
+        textFrameV24("TXXX", "ALBUMARTIST\0Artist B"),
+        textFrameV24("TXXX", "ALBUM ARTIST\0Lower Priority Alias"),
+    ]))
+
+    #expect(metadata?.albumArtist == "Artist A; Artist B")
+    #expect(metadata?.artist == nil)
+}
+
+@Test func ignoresEmptyTruncatedAndUnrelatedUserTextAlbumArtistFields() {
+    for value in ["ALBUMARTIST", "ALBUMARTIST\0 \0", "ALBUMARTISTSORT\0Sort Artist",
+                  "MusicBrainz Album Artist Id\0identifier", "COMMENT\0ALBUMARTIST"] {
+        let metadata = ID3TextMetadataParser.parse(makeID3v23Tag([
+            textFrame("TPE1", "Track Singer"),
+            textFrame("TXXX", value),
+        ]))
+        #expect(metadata?.albumArtist == nil)
+        #expect(metadata?.artist == "Track Singer")
+    }
+}
+
+@Test func customAlbumArtistInheritsUTF16BigEndianByteOrder() {
+    var payload = Data([1, 0xFE, 0xFF])
+    payload.append("ALBUMARTIST\0专辑艺人".data(using: .utf16BigEndian)!)
+    var frame = Data("TXXX".utf8)
+    frame.append(uint32BE(payload.count))
+    frame.append(contentsOf: [0, 0])
+    frame.append(payload)
+    #expect(ID3TextMetadataParser.parse(makeID3v23Tag([frame]))?.albumArtist == "专辑艺人")
+}
+
 @Test func parsesID3v23TextFramesWithoutAudioPayload() {
     let tag = makeID3v23Tag([
         textFrame("TIT2", "夜空中最亮的星"),
@@ -161,6 +247,35 @@ private func textFrame(_ id: String, _ value: String) -> Data {
     frame.append(contentsOf: [0x00, 0x00])
     frame.append(payload)
     return frame
+}
+
+private func albumArtistTag(
+    version: Int,
+    encoding: UInt8,
+    fields: [(String, String)]
+) -> Data {
+    let stringEncoding: String.Encoding = switch encoding {
+    case 0: .isoLatin1
+    case 1: .utf16
+    case 2: .utf16BigEndian
+    default: .utf8
+    }
+    let frames = fields.map { id, value in
+        let payload = Data([encoding]) + value.data(using: stringEncoding)!
+        var frame = Data(id.utf8)
+        if version == 2 {
+            frame.append(uint32BE(payload.count).suffix(3))
+        } else {
+            frame.append(version == 4 ? syncSafe(payload.count) : uint32BE(payload.count))
+            frame.append(contentsOf: [0, 0])
+        }
+        frame.append(payload)
+        return frame
+    }
+    if version == 4 { return makeID3v24Tag(frames) }
+    if version == 3 { return makeID3v23Tag(frames) }
+    let body = frames.reduce(into: Data()) { $0.append($1) }
+    return Data([0x49, 0x44, 0x33, 2, 0, 0]) + syncSafe(body.count) + body
 }
 
 private func legacyTextFrame(_ id: String, bytes: [UInt8]) -> Data {
