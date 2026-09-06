@@ -762,7 +762,7 @@ import Testing
     ) == .idle)
 }
 
-@Test func adaptiveRuntimeQuarantinesFailedLANUntilTheNetworkChanges() async {
+@Test func adaptiveRuntimeQuarantinesFailedLANDuringCooldownAndResetsOnNetworkChange() async {
     let source = MusicSource(
         id: "route-memory",
         name: "WebDAV",
@@ -803,8 +803,7 @@ import Testing
     ).map(\.kind)
             == [.publicAddress, .localAddress])
 
-    // Time alone must not make a company-Wi-Fi collision interrupt the
-    // working public route again.
+    // Repeated requests within the cooldown keep the working public route.
     #expect(await runtime.orderedCandidates(
         for: source,
         prefersLocalNetwork: true

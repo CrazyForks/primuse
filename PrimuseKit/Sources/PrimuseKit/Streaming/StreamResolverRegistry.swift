@@ -1,35 +1,13 @@
 import Foundation
 import Network
 
-private final class SourceConnectionProbeCompletion: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Bool, Never>?
-    private let connection: NWConnection
-
-    init(connection: NWConnection, continuation: CheckedContinuation<Bool, Never>) {
-        self.connection = connection
-        self.continuation = continuation
-    }
-
-    func finish(_ result: Bool) {
-        lock.lock()
-        guard let continuation else {
-            lock.unlock()
-            return
-        }
-        self.continuation = nil
-        lock.unlock()
-        connection.cancel()
-        continuation.resume(returning: result)
-    }
-}
-
 /// 按 `MusicSourceType` 派发到对应 `StreamResolver` 的注册表 —— tvOS 播放解析的统一入口。
 /// Phase 1 只注册 Subsonic 家族;Phase 2 会注册 Synology / 媒体服务器 / 云盘 / S3。
 /// 未注册的类型(原生库源 / 本地 / Apple Music)抛 `.unsupportedSourceType`。
 public actor StreamResolverRegistry {
     public static let shared = StreamResolverRegistry()
 
+    private let runtime: SourceConnectionRuntime
     private var resolvers: [MusicSourceType: StreamResolver] = [:]
     private let cloudDriveResolver: CloudDriveStreamResolver
     private struct RoutedResolverState: Sendable {
@@ -38,7 +16,8 @@ public actor StreamResolverRegistry {
     }
     private var routedResolverStates: [String: RoutedResolverState] = [:]
 
-    public init() {
+    public init(runtime: SourceConnectionRuntime = .shared) {
+        self.runtime = runtime
         // Phase 1:Subsonic 家族共用一个无状态 resolver。直接在 init 里建表
         // (actor init 是同步的,不能调用 actor-isolated 方法)。
         let subsonic = SubsonicStreamResolver()
@@ -144,7 +123,7 @@ public actor StreamResolverRegistry {
     public func invalidateSession(for source: MusicSource) async {
         await resolvers[source.type]?.invalidateSession(sourceID: source.id)
         routedResolverStates[source.id] = nil
-        await SourceConnectionRuntime.shared.invalidate(sourceID: source.id)
+        await runtime.invalidate(sourceID: source.id)
     }
 
     /// 2FA:用一次性验证码登录并申请受信设备令牌(deviceId)。返回 nil 表示该源不返回令牌。
@@ -168,6 +147,7 @@ public actor StreamResolverRegistry {
         resolver: any StreamResolver,
         operation: @Sendable (MusicSource) async throws -> T
     ) async throws -> T {
+        try Task.checkCancellation()
         guard source.connectionConfiguration != nil else {
             if routedResolverStates.removeValue(forKey: source.id) != nil {
                 await resolver.invalidateSession(sourceID: source.id)
@@ -175,26 +155,16 @@ public actor StreamResolverRegistry {
             return try await operation(source)
         }
 
-        let candidates = await SourceConnectionRuntime.shared.orderedCandidates(for: source)
+        let candidates = await runtime.orderedCandidates(for: source)
         guard candidates.isEmpty == false else {
             throw StreamResolveError.cannotBuildURL
         }
-        let routeGeneration = await SourceConnectionRuntime.shared.routeGeneration()
+        let routeGeneration = await runtime.routeGeneration()
 
         var lastError: Error = StreamResolveError.cannotBuildURL
         for candidate in candidates {
+            try Task.checkCancellation()
             let routedSource = source.applyingConnectionCandidate(candidate)
-            if Self.requiresReachabilityProbe(source.type),
-               candidate.kind != .vendorRemote,
-               await tcpReachable(routedSource) == false {
-                lastError = URLError(.cannotConnectToHost)
-                await SourceConnectionRuntime.shared.recordFailure(
-                    of: candidate.kind,
-                    for: source.id
-                )
-                continue
-            }
-
             let currentState = routedResolverStates[source.id]
             if currentState?.candidate != candidate
                 || currentState?.routeGeneration != routeGeneration {
@@ -206,84 +176,27 @@ public actor StreamResolverRegistry {
             }
 
             do {
+                if Self.requiresReachabilityProbe(source.type), candidate.kind != .vendorRemote {
+                    guard let endpoint = candidate.endpoint else { throw URLError(.badURL) }
+                    try await SourceConnectionPreflight.check(endpoint)
+                }
                 let result = try await operation(routedSource)
-                await SourceConnectionRuntime.shared.record(candidate.kind, for: source.id)
+                try Task.checkCancellation()
+                await runtime.record(candidate.kind, for: source.id)
                 return result
             } catch {
                 lastError = error
-                guard Self.canFailOver(
-                    after: error,
-                    from: candidate,
-                    among: candidates
-                ) else { throw error }
+                guard !Task.isCancelled,
+                      SourceNetworkFailurePolicy.isNetworkFailure(error) else { throw error }
                 await resolver.invalidateSession(sourceID: source.id)
                 routedResolverStates[source.id] = nil
-                await SourceConnectionRuntime.shared.recordFailure(
+                await runtime.recordFailure(
                     of: candidate.kind,
                     for: source.id
                 )
             }
         }
         throw lastError
-    }
-
-    private func tcpReachable(_ source: MusicSource) async -> Bool {
-        let rawHost = source.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard rawHost.isEmpty == false else { return false }
-
-        let host: String
-        if let components = URLComponents(string: rawHost), let parsed = components.host {
-            host = parsed
-        } else if let components = URLComponents(string: "http://\(rawHost)"),
-                  let parsed = components.host {
-            host = parsed
-        } else {
-            host = rawHost
-        }
-        let rawPort = source.port ?? (source.useSsl ? 443 : 80)
-        guard let port = NWEndpoint.Port(rawValue: UInt16(rawPort)) else { return false }
-
-        return await withCheckedContinuation { continuation in
-            let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
-            let completion = SourceConnectionProbeCompletion(
-                connection: connection,
-                continuation: continuation
-            )
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    completion.finish(true)
-                case .failed, .cancelled:
-                    completion.finish(false)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: DispatchQueue.global(qos: .userInitiated))
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1) {
-                completion.finish(false)
-            }
-        }
-    }
-
-    private static func canFailOver(after error: Error) -> Bool {
-        guard let streamError = error as? StreamResolveError else { return true }
-        switch streamError {
-        case .missingCredential, .authFailed, .needs2FA:
-            return false
-        case .unsupportedSourceType, .badServerResponse, .cannotBuildURL, .relayUnavailable:
-            return true
-        }
-    }
-
-    private static func canFailOver(
-        after error: Error,
-        from candidate: SourceConnectionCandidate,
-        among candidates: [SourceConnectionCandidate]
-    ) -> Bool {
-        if canFailOver(after: error) { return true }
-        return candidate.kind == .localAddress
-            && candidates.contains { $0.kind != .localAddress }
     }
 
     private static func requiresReachabilityProbe(_ type: MusicSourceType) -> Bool {

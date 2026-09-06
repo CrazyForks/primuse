@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import Network
+import NIOCore
 import PrimuseKit
 
 struct SongFileDeletionResult: Sendable {
@@ -929,86 +930,18 @@ private struct SourceDiagnosticAdvice: Sendable {
     let suggestion: String
 }
 
-private struct RoutedConnectorCandidate: Sendable {
+struct RoutedConnectorCandidate: Sendable {
     let kind: SourceConnectionCandidateKind
     let endpoint: SourceConnectionEndpoint?
     let connector: any MusicSourceConnector
 }
 
-/// Completes a bounded TCP preflight exactly once. The preflight never sends
-/// credentials or application bytes; a successful source-specific `connect()`
-/// remains the service-identity proof before a route becomes active.
-private final class SourceConnectionPreflightCompletion: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Bool, Never>?
-    private let connection: NWConnection
-
-    init(connection: NWConnection, continuation: CheckedContinuation<Bool, Never>) {
-        self.connection = connection
-        self.continuation = continuation
-    }
-
-    func finish(_ result: Bool) {
-        lock.lock()
-        guard let continuation else {
-            lock.unlock()
-            return
-        }
-        self.continuation = nil
-        lock.unlock()
-        connection.cancel()
-        continuation.resume(returning: result)
-    }
-}
-
-private enum SourceConnectionPreflight {
-    /// A private address on the correct WLAN normally completes ARP + TCP in a
-    /// few milliseconds. One second leaves ample wake-up margin while keeping a
-    /// colliding RFC1918 address from blocking the cover-art queue.
-    static let timeout: TimeInterval = 1
-
-    static func reaches(_ rawEndpoint: SourceConnectionEndpoint) async -> Bool {
-        let endpoint = rawEndpoint.normalized
-        guard endpoint.isUsable,
-              let port = NWEndpoint.Port(rawValue: UInt16(endpoint.port)) else {
-            return false
-        }
-
-        return await withCheckedContinuation { continuation in
-            let connection = NWConnection(
-                host: NWEndpoint.Host(endpoint.host),
-                port: port,
-                using: .tcp
-            )
-            let completion = SourceConnectionPreflightCompletion(
-                connection: connection,
-                continuation: continuation
-            )
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    completion.finish(true)
-                case .failed, .cancelled:
-                    completion.finish(false)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: DispatchQueue.global(qos: .userInitiated))
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(
-                deadline: .now() + timeout
-            ) {
-                completion.finish(false)
-            }
-        }
-    }
-}
-
 /// Owns route selection for one source. Read operations may move to the next
 /// candidate after a transport failure. Mutations are never replayed because a
 /// lost response cannot prove whether the remote write or deletion took effect.
-private actor SourceConnectionRouter {
+actor SourceConnectionRouter {
     private let sourceID: String
+    private let runtime: SourceConnectionRuntime
     private let candidates: [RoutedConnectorCandidate]
     private let routeDidChange: @MainActor @Sendable (SourceConnectionCandidateKind?) -> Void
     private var activeIndex: Int?
@@ -1017,9 +950,11 @@ private actor SourceConnectionRouter {
     init(
         sourceID: String,
         candidates: [RoutedConnectorCandidate],
+        runtime: SourceConnectionRuntime = .shared,
         routeDidChange: @escaping @MainActor @Sendable (SourceConnectionCandidateKind?) -> Void
     ) {
         self.sourceID = sourceID
+        self.runtime = runtime
         self.candidates = candidates
         self.routeDidChange = routeDidChange
     }
@@ -1050,8 +985,8 @@ private actor SourceConnectionRouter {
         do {
             return (try await operation(candidates[initialIndex].connector), initialIndex)
         } catch {
-            guard canFailOver(after: error, from: initialIndex) else { throw error }
-            await retireFailedRoute(at: initialIndex)
+            guard canFailOver(after: error) else { throw error }
+            await retireFailedRoute(at: initialIndex, error: error)
             return try await attemptRead(
                 operation,
                 excluding: [initialIndex],
@@ -1067,8 +1002,8 @@ private actor SourceConnectionRouter {
         do {
             return try await operation(candidates[index].connector)
         } catch {
-            if canFailOver(after: error, from: index) {
-                await retireFailedRoute(at: index)
+            if canFailOver(after: error) {
+                await retireFailedRoute(at: index, error: error)
             }
             throw error
         }
@@ -1080,21 +1015,25 @@ private actor SourceConnectionRouter {
     /// retire the failed route so the caller's next safe retry uses fallback.
     func noteDeferredReadFailure(_ error: Error, routeIndex: Int) async {
         guard candidates.indices.contains(routeIndex) else { return }
-        guard canFailOver(after: error, from: routeIndex) else { return }
-        await retireFailedRoute(at: routeIndex)
+        guard canFailOver(after: error) else { return }
+        await retireFailedRoute(at: routeIndex, error: error)
     }
 
     private func connectedIndex(excluding excluded: Set<Int> = []) async throws -> Int {
-        let currentGeneration = await SourceConnectionRuntime.shared.routeGeneration()
+        try Task.checkCancellation()
+        let currentGeneration = await runtime.routeGeneration()
         if routeGeneration != currentGeneration {
             // Do not disconnect a route here. A scanner may still be consuming
             // an AsyncThrowingStream from it; switching future reads is safe,
             // cancelling the partially-consumed stream is not.
-            activeIndex = nil
+            if activeIndex != nil {
+                activeIndex = nil
+                await routeDidChange(nil)
+            }
             routeGeneration = currentGeneration
         }
 
-        let preferredKind = await SourceConnectionRuntime.shared.preferredKind(
+        let preferredKind = await runtime.preferredKind(
             for: sourceID,
             availableKinds: candidates.map(\.kind)
         )
@@ -1111,22 +1050,18 @@ private actor SourceConnectionRouter {
                 do {
                     try await connectCandidate(at: preferredIndex)
                     activeIndex = preferredIndex
-                    await SourceConnectionRuntime.shared.record(
+                    await runtime.record(
                         preferredKind,
                         for: sourceID
                     )
                     await routeDidChange(preferredKind)
                     return preferredIndex
                 } catch {
-                    // This is an opportunistic failback. The current route has
-                    // already connected successfully, so preserve it even when
-                    // the preferred probe reports a terminal/authentication error.
+                    guard canFailOver(after: error) else { throw error }
+                    // A failed network probe must leave the working fallback alive.
                     await candidates[preferredIndex].connector.disconnect()
-                    await SourceConnectionRuntime.shared.recordFailure(
-                        of: preferredKind,
-                        for: sourceID
-                    )
-                    await SourceConnectionRuntime.shared.record(
+                    await recordNetworkFailure(of: preferredKind, error: error)
+                    await runtime.record(
                         candidates[currentIndex].kind,
                         for: sourceID
                     )
@@ -1146,7 +1081,7 @@ private actor SourceConnectionRouter {
             do {
                 try await connectCandidate(at: index)
                 activeIndex = index
-                await SourceConnectionRuntime.shared.record(
+                await runtime.record(
                     kind,
                     for: sourceID
                 )
@@ -1154,12 +1089,9 @@ private actor SourceConnectionRouter {
                 return index
             } catch {
                 lastError = error
-                guard canFailOver(after: error, from: index) else { throw error }
+                guard canFailOver(after: error) else { throw error }
                 await candidates[index].connector.disconnect()
-                await SourceConnectionRuntime.shared.recordFailure(
-                    of: kind,
-                    for: sourceID
-                )
+                await recordNetworkFailure(of: kind, error: error)
             }
         }
         throw lastError ?? SourceError.connectionFailed(
@@ -1168,12 +1100,12 @@ private actor SourceConnectionRouter {
     }
 
     private func connectCandidate(at index: Int) async throws {
+        try Task.checkCancellation()
         let candidate = candidates[index]
-        if candidate.kind == .localAddress,
-           let endpoint = candidate.endpoint,
-           await SourceConnectionPreflight.reaches(endpoint) == false {
-            throw URLError(.cannotConnectToHost)
+        if candidate.kind == .localAddress, let endpoint = candidate.endpoint {
+            try await SourceConnectionPreflight.check(endpoint)
         }
+        try Task.checkCancellation()
         // TCP reachability is deliberately not treated as success. Each
         // connector must still complete its authenticated, protocol-specific
         // handshake before the route is recorded or shown as active.
@@ -1186,9 +1118,8 @@ private actor SourceConnectionRouter {
                     try await candidate.connector.connect()
                 }
             } catch {
-                let nsError = error as NSError
-                if nsError.domain == NSURLErrorDomain,
-                   nsError.code == NSURLErrorTimedOut {
+                if let sourceError = error as? SourceError, case .timeout = sourceError {
+                    await candidate.connector.disconnect()
                     plog(
                         "⏱️ Source route handshake timed out source="
                             + "\(sourceID.prefix(8))… kind=\(candidate.kind.rawValue)"
@@ -1199,6 +1130,7 @@ private actor SourceConnectionRouter {
         } else {
             try await candidate.connector.connect()
         }
+        try Task.checkCancellation()
     }
 
     /// A task-group timeout waits for a non-cooperative losing child before it
@@ -1224,7 +1156,9 @@ private actor SourceConnectionRouter {
             } catch {
                 return
             }
-            if race.resolve(.failure(URLError(.timedOut))) {
+            // A connector may be waiting for service work or a trust prompt.
+            // Its overall deadline is not proof that the network is unreachable.
+            if race.resolve(.failure(SourceError.timeout)) {
                 operationTask.cancel()
             }
         }
@@ -1266,75 +1200,47 @@ private actor SourceConnectionRouter {
                 return (try await operation(candidates[index].connector), index)
             } catch {
                 lastError = error
-                guard canFailOver(after: error, from: index) else { throw error }
-                await retireFailedRoute(at: index)
+                guard canFailOver(after: error) else { throw error }
+                await retireFailedRoute(at: index, error: error)
                 excluded.insert(index)
             }
         }
         throw lastError
     }
 
-    private func retireFailedRoute(at index: Int) async {
+    private func retireFailedRoute(at index: Int, error: any Error) async {
         let kind = candidates[index].kind
-        await candidates[index].connector.disconnect()
         if activeIndex == index {
             activeIndex = nil
+            await routeDidChange(nil)
         }
-        await SourceConnectionRuntime.shared.recordFailure(
-            of: kind,
-            for: sourceID
-        )
+        await candidates[index].connector.disconnect()
+        await recordNetworkFailure(of: kind, error: error)
     }
 
-    private static func canFailOver(after error: Error) -> Bool {
-        if OperationCancellationPolicy.isCancellation(error) { return false }
-        if error is SourceConnectionTerminalError { return false }
-        if let error = error as? SongloftServiceError {
-            switch error {
-            case .missingCredential, .authenticationFailed, .badServerResponse(403): return false
-            default: return true
-            }
-        }
-        if let sourceError = error as? SourceError {
-            switch sourceError {
-            case .authenticationFailed, .credentialUnavailable:
-                return false
-            case .pathNotFound, .fileNotFound, .connectionFailed, .timeout:
-                return true
-            }
-        }
-
-        let nsError = error as NSError
-        if nsError.domain == NSPOSIXErrorDomain,
-           [Int(EACCES), Int(EPERM)].contains(nsError.code) {
-            return false
-        }
-        if nsError.domain == NSURLErrorDomain {
-            switch nsError.code {
-            case NSURLErrorUserAuthenticationRequired,
-                 NSURLErrorUserCancelledAuthentication:
-                return false
-            default:
-                return true
-            }
-        }
-        return true
+    private func recordNetworkFailure(of kind: SourceConnectionCandidateKind, error: any Error) async {
+        let failure = error as NSError
+        plog("Source route network failure source=\(sourceID.prefix(8)) kind=\(kind.rawValue) error=\(failure.domain)/\(failure.code)")
+        await runtime.recordFailure(of: kind, for: sourceID)
     }
 
-    /// Authentication is normally terminal, but not when it came from the LAN
-    /// candidate of a multi-route source. The same private address can belong
-    /// to an unrelated NAS on another Wi-Fi; treating that device's 401/login
-    /// response as proof that the user's saved credentials are wrong would
-    /// suppress a healthy public route. Mutations are still never replayed —
-    /// this decision only retires the candidate so the next safe read can use
-    /// the remote endpoint.
-    private func canFailOver(after error: Error, from index: Int) -> Bool {
-        if Self.canFailOver(after: error) { return true }
-        guard candidates.indices.contains(index),
-              candidates[index].kind == .localAddress else {
-            return false
+    private func canFailOver(after error: Error) -> Bool {
+        guard !Task.isCancelled else { return false }
+        if let ioError = error as? IOError {
+            return SourceNetworkFailurePolicy.isNetworkFailure(
+                NSError(domain: NSPOSIXErrorDomain, code: Int(ioError.errnoCode))
+            )
         }
-        return candidates.contains { $0.kind != .localAddress }
+        if let channelError = error as? ChannelError {
+            switch channelError {
+            case .connectTimeout, .writeHostUnreachable, .eof: return true
+            default: return false
+            }
+        }
+        if let addressError = error as? SocketAddressError, case .unknown = addressError {
+            return true
+        }
+        return SourceNetworkFailurePolicy.isNetworkFailure(error)
     }
 }
 

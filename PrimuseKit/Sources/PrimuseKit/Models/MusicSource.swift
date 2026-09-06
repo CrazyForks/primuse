@@ -960,12 +960,10 @@ public actor SourceConnectionRuntime {
     public static let shared = SourceConnectionRuntime()
 
     private var activeKinds: [String: SourceConnectionCandidateKind] = [:]
-    /// A private address is meaningful only on the network where it was
-    /// verified. Once its service/protocol handshake fails, keep it out of the
-    /// preferred slot until Network.framework reports a path transition. This
-    /// prevents a common company-Wi-Fi collision (for example another
-    /// 192.168.0.50) from adding a timeout to every artwork or range request.
-    private var rejectedLocalSources: Set<String> = []
+    /// Throttle failed LAN probes without making a temporary outage sticky for
+    /// the lifetime of an otherwise unchanged Wi-Fi connection.
+    public static let localRetryInterval: TimeInterval = 30
+    private var rejectedLocalSources: [String: Date] = [:]
     private var observedPrefersLocalNetwork: Bool?
     private var generation: UInt64 = 0
 
@@ -995,12 +993,13 @@ public actor SourceConnectionRuntime {
 
     /// Resolves the route to try next from the current interface and the LAN
     /// verdict for this exact network path. Wi-Fi/wired paths try an unknown LAN
-    /// once; a rejected LAN stays behind the working remote route until the path
-    /// changes. Cellular paths start with the public/vendor route.
+    /// once, then retry after a short network-failure cooldown or path change.
+    /// Cellular paths start with the public/vendor route.
     public func preferredKind(
         for sourceID: String,
         availableKinds: [SourceConnectionCandidateKind],
-        prefersLocalNetwork: Bool? = nil
+        prefersLocalNetwork: Bool? = nil,
+        now: Date = Date()
     ) -> SourceConnectionCandidateKind? {
         guard availableKinds.isEmpty == false else { return nil }
 
@@ -1017,9 +1016,10 @@ public actor SourceConnectionRuntime {
 
         if prefersLocalNetwork, let localKind {
             if activeKind == localKind { return localKind }
-            if rejectedLocalSources.contains(sourceID) {
+            if let retryAt = rejectedLocalSources[sourceID], now < retryAt {
                 return activeKind ?? remoteKind ?? localKind
             }
+            rejectedLocalSources.removeValue(forKey: sourceID)
             return localKind
         }
 
@@ -1036,22 +1036,23 @@ public actor SourceConnectionRuntime {
     public func record(_ kind: SourceConnectionCandidateKind, for sourceID: String) {
         activeKinds[sourceID] = kind
         if kind == .localAddress {
-            rejectedLocalSources.remove(sourceID)
+            rejectedLocalSources.removeValue(forKey: sourceID)
         }
     }
 
     /// Retires a route after a transport failure. A failed private endpoint is
-    /// quarantined for this network path; a source with no remote alternative
+    /// given a bounded retry cooldown; a source with no remote alternative
     /// can still select its only LAN candidate as a last resort.
     public func recordFailure(
         of kind: SourceConnectionCandidateKind,
-        for sourceID: String
+        for sourceID: String,
+        now: Date = Date()
     ) {
         if activeKinds[sourceID] == kind {
             activeKinds.removeValue(forKey: sourceID)
         }
         if kind == .localAddress {
-            rejectedLocalSources.insert(sourceID)
+            rejectedLocalSources[sourceID] = now.addingTimeInterval(Self.localRetryInterval)
         }
     }
 
@@ -1071,7 +1072,7 @@ public actor SourceConnectionRuntime {
 
     public func invalidate(sourceID: String) {
         activeKinds.removeValue(forKey: sourceID)
-        rejectedLocalSources.remove(sourceID)
+        rejectedLocalSources.removeValue(forKey: sourceID)
     }
 
     public func invalidateAll() {

@@ -409,14 +409,14 @@ actor FTPSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
                 case .accept:
                     assertionFailure("A directory error cannot be accepted")
                     invalidateConnectionState()
-                    throw SourceError.connectionFailed(error.localizedDescription)
+                    throw error
                 case .fail:
                     invalidateConnectionState()
                     if let ftpError = error as? FileProviderFTPError,
                        ftpError.code == 530 || ftpError.code == 532 {
                         throw SourceError.authenticationFailed
                     }
-                    throw SourceError.connectionFailed(error.localizedDescription)
+                    throw error
                 }
             }
         }
@@ -754,7 +754,7 @@ actor FTPSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             provider.removeItem(path: providerFilePath) { error in
                 if let error {
-                    continuation.resume(throwing: SourceError.connectionFailed(error.localizedDescription))
+                    continuation.resume(throwing: error)
                 } else {
                     continuation.resume(returning: ())
                 }
@@ -839,7 +839,7 @@ actor FTPSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
                 guard !request.isResolved else { return }
                 if let error {
                     request.resolve(.failure(
-                        SourceError.connectionFailed(error.localizedDescription)
+                        error
                     ))
                     return
                 }

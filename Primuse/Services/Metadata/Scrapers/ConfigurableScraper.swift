@@ -1153,7 +1153,7 @@ enum PlainHTTPClient {
                 // receiveLoop 永不回调,这里兜底 cancel 连接并 finish,避免 continuation
                 // 永久挂起及 NWConnection 泄漏。finish 幂等,正常完成后此回调是 no-op。
                 queue.asyncAfter(deadline: .now() + timeout) {
-                    finish(.failure(ScraperError.networkError("HTTP request timed out after \(timeout.finiteInt())s")))
+                    finish(.failure(URLError(.timedOut)))
                 }
 
                 @Sendable func receiveLoop() {
@@ -1259,7 +1259,7 @@ enum PlainHTTPClient {
                 }
 
                 queue.asyncAfter(deadline: .now() + timeout) {
-                    finish(.failure(ScraperError.networkError("HTTP download timed out after \(timeout.finiteInt())s")))
+                    finish(.failure(URLError(.timedOut)))
                 }
 
                 @Sendable func completeDownload() {

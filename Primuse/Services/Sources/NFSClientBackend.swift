@@ -474,9 +474,13 @@ final class NFSv4ClientBackend: NFSClientBackend, @unchecked Sendable {
         context: UnsafeMutablePointer<nfs_context>,
         status: Int32,
         operation: String
-    ) -> SourceError {
+    ) -> NSError {
         let detail = String(cString: nfs_get_error(context))
-        return .connectionFailed("NFSv4 \(operation) failed (\(status)): \(detail)")
+        return NSError(
+            domain: NSPOSIXErrorDomain,
+            code: -Int(status),
+            userInfo: [NSLocalizedDescriptionKey: "NFSv4 \(operation) failed (\(status)): \(detail)"]
+        )
     }
 }
 

@@ -770,7 +770,9 @@ actor SMBSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
     }
 
     private nonisolated func mapSMBError(_ error: Error) -> Error {
-        if error is CancellationError { return error }
+        if error is CancellationError || SourceNetworkFailurePolicy.isNetworkFailure(error) {
+            return error
+        }
         if error is SourceError { return error }
         if error is EmbeddedMetadataWritebackSourceError { return error }
         let ns = error as NSError
@@ -780,12 +782,6 @@ actor SMBSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
                 return SourceError.authenticationFailed
             case Int(ENOENT):
                 return SourceError.connectionFailed(String(localized: "smb_error_not_found"))
-            case Int(ECONNREFUSED):
-                return SourceError.connectionFailed(String(localized: "smb_error_refused"))
-            case Int(EHOSTUNREACH), Int(ENETUNREACH):
-                return SourceError.connectionFailed(String(localized: "smb_error_unreachable"))
-            case Int(ETIMEDOUT):
-                return SourceError.connectionFailed(String(localized: "smb_error_timeout"))
             case Int(ENODATA):
                 return SourceError.connectionFailed(
                     "SMB: \(String(localized: "source_diag_advice_invalid_response"))"

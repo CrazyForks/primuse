@@ -245,7 +245,7 @@ actor NFSSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter,
                 return localURL
             } catch {
                 try? FileManager.default.removeItem(at: tempURL)
-                throw SourceError.connectionFailed(error.localizedDescription)
+                throw error
             }
         }
         localFileTasks[cacheName] = task
@@ -734,7 +734,7 @@ actor NFSSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter,
                 case .fail:
                     if outcome == .retryableFailure {
                         await invalidateActiveClient()
-                        throw SourceError.connectionFailed(error.localizedDescription)
+                        throw error
                     }
                     throw error
                 }
