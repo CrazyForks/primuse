@@ -2040,32 +2040,36 @@ struct HomeView: View {
         case .liked(let playlist):
             NavigationLink(value: playlist) {
                 quickAccessDockLabel(title: String(localized: "sidebar_liked_songs")) {
-                    likedSongsArtwork(size: 52)
+                    QuickAccessArtworkView(item: .playlist(playlist), size: 52, cornerRadius: 9) {
+                        likedSongsArtwork(size: 52)
+                    }
                 }
             }
             .buttonStyle(.plain)
         case .album(let album):
             NavigationLink(value: album) {
                 quickAccessDockLabel(title: album.title) {
-                    AlbumArtworkView(album: album, size: 52, cornerRadius: 9)
+                    QuickAccessArtworkView(item: .album(album), size: 52, cornerRadius: 9) {
+                        AlbumArtworkView(album: album, size: 52, cornerRadius: 9)
+                    }
                 }
             }
             .buttonStyle(.plain)
         case .artist(let artist):
             NavigationLink(value: artist) {
                 quickAccessDockLabel(title: artist.name) {
-                    ArtistArtworkView(
-                        artist: artist,
-                        size: 52,
-                        cornerRadius: 26
-                    )
+                    QuickAccessArtworkView(item: .artist(artist), size: 52, cornerRadius: 9) {
+                        ArtistArtworkView(artist: artist, size: 52, cornerRadius: 26)
+                    }
                 }
             }
             .buttonStyle(.plain)
         case .playlist(let tile):
             NavigationLink(value: tile.playlist) {
                 quickAccessDockLabel(title: tile.playlist.name) {
-                    homePlaylistArtwork(tile, size: 52, cornerRadius: 9)
+                    QuickAccessArtworkView(item: .playlist(tile.playlist), size: 52, cornerRadius: 9) {
+                        homePlaylistArtwork(tile, size: 52, cornerRadius: 9)
+                    }
                 }
             }
             .buttonStyle(.plain)

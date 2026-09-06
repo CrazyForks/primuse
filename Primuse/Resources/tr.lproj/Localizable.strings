@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "Bu dönemde çalma yok";
 "stats_chart_minutes" = "Dakika";
 "stats_chart_hour" = "Saat";
+
+"library_quick_access_cover_style" = "Hızlı Erişim Kapakları";
+"library_quick_access_cover_default" = "Varsayılan (türe göre)";
+"library_quick_access_cover_circle" = "Tümü yuvarlak";
+"library_quick_access_cover_square" = "Tümü kare";
+"library_quick_access_cover_collage" = "Tümü kolaj";
+"library_quick_access_cover_description" = "Ana Sayfa ve Arşivdeki Hızlı Erişime uygulanır. Varsayılan, mevcut stilleri korur. Tek tip stiller beğenilen şarkılar için şarkı görsellerini kullanır; kolajlar dört kutuyu doldurmak için mevcut görselleri tekrarlar.";

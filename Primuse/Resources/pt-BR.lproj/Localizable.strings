@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "Nenhuma reprodução neste período";
 "stats_chart_minutes" = "Minutos";
 "stats_chart_hour" = "Hora";
+
+"library_quick_access_cover_style" = "Capas do acesso rápido";
+"library_quick_access_cover_default" = "Padrão (por tipo)";
+"library_quick_access_cover_circle" = "Círculos uniformes";
+"library_quick_access_cover_square" = "Quadrados uniformes";
+"library_quick_access_cover_collage" = "Colagens uniformes";
+"library_quick_access_cover_description" = "Aplica-se ao acesso rápido no Início e na Biblioteca. O padrão mantém os estilos atuais. Os estilos uniformes usam capas de músicas nas favoritas; as colagens repetem as imagens disponíveis para preencher quatro espaços.";

@@ -861,23 +861,29 @@ struct ListeningStatsView: View {
     private func summarySection(snapshot: StatsSnapshot) -> some View {
         Section {
             let s = snapshot.summary
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                summaryCell(value: "\(s.totalPlays)",
-                            label: String(localized: "stats_total_plays"),
-                            icon: "play.fill",
-                            color: .accentColor)
-                summaryCell(value: formatHours(s.totalSec),
-                            label: String(localized: "stats_total_time"),
-                            icon: "clock.fill",
-                            color: .green)
-                summaryCell(value: "\(s.activeDays)",
-                            label: String(localized: "stats_active_days"),
-                            icon: "calendar",
-                            color: .orange)
-                summaryCell(value: "\(s.uniqueSongs)",
-                            label: String(localized: "stats_unique_songs"),
-                            icon: "music.note",
-                            color: .purple)
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    summaryCell(value: "\(s.totalPlays)",
+                                label: String(localized: "stats_total_plays"),
+                                icon: "play.fill",
+                                color: .accentColor)
+                    summaryCell(value: formatHours(s.totalSec),
+                                label: String(localized: "stats_total_time"),
+                                icon: "clock.fill",
+                                color: .green)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 12) {
+                    summaryCell(value: "\(s.activeDays)",
+                                label: String(localized: "stats_active_days"),
+                                icon: "calendar",
+                                color: .orange)
+                    summaryCell(value: "\(s.uniqueSongs)",
+                                label: String(localized: "stats_unique_songs"),
+                                icon: "music.note",
+                                color: .purple)
+                }
+                .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 4)
         }
@@ -891,7 +897,7 @@ struct ListeningStatsView: View {
             }
             Text(value).font(.title3.weight(.semibold)).monospacedDigit()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(0.08)))
     }

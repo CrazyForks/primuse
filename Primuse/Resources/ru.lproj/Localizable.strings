@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "За этот период нет воспроизведений";
 "stats_chart_minutes" = "Минуты";
 "stats_chart_hour" = "Час";
+
+"library_quick_access_cover_style" = "Обложки быстрого доступа";
+"library_quick_access_cover_default" = "По умолчанию (по типу)";
+"library_quick_access_cover_circle" = "Все круглые";
+"library_quick_access_cover_square" = "Все квадратные";
+"library_quick_access_cover_collage" = "Все коллажи";
+"library_quick_access_cover_description" = "Применяется к быстрому доступу на главной и в медиатеке. По умолчанию сохраняется текущий вид. Единые стили используют обложки песен для любимых треков; коллажи повторяют доступные изображения, заполняя четыре ячейки.";

@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "لا توجد تشغيلات في هذه الفترة";
 "stats_chart_minutes" = "دقائق";
 "stats_chart_hour" = "الساعة";
+
+"library_quick_access_cover_style" = "أغلفة الوصول السريع";
+"library_quick_access_cover_default" = "الافتراضي (حسب النوع)";
+"library_quick_access_cover_circle" = "دوائر موحّدة";
+"library_quick_access_cover_square" = "مربعات موحّدة";
+"library_quick_access_cover_collage" = "صور مجمّعة موحّدة";
+"library_quick_access_cover_description" = "ينطبق على الوصول السريع في الرئيسية والمكتبة. يحافظ الافتراضي على الأنماط الحالية. تستخدم الأنماط الموحّدة صور الأغاني للأغاني المفضلة، وتكرّر الصور المجمّعة الصور المتاحة لملء أربع خانات.";

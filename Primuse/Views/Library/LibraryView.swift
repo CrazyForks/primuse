@@ -2,13 +2,18 @@ import SwiftUI
 import PrimuseKit
 
 enum LibrarySection: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
-    case recommendations, playlists, artists, genres, albums, songs, radio
+    case recommendations, favorites, playlists, artists, genres, albums, songs, folders, radio, statistics
 
     var id: String { rawValue }
+
+    var needsRootToolbar: Bool { self == .folders || self == .statistics }
 
     var title: LocalizedStringKey {
         switch self {
         case .recommendations: return "library_recommendations_title"
+        case .favorites: return "library_quick_access"
+        case .folders: return "library_browse_folder"
+        case .statistics: return "stats_title"
         case .playlists: return "tab_playlists"
         case .artists: return "tab_artists"
         case .genres: return "tab_genres"
@@ -21,6 +26,9 @@ enum LibrarySection: String, CaseIterable, Codable, Hashable, Identifiable, Send
     var icon: String {
         switch self {
         case .recommendations: return "sparkles"
+        case .favorites: return "heart.fill"
+        case .folders: return "folder.fill"
+        case .statistics: return "chart.bar.fill"
         case .playlists: return "music.note.list"
         case .artists: return "music.mic"
         case .genres: return "tag.fill"
@@ -33,6 +41,9 @@ enum LibrarySection: String, CaseIterable, Codable, Hashable, Identifiable, Send
     var color: Color {
         switch self {
         case .recommendations: return Color(red: 0.71, green: 0.48, blue: 0.40)
+        case .favorites: return .pink
+        case .folders: return .orange
+        case .statistics: return .green
         case .playlists: return .red
         case .artists: return .pink
         case .genres: return .teal
@@ -45,6 +56,9 @@ enum LibrarySection: String, CaseIterable, Codable, Hashable, Identifiable, Send
     var localizedTitle: String {
         switch self {
         case .recommendations: return String(localized: "library_recommendations_title")
+        case .favorites: return String(localized: "library_quick_access")
+        case .folders: return String(localized: "library_browse_folder")
+        case .statistics: return String(localized: "stats_title")
         case .playlists: return String(localized: "tab_playlists")
         case .artists: return String(localized: "tab_artists")
         case .genres: return String(localized: "tab_genres")
@@ -64,12 +78,15 @@ enum LibraryDisplayConfiguration {
     static let quickAccessLimitRange = 1...12
     static let defaultSectionOrder: [LibrarySection] = [
         .recommendations,
+        .favorites,
         .songs,
         .albums,
         .artists,
         .genres,
         .playlists,
+        .folders,
         .radio,
+        .statistics,
     ]
 
     static func normalizedQuickAccessLimit(_ value: Int) -> Int {
@@ -285,6 +302,7 @@ struct LibraryView: View {
     @Environment(\.appNavigationMode) private var appNavigationMode
     #endif
     @Binding private var deepLink: LibraryDeepLink?
+    private let rootSection: LibrarySection?
     private let onActiveSectionChange: (LibrarySection?) -> Void
     @State private var navigationPath = NavigationPath()
     @State private var songLocationRequest: SongLibraryLocationRequest?
@@ -300,6 +318,7 @@ struct LibraryView: View {
     private var sectionOrderRawValue = ""
     @AppStorage(LibraryDisplayConfiguration.hiddenSectionsKey)
     private var hiddenSectionsRawValue = ""
+    @AppStorage(QuickAccessCoverStyle.storageKey) private var quickAccessCoverStyle = QuickAccessCoverStyle.automatic
     @State private var artworkPreviewSelection = LibraryArtworkPreviewSelection()
 
     private var songs: [Song] { library.visibleSongs }
@@ -361,22 +380,18 @@ struct LibraryView: View {
 
     init(
         deepLink: Binding<LibraryDeepLink?> = .constant(nil),
+        rootSection: LibrarySection? = nil,
         onActiveSectionChange: @escaping (LibrarySection?) -> Void = { _ in }
     ) {
         self._deepLink = deepLink
+        self.rootSection = rootSection
         self.onActiveSectionChange = onActiveSectionChange
     }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            Group {
-                if hasContent {
-                    libraryHub
-                } else {
-                    emptyLibraryState
-                }
-            }
-            .navigationTitle("library_title")
+            rootContent
+            .navigationTitle(rootSection?.title ?? "library_title")
             .toolbarTitleDisplayMode(.inlineLarge)
             #if os(iOS)
             .toolbar(
@@ -385,19 +400,7 @@ struct LibraryView: View {
             )
             #endif
             .navigationDestination(for: LibrarySection.self) { section in
-                destination(for: section)
-                    .navigationTitle(section.title)
-                    .toolbarTitleDisplayMode(.inline)
-                    #if os(iOS)
-                    .toolbar(
-                        appNavigationMode == .minimal ? .hidden : .automatic,
-                        for: .navigationBar
-                    )
-                    #endif
-                    .onAppear {
-                        persistedPageID = "section:\(section.rawValue)"
-                        onActiveSectionChange(section)
-                    }
+                sectionDestination(section)
             }
             .navigationDestination(for: Album.self) { album in
                 AlbumDetailView(album: album)
@@ -422,7 +425,7 @@ struct LibraryView: View {
             }
             .onAppear {
                 sanitizeStoredPins()
-                if deepLink == nil {
+                if deepLink == nil, rootSection == nil {
                     restorePersistedPageIfNeeded()
                 } else {
                     applyDeepLink(deepLink)
@@ -469,11 +472,38 @@ struct LibraryView: View {
         }
     }
 
+    @ViewBuilder
+    private var rootContent: some View {
+        if let rootSection {
+            destination(for: rootSection)
+        } else if hasContent {
+            libraryHub
+        } else {
+            emptyLibraryState
+        }
+    }
+
+    private func sectionDestination(_ section: LibrarySection) -> some View {
+        destination(for: section)
+            .navigationTitle(section.title)
+            .toolbarTitleDisplayMode(.inline)
+            #if os(iOS)
+            .toolbar(
+                appNavigationMode == .minimal && !section.needsRootToolbar ? .hidden : .automatic,
+                for: .navigationBar
+            )
+            .navigationBarBackButtonHidden(appNavigationMode == .minimal)
+            #endif
+            .onAppear {
+                persistedPageID = "section:\(section.rawValue)"
+                onActiveSectionChange(section)
+            }
+    }
+
     private var libraryHub: some View {
         let previewRevision = artworkPreviewRevision
         return ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                quickAccessSection
                 browseLibrarySection
             }
             .padding(.top, 8)
@@ -530,13 +560,18 @@ struct LibraryView: View {
 
                     LazyVStack(spacing: 10) {
                         ForEach(visibleLibrarySections) { section in
-                            NavigationLink(value: section) {
-                                libraryCategoryRow(section)
+                            if section == .favorites {
+                                quickAccessSection
+                                    .padding(.vertical, 8)
+                            } else {
+                                NavigationLink(value: section) {
+                                    libraryCategoryRow(section)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 16)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 16)
                 }
             }
         }
@@ -605,9 +640,9 @@ struct LibraryView: View {
     private var addQuickAccessLabel: some View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: quickAccessCoverStyle == .circle ? 58 : 16, style: .continuous)
                     .fill(Color.secondary.opacity(0.07))
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: quickAccessCoverStyle == .circle ? 58 : 16, style: .continuous)
                     .stroke(
                         Color.secondary.opacity(0.32),
                         style: StrokeStyle(lineWidth: 1, dash: [5, 4])
@@ -641,12 +676,9 @@ struct LibraryView: View {
                         title: album.title,
                         subtitle: album.artistName ?? String(localized: "unknown_artist")
                     ) {
-                        libraryAlbumArtwork(
-                            album,
-                            size: 116,
-                            cornerRadius: 16,
-                            showsPlaceholder: true
-                        )
+                        QuickAccessArtworkView(item: .album(album), size: 116, cornerRadius: 16) {
+                            libraryAlbumArtwork(album, size: 116, cornerRadius: 16, showsPlaceholder: true)
+                        }
                     }
                 }
                 .buttonStyle(.plain)
@@ -658,12 +690,9 @@ struct LibraryView: View {
                         title: artist.name,
                         subtitle: countText(artist.albumCount, unitKey: "albums_count")
                     ) {
-                        libraryArtistArtwork(
-                            artist,
-                            size: 116,
-                            cornerRadius: 58,
-                            showsPlaceholder: true
-                        )
+                        QuickAccessArtworkView(item: .artist(artist), size: 116, cornerRadius: 16) {
+                            libraryArtistArtwork(artist, size: 116, cornerRadius: 58, showsPlaceholder: true)
+                        }
                     }
                 }
                 .buttonStyle(.plain)
@@ -678,7 +707,9 @@ struct LibraryView: View {
                             unitKey: "songs_count"
                         )
                     ) {
-                        likedArtwork(size: 116, cornerRadius: 16)
+                        QuickAccessArtworkView(item: .playlist(likedPlaylist), size: 116, cornerRadius: 16) {
+                            likedArtwork(size: 116, cornerRadius: 16)
+                        }
                     }
                 }
                 .buttonStyle(.plain)
@@ -691,7 +722,9 @@ struct LibraryView: View {
                             unitKey: "songs_count"
                         )
                     ) {
-                        playlistArtwork(playlist, size: 116, cornerRadius: 16)
+                        QuickAccessArtworkView(item: .playlist(playlist), size: 116, cornerRadius: 16) {
+                            playlistArtwork(playlist, size: 116, cornerRadius: 16)
+                        }
                     }
                 }
                 .buttonStyle(.plain)
@@ -739,6 +772,8 @@ struct LibraryView: View {
     @ViewBuilder
     private func categoryPreview(_ section: LibrarySection) -> some View {
         switch section {
+        case .favorites, .folders, .statistics:
+            EmptyView()
         case .recommendations:
             overlappingPreview(previewSongs) { song in
                 CachedArtworkView(
@@ -1162,6 +1197,12 @@ struct LibraryView: View {
 
     private func categoryCountText(_ section: LibrarySection) -> String {
         switch section {
+        case .favorites:
+            return String(localized: "library_quick_access")
+        case .folders:
+            return countText(songs.count, unitKey: "songs_count")
+        case .statistics:
+            return String(localized: "stats_section_label")
         case .recommendations:
             return String(localized: "library_recommendations_subtitle")
         case .songs:
@@ -1189,6 +1230,15 @@ struct LibraryView: View {
     @ViewBuilder
     private func destination(for section: LibrarySection) -> some View {
         switch section {
+        case .favorites:
+            ScrollView {
+                quickAccessSection
+                    .padding(.vertical, 16)
+            }
+        case .folders:
+            HomeFolderManagementView()
+        case .statistics:
+            ListeningStatsView()
         case .recommendations:
             AIRecommendationLibraryView()
         case .songs:

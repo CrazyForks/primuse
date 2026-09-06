@@ -109,6 +109,7 @@ private struct HomeFolderRow: View {
         HStack(spacing: 8) {
             NavigationLink {
                 HomeFolderBrowser(nodeID: node.id)
+                    .environment(model)
             } label: {
                 HStack(spacing: 14) {
                     HomeFolderArtwork(node: node)
@@ -252,6 +253,7 @@ struct HomeFolderBrowser: View {
         .navigationTitle(node.map(HomeDiscoveryText.folderTitle) ?? HomeDiscoveryText.string("folders"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        .minimalNavigationDetail(isDetail: nodeID != nil)
         #endif
         .toolbar {
             if let node {
@@ -277,6 +279,7 @@ struct HomeFolderBrowser: View {
         HStack {
             NavigationLink {
                 HomeFolderBrowser(nodeID: child.id)
+                    .environment(model)
             } label: {
                 HomeFolderChildLabel(node: child)
             }

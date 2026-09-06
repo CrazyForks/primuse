@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "За цей період немає відтворень";
 "stats_chart_minutes" = "Хвилини";
 "stats_chart_hour" = "Година";
+
+"library_quick_access_cover_style" = "Обкладинки швидкого доступу";
+"library_quick_access_cover_default" = "Типово (за типом)";
+"library_quick_access_cover_circle" = "Усі круглі";
+"library_quick_access_cover_square" = "Усі квадратні";
+"library_quick_access_cover_collage" = "Усі колажі";
+"library_quick_access_cover_description" = "Застосовується до швидкого доступу на головній і в медіатеці. Типовий стиль зберігає поточний вигляд. Єдині стилі використовують обкладинки пісень для улюблених треків; колажі повторюють доступні зображення, заповнюючи чотири клітинки.";

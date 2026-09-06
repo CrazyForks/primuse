@@ -32,7 +32,7 @@
 "library_quick_access_selected_empty" = "尚未选择快捷收藏";
 "library_quick_access_search_prompt" = "搜索专辑、艺术家或歌单";
 "library_sections_settings_label" = "资料库分类";
-"library_sections_settings_footer" = "拖动调整顺序；关闭后会从资料库入口和侧栏中隐藏。";
+"library_sections_settings_footer" = "拖动调整顺序；分类的显示、隐藏和顺序同时应用于资料库、侧栏与极简模式标签。";
 "library_sections_restore_default_order" = "恢复默认顺序";
 "playlists_count" = "个歌单";
 "sources_title" = "音乐源";
@@ -3739,3 +3739,10 @@
 "stats_chart_no_activity" = "此周期暂无播放记录";
 "stats_chart_minutes" = "分钟";
 "stats_chart_hour" = "时段";
+
+"library_quick_access_cover_style" = "快捷收藏封面";
+"library_quick_access_cover_default" = "默认（按类型）";
+"library_quick_access_cover_circle" = "统一圆形";
+"library_quick_access_cover_square" = "统一方形";
+"library_quick_access_cover_collage" = "统一多图合并";
+"library_quick_access_cover_description" = "应用于首页和资料库的快捷收藏。默认保留现有样式；统一样式会为“我喜欢的”使用歌曲封面，多图不足四张时重复补齐。";

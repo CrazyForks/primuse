@@ -267,6 +267,50 @@ public enum PlaylistArtworkResolver {
     }
 }
 
+public enum QuickAccessCoverStyle: String, CaseIterable, Sendable {
+    case automatic, circle, square, collage
+
+    public static let storageKey = "primuse.library.quickAccessCoverStyle.v1"
+}
+
+public enum QuickAccessArtworkPolicy {
+    public static func makePlan(itemID: String, songs: [Song]) -> PlaylistArtworkResolutionPlan {
+        PlaylistArtworkResolutionPolicy.makePlan(
+            playlist: Playlist(id: itemID, name: ""),
+            songs: songs
+        )
+    }
+
+    public static func resolveCollage<Value>(
+        plan: PlaylistArtworkResolutionPlan,
+        songs: [Song],
+        isolation: isolated (any Actor)? = #isolation,
+        using load: (PlaylistArtworkCandidate) async -> Value?
+    ) async -> [Value] {
+        let songsByID = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var resolvedKeys = Set<String>()
+        var values: [Value] = []
+        var attempts = 0
+
+        for candidate in plan.candidates {
+            guard !Task.isCancelled, values.count < 4, attempts < 24 else { break }
+            guard let songID = candidate.songID, let song = songsByID[songID] else { continue }
+            // Relative references belong to their source. Tracks without a
+            // reference must still get a chance to resolve embedded artwork.
+            let key = candidate.artworkReference.map { song.sourceID + "\u{0}" + $0 }
+                ?? song.id
+            guard !resolvedKeys.contains(key) else { continue }
+            attempts += 1
+            if let value = await load(candidate) {
+                guard !Task.isCancelled else { break }
+                resolvedKeys.insert(key)
+                values.append(value)
+            }
+        }
+        return values
+    }
+}
+
 public enum PlaylistConflictWinner: Sendable, Equatable {
     case local
     case remote

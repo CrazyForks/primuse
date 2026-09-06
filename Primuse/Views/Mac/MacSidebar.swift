@@ -71,7 +71,9 @@ struct MacSidebar: View {
     private var primaryItems: some View {
         VStack(alignment: .leading, spacing: 1) {
             item(route: .home,    icon: "house.fill",                       title: "home_title")
-            item(route: .stats,   icon: "chart.bar.xaxis",                  title: "stats_title")
+            if visibleLibrarySections.contains(.statistics) {
+                item(route: .stats, icon: "chart.bar.xaxis", title: "stats_title")
+            }
             item(route: .sources, icon: "externaldrive.connected.to.line.below", title: "sources_title")
             item(route: .search,  icon: "magnifyingglass",                  title: "search_title")
         }
@@ -85,7 +87,7 @@ struct MacSidebar: View {
         VStack(alignment: .leading, spacing: 1) {
             sectionHeader("library_title")
 
-            ForEach(visibleLibrarySections.filter { $0 != .playlists }) { section in
+            ForEach(visibleLibrarySections.filter { $0 != .playlists && $0 != .statistics }) { section in
                 libraryNavigationItems(for: section)
             }
 
@@ -103,6 +105,8 @@ struct MacSidebar: View {
     @ViewBuilder
     private func libraryNavigationItems(for section: LibrarySection) -> some View {
         switch section {
+        case .favorites, .folders, .statistics:
+            item(route: .section(section), icon: section.icon, title: section.title)
         case .recommendations:
             item(
                 route: .section(.recommendations),

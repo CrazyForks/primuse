@@ -4715,6 +4715,7 @@ private struct MacSTSharePickerAnchor: NSViewRepresentable {
 // MARK: - ST-12 Theme
 
 private struct MacSTThemeView: View {
+    @AppStorage(QuickAccessCoverStyle.storageKey) private var quickAccessCoverStyle = QuickAccessCoverStyle.automatic
     @State private var preferences = MacUIPreferences.shared
     @Environment(ThemeService.self) private var themeService
     @Environment(AudioPlayerService.self) private var player
@@ -5073,6 +5074,14 @@ private struct MacSTThemeView: View {
                     .accessibilityHint(Text("library_quick_access_count_description"))
                 }
                 .settingsAnchor("library.quickAccessCount")
+                MacSTRow(String(localized: "library_quick_access_cover_style")) {
+                    MacSTPicker(
+                        selection: $quickAccessCoverStyle,
+                        options: QuickAccessCoverStyle.allCases.map { ($0, $0.localizedTitle) }
+                    )
+                    .accessibilityHint(Text("library_quick_access_cover_description"))
+                }
+                .settingsAnchor("library.quickAccessCoverStyle")
                 MacSTRow(
                     String(localized: "library_default_flat_view")
                 ) {

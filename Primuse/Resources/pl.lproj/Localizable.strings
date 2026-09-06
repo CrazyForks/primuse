@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "Brak odtworzeń w tym okresie";
 "stats_chart_minutes" = "Minuty";
 "stats_chart_hour" = "Godzina";
+
+"library_quick_access_cover_style" = "Okładki szybkiego dostępu";
+"library_quick_access_cover_default" = "Domyślne (według typu)";
+"library_quick_access_cover_circle" = "Wszystkie okrągłe";
+"library_quick_access_cover_square" = "Wszystkie kwadratowe";
+"library_quick_access_cover_collage" = "Wszystkie kolaże";
+"library_quick_access_cover_description" = "Dotyczy szybkiego dostępu na stronie głównej i w bibliotece. Styl domyślny zachowuje obecny wygląd. Jednolite style używają okładek utworów dla ulubionych; kolaże powtarzają dostępne obrazy, aby wypełnić cztery pola.";

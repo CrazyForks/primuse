@@ -3647,3 +3647,10 @@
 "stats_chart_no_activity" = "この期間の再生記録はありません";
 "stats_chart_minutes" = "分";
 "stats_chart_hour" = "時間帯";
+
+"library_quick_access_cover_style" = "クイックアクセスのカバー";
+"library_quick_access_cover_default" = "デフォルト（種類別）";
+"library_quick_access_cover_circle" = "すべて円形";
+"library_quick_access_cover_square" = "すべて正方形";
+"library_quick_access_cover_collage" = "すべてコラージュ";
+"library_quick_access_cover_description" = "ホームとライブラリのクイックアクセスに適用します。デフォルトは現在のスタイルを維持します。統一スタイルではお気に入りに曲の画像を使用し、コラージュは画像を繰り返して4枠を埋めます。";

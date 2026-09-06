@@ -3646,3 +3646,10 @@
 "stats_chart_no_activity" = "Keine Wiedergaben in diesem Zeitraum";
 "stats_chart_minutes" = "Minuten";
 "stats_chart_hour" = "Stunde";
+
+"library_quick_access_cover_style" = "Schnellzugriff-Cover";
+"library_quick_access_cover_default" = "Standard (nach Typ)";
+"library_quick_access_cover_circle" = "Einheitlich rund";
+"library_quick_access_cover_square" = "Einheitlich quadratisch";
+"library_quick_access_cover_collage" = "Einheitliche Collagen";
+"library_quick_access_cover_description" = "Gilt für den Schnellzugriff auf der Startseite und in der Mediathek. Standard behält die bisherigen Stile bei. Einheitliche Stile verwenden Songcover für Lieblingstitel; Collagen wiederholen verfügbare Bilder für vier Kacheln.";

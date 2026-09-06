@@ -67,7 +67,7 @@ final class LibraryDisplayConfigurationTests: XCTestCase {
 
         XCTAssertEqual(
             LibraryDisplayConfiguration.decodeSectionOrder(rawValue),
-            [.recommendations, .albums, .songs, .artists, .genres, .playlists, .radio]
+            [.recommendations, .favorites, .albums, .songs, .artists, .genres, .playlists, .folders, .radio, .statistics]
         )
     }
 
@@ -169,7 +169,6 @@ final class LibraryDisplayConfigurationTests: XCTestCase {
                 visibleSections: [.songs, .albums, .radio]
             ),
             [
-                .librarySection(.recommendations),
                 .librarySection(.songs),
                 .librarySection(.albums),
                 .librarySection(.radio),
@@ -177,55 +176,100 @@ final class LibraryDisplayConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(
             MinimalNavigationPolicy.libraryPages(visibleSections: []),
-            [.librarySection(.recommendations)]
+            []
         )
         XCTAssertEqual(
             MinimalNavigationPolicy.libraryPages(
                 visibleSections: [.songs, .recommendations, .albums]
             ),
             [
-                .librarySection(.recommendations),
                 .librarySection(.songs),
+                .librarySection(.recommendations),
                 .librarySection(.albums),
             ]
         )
     }
 
-    func testMinimalSelectionUsesRecommendationsAsItsHomePage() {
+    func testMinimalSelectionUsesTheFirstVisibleCategoryAsItsHomePage() {
+        let sections: [LibrarySection] = [.favorites, .artists, .songs]
         XCTAssertEqual(
             MinimalNavigationPolicy.selectedPage(
                 selectedTab: 0,
-                activeLibrarySection: nil
+                activeLibrarySection: nil,
+                visibleSections: sections
             ),
-            .librarySection(.recommendations)
+            .librarySection(.favorites)
         )
         XCTAssertEqual(
             MinimalNavigationPolicy.selectedPage(
                 selectedTab: 1,
-                activeLibrarySection: .artists
+                activeLibrarySection: .artists,
+                visibleSections: sections
             ),
             .librarySection(.artists)
         )
         XCTAssertEqual(
             MinimalNavigationPolicy.selectedPage(
                 selectedTab: 1,
-                activeLibrarySection: nil
+                activeLibrarySection: nil,
+                visibleSections: sections
             ),
-            .librarySection(.recommendations)
+            .librarySection(.favorites)
         )
         XCTAssertEqual(
             MinimalNavigationPolicy.selectedPage(
                 selectedTab: 2,
-                activeLibrarySection: .songs
+                activeLibrarySection: .songs,
+                visibleSections: sections
             ),
             .search
         )
         XCTAssertEqual(
             MinimalNavigationPolicy.selectedPage(
                 selectedTab: 99,
-                activeLibrarySection: nil
+                activeLibrarySection: nil,
+                visibleSections: sections
             ),
-            .librarySection(.recommendations)
+            .librarySection(.favorites)
+        )
+    }
+
+    func testHiddenCategoriesStayHiddenInMinimalModeAndOldOrdersKeepTheirRelativeOrder() {
+        let oldOrder: [LibrarySection] = [.radio, .albums, .songs, .artists, .genres, .playlists, .recommendations]
+        let order = LibraryDisplayConfiguration.decodeSectionOrder(
+            LibraryDisplayConfiguration.encodeSectionOrder(oldOrder)
+        )
+        XCTAssertEqual(order.filter(oldOrder.contains), oldOrder)
+        let hidden: Set<LibrarySection> = [.recommendations, .favorites, .folders, .statistics]
+        let visible = LibraryDisplayConfiguration.visibleSections(
+            orderRawValue: LibraryDisplayConfiguration.encodeSectionOrder(order),
+            hiddenRawValue: LibraryDisplayConfiguration.encodeHiddenSections(hidden)
+        )
+        XCTAssertTrue(hidden.isDisjoint(with: visible))
+        XCTAssertEqual(
+            MinimalNavigationPolicy.libraryPages(visibleSections: visible),
+            visible.map(MinimalNavigationPage.librarySection)
+        )
+        XCTAssertEqual(
+            MinimalNavigationPolicy.selectedPage(
+                selectedTab: 1,
+                activeLibrarySection: .favorites,
+                visibleSections: visible
+            ),
+            .librarySection(.radio)
+        )
+    }
+
+    func testAllCategoriesCanBeHiddenWithoutRestoringRecommendations() {
+        let visible = LibraryDisplayConfiguration.visibleSections(
+            orderRawValue: "",
+            hiddenRawValue: LibraryDisplayConfiguration.encodeHiddenSections(Set(LibrarySection.allCases))
+        )
+        XCTAssertTrue(visible.isEmpty)
+        XCTAssertEqual(MinimalNavigationPolicy.homePage(visibleSections: visible), .search)
+        XCTAssertEqual(
+            MinimalNavigationPolicy.selectedPage(selectedTab: 3, activeLibrarySection: .songs, visibleSections: visible),
+            .settings
         )
     }
 

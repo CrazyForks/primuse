@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "इस अवधि में कोई प्ले नहीं";
 "stats_chart_minutes" = "मिनट";
 "stats_chart_hour" = "घंटा";
+
+"library_quick_access_cover_style" = "त्वरित पहुँच के कवर";
+"library_quick_access_cover_default" = "डिफ़ॉल्ट (प्रकार के अनुसार)";
+"library_quick_access_cover_circle" = "सभी गोलाकार";
+"library_quick_access_cover_square" = "सभी वर्गाकार";
+"library_quick_access_cover_collage" = "सभी कोलाज";
+"library_quick_access_cover_description" = "होम और लाइब्रेरी की त्वरित पहुँच पर लागू होता है। डिफ़ॉल्ट मौजूदा शैली रखता है। एकसमान शैलियाँ पसंदीदा गानों के लिए गाने की तस्वीरें इस्तेमाल करती हैं; कोलाज चार खानों को भरने के लिए उपलब्ध तस्वीरें दोहराता है।";

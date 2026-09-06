@@ -92,6 +92,9 @@ struct SettingsView: View {
                 case .page(let page, let itemID):
                     SettingsFocusedPage(itemID: itemID, page: page) { SettingsPageContent(page: page) }
                         .id(destination)
+                        #if os(iOS)
+                        .minimalNavigationDetail()
+                        #endif
                         .onAppear {
                             if itemID == nil { SettingsSearchHistory.shared.record(page.id) }
                         }
@@ -628,6 +631,7 @@ private struct PlayerAppearanceSettingsView: View {
 #endif
 
 private struct LibraryDisplaySettingsView: View {
+    @AppStorage(QuickAccessCoverStyle.storageKey) private var quickAccessCoverStyle = QuickAccessCoverStyle.automatic
     @AppStorage(LibrarySongBrowseModePreference.storageKey)
     private var libraryBrowseModeRawValue = LibrarySongBrowseMode.folder.rawValue
     @AppStorage(LibraryDisplayConfiguration.quickAccessLimitKey)
@@ -710,8 +714,18 @@ private struct LibraryDisplaySettingsView: View {
                     .accessibilityHint(Text("library_quick_access_count_description"))
                 }
                 .padding(.vertical, 4)
+                Picker("library_quick_access_cover_style", selection: $quickAccessCoverStyle) {
+                    ForEach(QuickAccessCoverStyle.allCases, id: \.self) { style in
+                        Text(style.localizedTitle).tag(style)
+                    }
+                }
+                .pickerStyle(.menu)
+                .settingsAnchor("library.quickAccessCoverStyle")
+                .accessibilityHint(Text("library_quick_access_cover_description"))
             } header: {
                 Text("library_quick_access")
+            } footer: {
+                Text("library_quick_access_cover_description")
             }
 
             Section {

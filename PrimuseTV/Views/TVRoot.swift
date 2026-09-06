@@ -343,10 +343,7 @@ struct TVRoot: View {
     private var content: some View {
         switch tab {
         case .home:
-            TVHomeView(openPlayer: { tab = .nowPlaying }, onBrowse: { category in
-                libraryFilter = category
-                tab = .library
-            })
+            TVHomeView(openPlayer: { tab = .nowPlaying })
         case .library:
             TVLibraryView(
                 openPlayer: { tab = .nowPlaying },

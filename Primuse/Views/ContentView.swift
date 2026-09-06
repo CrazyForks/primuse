@@ -73,21 +73,27 @@ enum MinimalNavigationPage: Hashable, Identifiable, Sendable {
 }
 
 enum MinimalNavigationPolicy {
-    static let homePage = MinimalNavigationPage.librarySection(.recommendations)
+    static func homePage(visibleSections: [LibrarySection]) -> MinimalNavigationPage {
+        visibleSections.first.map(MinimalNavigationPage.librarySection) ?? .search
+    }
 
     static func libraryPages(visibleSections: [LibrarySection]) -> [MinimalNavigationPage] {
-        let remainingSections = visibleSections.filter { $0 != .recommendations }
-        return ([.recommendations] + remainingSections).map(MinimalNavigationPage.librarySection)
+        visibleSections.map(MinimalNavigationPage.librarySection)
     }
 
     static func selectedPage(
         selectedTab: Int,
-        activeLibrarySection: LibrarySection?
+        activeLibrarySection: LibrarySection?,
+        visibleSections: [LibrarySection]
     ) -> MinimalNavigationPage {
+        let homePage = homePage(visibleSections: visibleSections)
         switch selectedTab {
         case 0: return homePage
         case 1:
-            return activeLibrarySection.map(MinimalNavigationPage.librarySection) ?? homePage
+            guard let activeLibrarySection, visibleSections.contains(activeLibrarySection) else {
+                return homePage
+            }
+            return .librarySection(activeLibrarySection)
         case 2: return .search
         case 3: return .settings
         default: return homePage
@@ -182,12 +188,13 @@ extension EnvironmentValues {
 }
 
 extension View {
-    func minimalNavigationDetail() -> some View {
-        modifier(MinimalNavigationDetailModifier())
+    func minimalNavigationDetail(isDetail: Bool = true) -> some View {
+        modifier(MinimalNavigationDetailModifier(isDetail: isDetail))
     }
 }
 
 private struct MinimalNavigationDetailModifier: ViewModifier {
+    let isDetail: Bool
     @Environment(\.appNavigationMode) private var appNavigationMode
     @Environment(\.minimalNavigationDetailScope) private var detailScope
     @Environment(\.minimalNavigationDetailTransitionHandler) private var transitionHandler
@@ -195,7 +202,7 @@ private struct MinimalNavigationDetailModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if appNavigationMode == .minimal, let detailScope {
+        if isDetail, appNavigationMode == .minimal, let detailScope {
             content
                 .preference(
                     key: MinimalNavigationDetailScopesPreferenceKey.self,
@@ -329,6 +336,9 @@ private enum SidebarItem: String, Hashable, Identifiable, CaseIterable {
     case home
     case library
     case libraryRecommendations
+    case libraryFavorites
+    case libraryFolders
+    case libraryStatistics
     case librarySongs
     case libraryAlbums
     case libraryArtists
@@ -346,7 +356,8 @@ private enum SidebarItem: String, Hashable, Identifiable, CaseIterable {
         switch self {
         case .home: return 0
         case .library, .libraryRecommendations, .librarySongs, .libraryAlbums,
-                .libraryArtists, .libraryGenres, .libraryPlaylists, .libraryRadio:
+                .libraryArtists, .libraryGenres, .libraryPlaylists, .libraryRadio,
+                .libraryFavorites, .libraryFolders, .libraryStatistics:
             return 1
         case .search: return 2
         case .settings: return 3
@@ -358,6 +369,9 @@ private enum SidebarItem: String, Hashable, Identifiable, CaseIterable {
     static func libraryChild(for section: LibrarySection) -> SidebarItem {
         switch section {
         case .recommendations: return .libraryRecommendations
+        case .favorites: return .libraryFavorites
+        case .folders: return .libraryFolders
+        case .statistics: return .libraryStatistics
         case .songs: return .librarySongs
         case .albums: return .libraryAlbums
         case .artists: return .libraryArtists
@@ -372,6 +386,9 @@ private enum SidebarItem: String, Hashable, Identifiable, CaseIterable {
         case .home: return "home_title"
         case .library: return "library_title"
         case .libraryRecommendations: return "library_recommendations_title"
+        case .libraryFavorites: return "library_quick_access"
+        case .libraryFolders: return "library_browse_folder"
+        case .libraryStatistics: return "stats_title"
         case .librarySongs: return "tab_songs"
         case .libraryAlbums: return "tab_albums"
         case .libraryArtists: return "tab_artists"
@@ -388,6 +405,9 @@ private enum SidebarItem: String, Hashable, Identifiable, CaseIterable {
         case .home: return "house.fill"
         case .library: return "books.vertical"
         case .libraryRecommendations: return "sparkles"
+        case .libraryFavorites: return "heart.fill"
+        case .libraryFolders: return "folder.fill"
+        case .libraryStatistics: return "chart.bar.fill"
         case .librarySongs: return "music.note"
         case .libraryAlbums: return "square.stack.fill"
         case .libraryArtists: return "music.mic"
@@ -559,7 +579,8 @@ struct ContentView: View {
                     ),
                     selection: MinimalNavigationPolicy.selectedPage(
                         selectedTab: selectedTab,
-                        activeLibrarySection: minimalLibrarySection
+                        activeLibrarySection: minimalLibrarySection,
+                        visibleSections: visibleLibrarySections
                     ),
                     onSelect: selectMinimalPage,
                     onSubmitSearch: submitMinimalSearch
@@ -697,6 +718,12 @@ struct ContentView: View {
             librarySubpane(title: "library_recommendations_title") {
                 AIRecommendationLibraryView()
             }
+        case .libraryFavorites:
+            LibraryView(rootSection: .favorites)
+        case .libraryFolders:
+            librarySubpane(title: "library_browse_folder") { HomeFolderManagementView() }
+        case .libraryStatistics:
+            librarySubpane(title: "stats_title") { ListeningStatsView() }
         case .librarySongs:
             librarySubpane(title: "tab_songs") { SongListView() }
         case .libraryAlbums:
@@ -820,6 +847,11 @@ struct ContentView: View {
                 synchronizeSidebarForCurrentSelection()
             }
         }
+        .onChange(of: visibleLibrarySections) { _, sections in
+            guard navigationMode == .minimal, selectedTab == 1,
+                  minimalLibrarySection.map({ !sections.contains($0) }) ?? true else { return }
+            selectMinimalPage(MinimalNavigationPolicy.homePage(visibleSections: sections))
+        }
         .fullScreenCover(item: $autoYearlyReport) { data in
             YearlyReportView(data: data)
         }
@@ -898,7 +930,7 @@ struct ContentView: View {
             synchronizeSidebarForCurrentSelection()
             return
         }
-        selectMinimalPage(MinimalNavigationPolicy.homePage)
+        selectMinimalPage(MinimalNavigationPolicy.homePage(visibleSections: visibleLibrarySections))
     }
 
     private func submitMinimalSearch() {
@@ -1368,7 +1400,7 @@ private struct MinimalTopNavigationBar: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                homeButton
+                libraryHomeButton
 
                 searchField
 
@@ -1502,11 +1534,11 @@ private struct MinimalTopNavigationBar: View {
         .accessibilityLabel(Text("search_title"))
     }
 
-    private var homeButton: some View {
+    private var libraryHomeButton: some View {
         Button {
-            select(MinimalNavigationPolicy.homePage)
+            select(libraryPages.first ?? .search)
         } label: {
-            Image(systemName: "house")
+            Image(systemName: "books.vertical")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.secondary)
                 .frame(width: 44, height: 44)
@@ -1520,7 +1552,7 @@ private struct MinimalTopNavigationBar: View {
                 .shadow(color: Color.black.opacity(0.08), radius: 5, y: 2)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("home_title"))
+        .accessibilityLabel(Text("library_title"))
     }
 
     private func actionButton(

@@ -3646,3 +3646,10 @@
 "stats_chart_no_activity" = "이 기간에 재생 기록이 없습니다";
 "stats_chart_minutes" = "분";
 "stats_chart_hour" = "시간대";
+
+"library_quick_access_cover_style" = "빠른 접근 커버";
+"library_quick_access_cover_default" = "기본값(유형별)";
+"library_quick_access_cover_circle" = "모두 원형";
+"library_quick_access_cover_square" = "모두 정사각형";
+"library_quick_access_cover_collage" = "모두 콜라주";
+"library_quick_access_cover_description" = "홈과 보관함의 빠른 접근에 적용됩니다. 기본값은 기존 스타일을 유지합니다. 통일된 스타일은 좋아요 표시한 곡에 노래 이미지를 사용하며, 콜라주는 사용 가능한 이미지를 반복하여 네 칸을 채웁니다.";

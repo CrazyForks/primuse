@@ -33,7 +33,7 @@
 "library_quick_access_selected_empty" = "尚未選擇快捷收藏";
 "library_quick_access_search_prompt" = "搜尋專輯、演出者或歌單";
 "library_sections_settings_label" = "資料庫分類";
-"library_sections_settings_footer" = "拖移以調整順序；關閉後會從資料庫入口與側邊欄隱藏。";
+"library_sections_settings_footer" = "拖移以調整順序；分類的顯示、隱藏與順序會同步套用至資料庫、側邊欄及極簡模式標籤。";
 "library_sections_restore_default_order" = "還原預設順序";
 "playlists_count" = "個歌單";
 "sources_title" = "音樂來源";
@@ -3623,3 +3623,10 @@
 "stats_chart_no_activity" = "此期間尚無播放記錄";
 "stats_chart_minutes" = "分鐘";
 "stats_chart_hour" = "時段";
+
+"library_quick_access_cover_style" = "快捷收藏封面";
+"library_quick_access_cover_default" = "預設（依類型）";
+"library_quick_access_cover_circle" = "統一圓形";
+"library_quick_access_cover_square" = "統一方形";
+"library_quick_access_cover_collage" = "統一多圖合併";
+"library_quick_access_cover_description" = "套用至首頁和資料庫的快捷收藏。預設保留現有樣式；統一樣式會為「我喜歡的」使用歌曲封面，多圖不足四張時重複補齊。";

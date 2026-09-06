@@ -3552,3 +3552,10 @@
 "stats_chart_no_activity" = "ไม่มีการเล่นในช่วงเวลานี้";
 "stats_chart_minutes" = "นาที";
 "stats_chart_hour" = "ชั่วโมง";
+
+"library_quick_access_cover_style" = "ปกการเข้าถึงด่วน";
+"library_quick_access_cover_default" = "ค่าเริ่มต้น (ตามประเภท)";
+"library_quick_access_cover_circle" = "วงกลมทั้งหมด";
+"library_quick_access_cover_square" = "สี่เหลี่ยมจัตุรัสทั้งหมด";
+"library_quick_access_cover_collage" = "ภาพปะติดทั้งหมด";
+"library_quick_access_cover_description" = "ใช้กับการเข้าถึงด่วนในหน้าหลักและคลัง ค่าเริ่มต้นคงรูปแบบเดิม รูปแบบเดียวกันใช้ภาพเพลงสำหรับเพลงที่ชอบ และภาพปะติดจะใช้ภาพที่มีซ้ำเพื่อเติมให้ครบสี่ช่อง";

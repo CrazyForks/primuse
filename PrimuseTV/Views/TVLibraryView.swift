@@ -62,10 +62,10 @@ struct TVLibraryView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let contentW = geo.size.width - TVSpace.pageH * 2 - 298
+            let contentW = geo.size.width - TVSpace.pageH * 2 - 28
             let cell = max(140, (contentW - gap * CGFloat(cols - 1)) / CGFloat(cols))
-            HStack(alignment: .top, spacing: 40) {
-                filterStrip.frame(width: 230)
+            VStack(alignment: .leading, spacing: 24) {
+                filterStrip
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 30) {
                         Text(title).tvFont(.pageTitle).foregroundStyle(TVColor.text)
@@ -143,28 +143,32 @@ struct TVLibraryView: View {
     private var filterStrip: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(PMString("ext.tv.library.eyebrow")).tvFont(.eyebrow)
-                .foregroundStyle(TVColor.textMuted).padding(.bottom, 14)
-            ForEach(Filter.allCases) { item in
-                if item == .recommendations {
-                    Rectangle().fill(TVColor.cardBorder).frame(height: 1).padding(.vertical, 14)
+                .foregroundStyle(TVColor.textMuted)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(Filter.allCases) { item in
+                        Button { filter = item } label: {
+                            Label(item.display, systemImage: item.icon)
+                                .tvFont(.caption, weight: item == filter ? .semibold : .regular)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .frame(minHeight: 64)
+                                .padding(.horizontal, 18)
+                                .foregroundStyle(item == filter ? TVColor.onBrand : TVColor.text)
+                                .background(item == filter ? TVColor.brand : TVColor.card, in: .rect(cornerRadius: 14))
+                                .tvFocusRing(focusedFilter == item, radius: 14, scale: 1.02, lift: 0)
+                        }
+                        .buttonStyle(TVBareButtonStyle())
+                        .focused($focusedFilter, equals: item)
+                        .focusEffectDisabled()
+                        .accessibilityIdentifier("tv.library.category." + item.rawValue)
+                        .accessibilityAddTraits(item == filter ? [.isButton, .isSelected] : .isButton)
+                    }
                 }
-                Button { filter = item } label: {
-                    Label(item.display, systemImage: item.icon)
-                        .tvFont(.caption, weight: item == filter ? .semibold : .regular)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-                        .padding(.horizontal, 18)
-                        .foregroundStyle(item == filter ? TVColor.onBrand : TVColor.text)
-                        .background(item == filter ? TVColor.brand : TVColor.card, in: .rect(cornerRadius: 14))
-                        .tvFocusRing(focusedFilter == item, radius: 14, scale: 1.02, lift: 0)
-                }
-                .buttonStyle(TVBareButtonStyle())
-                .focused($focusedFilter, equals: item)
-                .focusEffectDisabled()
-                .accessibilityIdentifier("tv.library.category." + item.rawValue)
-                .accessibilityAddTraits(item == filter ? [.isButton, .isSelected] : .isButton)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
             }
-            Spacer(minLength: 0)
+            .frame(height: 80)
         }
         .focusSection()
     }

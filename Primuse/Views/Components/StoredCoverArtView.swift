@@ -8,6 +8,162 @@ import PhotosUI
 import UniformTypeIdentifiers
 #endif
 
+extension QuickAccessCoverStyle {
+    var localizedTitle: String {
+        switch self {
+        case .automatic: return String(localized: "library_quick_access_cover_default")
+        case .circle: return String(localized: "library_quick_access_cover_circle")
+        case .square: return String(localized: "library_quick_access_cover_square")
+        case .collage: return String(localized: "library_quick_access_cover_collage")
+        }
+    }
+}
+
+enum QuickAccessArtworkItem {
+    case album(PrimuseKit.Album)
+    case artist(PrimuseKit.Artist)
+    case playlist(PrimuseKit.Playlist)
+
+    var id: String {
+        switch self {
+        case .album(let album): return "album:" + album.id
+        case .artist(let artist): return "artist:" + artist.id
+        case .playlist(let playlist): return "playlist:" + playlist.id
+        }
+    }
+}
+
+struct QuickAccessArtworkView<AutomaticArtwork: View>: View {
+    let item: QuickAccessArtworkItem
+    let size: CGFloat
+    let cornerRadius: CGFloat
+    @ViewBuilder var automaticArtwork: () -> AutomaticArtwork
+
+    @AppStorage(QuickAccessCoverStyle.storageKey) private var style = QuickAccessCoverStyle.automatic
+
+    var body: some View {
+        if style == .automatic {
+            automaticArtwork()
+        } else {
+            QuickAccessCustomArtworkView(
+                item: item, style: style, size: size, cornerRadius: cornerRadius
+            )
+        }
+    }
+}
+
+private struct QuickAccessCustomArtworkView: View {
+    let item: QuickAccessArtworkItem
+    let style: QuickAccessCoverStyle
+    let size: CGFloat
+    let cornerRadius: CGFloat
+
+    @Environment(MusicLibrary.self) private var library
+    @Environment(SourceManager.self) private var sourceManager
+    @State private var collage: [PlaylistArtworkResource] = []
+    @State private var watchedArtworkTokens = Set<String>()
+    @State private var reloadRevision = 0
+
+    private var radius: CGFloat { style == .circle ? size / 2 : cornerRadius }
+
+    private var loadIdentity: String {
+        [item.id, style.rawValue, library.songReplacementToken.uuidString,
+         String(library.playlistCollectionRevision), String(library.albumArtworkLookupRevision),
+         String(NetworkMonitor.shared.pathGeneration), String(reloadRevision)].joined(separator: "#")
+    }
+
+    var body: some View {
+        ZStack {
+            singleArtwork
+            if style == .collage, !collage.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(0..<2) { row in
+                        HStack(spacing: 0) {
+                            ForEach(0..<2) { column in
+                                artwork(collage[(row * 2 + column) % collage.count], side: size / 2)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .task(id: loadIdentity) {
+            guard style == .collage else { return }
+            let identity = loadIdentity
+            // Collapse metadata/cache bursts before collecting member artwork.
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            let songs = memberSongs()
+            let itemID = item.id
+            watchedArtworkTokens = Set(songs.flatMap { [$0.id] + [$0.coverArtFileName].compactMap { $0 } })
+            let plan = await Task.detached(priority: .utility) {
+                QuickAccessArtworkPolicy.makePlan(itemID: itemID, songs: songs)
+            }.value
+            guard !Task.isCancelled, identity == loadIdentity else { return }
+            let songsByID = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let resolved = await QuickAccessArtworkPolicy.resolveCollage(plan: plan, songs: songs) { candidate in
+                guard let songID = candidate.songID, let song = songsByID[songID] else { return nil as PlaylistArtworkResource? }
+                return await PlaylistArtworkResourceResolver.resolve(
+                    playlist: PrimuseKit.Playlist(id: item.id, name: ""),
+                    plan: PlaylistArtworkResolutionPlan(signature: plan.signature, candidates: [candidate]),
+                    songs: [song], size: size / 2, sourceManager: sourceManager,
+                    cacheDiscriminator: identity
+                )?.value
+            }
+            guard !Task.isCancelled, identity == loadIdentity else { return }
+            collage = resolved
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache), perform: artworkChanged)
+        .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidInvalidate), perform: artworkChanged)
+    }
+
+    @ViewBuilder
+    private var singleArtwork: some View {
+        switch item {
+        case .album(let album):
+            AlbumArtworkView(album: album, size: size, cornerRadius: 0)
+        case .artist(let artist):
+            ArtistArtworkView(artist: artist, size: size, cornerRadius: 0)
+        case .playlist(let playlist):
+            PlaylistArtworkView(
+                playlist: playlist, size: size, cornerRadius: 0,
+                placeholderIcon: playlist.id == MusicLibrary.likedSongsPlaylistID ? "heart.fill" : "music.note.list"
+            )
+        }
+    }
+
+    private func memberSongs() -> [PrimuseKit.Song] {
+        switch item {
+        case .album(let album): return library.songs(forAlbum: album.id)
+        case .artist(let artist): return library.songs(forArtist: artist.id)
+        case .playlist(let playlist): return library.songs(forPlaylist: playlist.id)
+        }
+    }
+
+    @ViewBuilder
+    private func artwork(_ resource: PlaylistArtworkResource, side: CGFloat) -> some View {
+        switch resource {
+        case .image(let image):
+            Image(platformImage: image)
+                .resizable().aspectRatio(contentMode: .fill)
+                .frame(width: side, height: side).clipped()
+        case .musicKit(let artwork):
+            ArtworkImage(artwork, width: side, height: side)
+                .frame(width: side, height: side).clipped()
+        }
+    }
+
+    private func artworkChanged(_ notification: Notification) {
+        guard style == .collage else { return }
+        var tokens = notification.userInfo?["tokens"] as? [String] ?? []
+        tokens += notification.userInfo?["songIDs"] as? [String] ?? []
+        if let token = notification.object as? String { tokens.append(token) }
+        if let token = notification.userInfo?["songID"] as? String { tokens.append(token) }
+        if tokens.contains(where: watchedArtworkTokens.contains) { reloadRevision &+= 1 }
+    }
+}
+
 enum PlaylistArtworkResource {
     case image(PlatformImage)
     case musicKit(MusicKit.Artwork)

@@ -3646,3 +3646,10 @@
 "stats_chart_no_activity" = "Aucune écoute sur cette période";
 "stats_chart_minutes" = "Minutes";
 "stats_chart_hour" = "Heure";
+
+"library_quick_access_cover_style" = "Pochettes des accès rapides";
+"library_quick_access_cover_default" = "Par défaut (par type)";
+"library_quick_access_cover_circle" = "Cercles uniformes";
+"library_quick_access_cover_square" = "Carrés uniformes";
+"library_quick_access_cover_collage" = "Collages uniformes";
+"library_quick_access_cover_description" = "S’applique aux accès rapides de l’accueil et de la bibliothèque. Le style par défaut conserve l’apparence actuelle. Les styles uniformes utilisent des pochettes pour les titres aimés ; les collages répètent les images disponibles pour remplir quatre cases.";

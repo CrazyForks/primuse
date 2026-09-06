@@ -32,7 +32,7 @@
 "library_quick_access_selected_empty" = "No shortcuts selected";
 "library_quick_access_search_prompt" = "Search albums, artists, or playlists";
 "library_sections_settings_label" = "Library Categories";
-"library_sections_settings_footer" = "Drag to reorder. Turn off a category to hide it from Library and the sidebar.";
+"library_sections_settings_footer" = "Drag to reorder. Visibility and order apply to Library, the sidebar, and minimal mode tabs.";
 "library_sections_restore_default_order" = "Restore Default Order";
 "playlists_count" = "playlists";
 "sources_title" = "Sources";
@@ -3424,3 +3424,10 @@
 "stats_chart_no_activity" = "No plays in this period";
 "stats_chart_minutes" = "Minutes";
 "stats_chart_hour" = "Hour";
+
+"library_quick_access_cover_style" = "Quick Access Covers";
+"library_quick_access_cover_default" = "Default (By Type)";
+"library_quick_access_cover_circle" = "Uniform Circles";
+"library_quick_access_cover_square" = "Uniform Squares";
+"library_quick_access_cover_collage" = "Uniform Collages";
+"library_quick_access_cover_description" = "Applies to Quick Access in Home and Library. Default keeps existing styles. Uniform styles use song artwork for Liked Songs; collages repeat available images to fill four tiles.";
