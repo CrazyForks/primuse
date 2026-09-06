@@ -4,6 +4,24 @@ import Testing
 
 @Suite("Adaptive metadata reading")
 struct MetadataReadSchedulerTests {
+    @Test @MainActor func failedFileDoesNotStopLaterReads() async {
+        enum FileFailure: Error { case unreadable }
+        let scheduler = MetadataReadScheduler<Int, Result<Int, FileFailure>>()
+        var completed: [Int] = []
+        var failed: [Int] = []
+        let cancelled = await scheduler.run(
+            items: [1, 2, 3],
+            limits: { .init(workerCount: 1, snapshotLimit: 3, interRequestDelay: 0, flushInterval: 1) },
+            read: { $0 == 2 ? .failure(.unreadable) : .success($0) }
+        ) { item, result in
+            completed.append(item)
+            if case .failure = result { failed.append(item) }
+        }
+        #expect(!cancelled)
+        #expect(completed == [1, 2, 3])
+        #expect(failed == [2])
+    }
+
     @Test func deviceBudgetsAccountForCoresMemoryAndPlatform() {
         let gib: UInt64 = 1_024 * 1_024 * 1_024
         let profiles: [(MetadataReadingDeviceProfile.Platform, Int, UInt64, Int)] = [

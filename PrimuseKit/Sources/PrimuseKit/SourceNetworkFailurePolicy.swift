@@ -21,6 +21,23 @@ public enum SourceNetworkFailurePolicy {
         }
     }
 
+    /// A whole source is unavailable only when every configured route has
+    /// independent transport evidence. Unknown vendor routes remain eligible.
+    public static func allEndpointsAreUnreachable(
+        _ endpoints: [SourceConnectionEndpoint?],
+        probe: EndpointProbe = SourceConnectionPreflight.check
+    ) async -> Bool {
+        guard !endpoints.isEmpty else { return false }
+        var checked: Set<SourceConnectionEndpoint> = []
+        for candidate in endpoints {
+            guard let endpoint = candidate?.normalized, endpoint.isUsable,
+                  !Task.isCancelled else { return false }
+            if checked.insert(endpoint).inserted,
+               !(await endpointIsUnreachable(endpoint, probe: probe)) { return false }
+        }
+        return !Task.isCancelled
+    }
+
     public static func isNetworkFailure(_ error: any Error) -> Bool {
         classify(error, depth: 0)
     }

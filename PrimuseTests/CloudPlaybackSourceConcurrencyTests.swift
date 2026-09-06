@@ -5,6 +5,43 @@ import XCTest
 @testable import Primuse
 
 final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
+    @MainActor
+    func testFileRequestFailuresNeverImmediatelyParkOtherSongs() {
+        let errors: [Error] = [
+            URLError(.timedOut), URLError(.badServerResponse), URLError(.fileDoesNotExist),
+            SourceError.connectionFailed("short range"), SourceError.timeout,
+            MetadataBackfillService.BackfillRangeExpansionError(format: "FLAC"),
+            MetadataBackfillService.BackfillRangeExpansionError(format: "ogg"),
+            CloudDriveError.invalidResponse, CloudDriveError.permissionDenied(.fileRead),
+            CloudDriveError.apiError(403, "file access denied"),
+            CloudDriveError.apiError(503, "object temporarily unavailable"),
+        ]
+        for error in errors {
+            XCTAssertFalse(MetadataBackfillService.isSourceUnavailableBackfillError(error))
+        }
+        XCTAssertTrue(MetadataBackfillService.needsSourceEndpointProbe(URLError(.timedOut)))
+        XCTAssertTrue(MetadataBackfillService.needsSourceEndpointProbe(SourceError.timeout))
+        XCTAssertFalse(MetadataBackfillService.needsSourceEndpointProbe(URLError(.badServerResponse)))
+        let rangeError = MetadataBackfillService.BackfillRangeExpansionError(format: "FLAC")
+        XCTAssertTrue(MetadataBackfillService.isTransientBackfillError(rangeError))
+        XCTAssertFalse(MetadataBackfillService.needsSourceEndpointProbe(rangeError))
+    }
+
+    @MainActor
+    func testSourceAccountAndRateLimitFailuresStillParkTheSource() {
+        let errors: [Error] = [
+            SourceConnectionTerminalError(message: "Account locked"),
+            SourceError.authenticationFailed, SourceError.credentialUnavailable("Unavailable"),
+            CloudDriveError.notAuthenticated, CloudDriveError.tokenExpired,
+            CloudDriveError.permissionDenied(.accountAccess),
+            CloudDriveError.rateLimited, CloudDriveError.apiError(429, "Retry later"),
+            CloudDriveError.apiError(401, "Authentication required"),
+        ]
+        for error in errors {
+            XCTAssertTrue(MetadataBackfillService.isSourceUnavailableBackfillError(error))
+        }
+    }
+
     func testWebDAVLateReadsAfterDisconnectReturnCancellation() async throws {
         let source = WebDAVSource(
             sourceID: "webdav-disconnected-\(UUID().uuidString)",

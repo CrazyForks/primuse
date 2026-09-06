@@ -48,9 +48,11 @@ private final class MetadataContinuedProcessingSession: MetadataBackgroundContin
                     return
                 }
                 self.task = task
+                plog("📥 Backfill: continued task granted id=\(self.identifier) total=\(self.total)")
                 task.expirationHandler = { [weak self] in
                     Task { @MainActor in
                         guard let self, !self.finished else { return }
+                        plog("📥 Backfill: continued task expired or cancelled by system UI id=\(self.identifier)")
                         self.finish(success: false)
                         self.expired()
                     }
@@ -100,6 +102,7 @@ private final class MetadataContinuedProcessingSession: MetadataBackgroundContin
     func finish(success: Bool) {
         guard !finished else { return }
         finished = true
+        plog("📥 Backfill: continued task finished id=\(identifier) success=\(success) processed=\(completed)/\(total) granted=\(task != nil)")
         if let task {
             task.expirationHandler = nil
             if success { task.progress.completedUnitCount = task.progress.totalUnitCount }
@@ -3278,37 +3281,34 @@ final class MetadataBackfillService {
         }
     }
 
-    /// Connection-level failures affect an entire connector. They remain
-    /// transient (never persisted as hundreds of bad songs), but trip the
-    /// per-network-path source circuit breaker immediately.
+    /// Only explicit account-wide failures park a source immediately. A failed
+    /// file request needs independent endpoint evidence before doing so.
     static func isSourceUnavailableBackfillError(_ error: Error) -> Bool {
-        if error is SourceConnectionTerminalError
-            || error is URLError {
+        if error is SourceConnectionTerminalError {
             return true
         }
         switch error {
-        case SourceError.connectionFailed, SourceError.authenticationFailed,
-             SourceError.credentialUnavailable, SourceError.timeout,
+        case SourceError.authenticationFailed, SourceError.credentialUnavailable,
              CloudDriveError.notAuthenticated,
              CloudDriveError.credentialTemporarilyUnavailable,
              CloudDriveError.credentialReadFailed,
              CloudDriveError.tokenExpired,
              CloudDriveError.tokenRefreshFailed,
              CloudDriveError.tokenPersistenceFailed,
-             CloudDriveError.permissionDenied,
-             CloudDriveError.invalidResponse,
+             CloudDriveError.permissionDenied(.accountAccess),
              CloudDriveError.rateLimited:
             return true
         case CloudDriveError.apiError(let code, _):
-            return code < 0
-                || code == 401
-                || code == 403
-                || code == 408
-                || code == 425
-                || code == 429
-                || code >= 500
+            return code == 401 || code == 429
         default:
             return false
+        }
+    }
+
+    static func needsSourceEndpointProbe(_ error: Error) -> Bool {
+        switch error {
+        case SourceError.connectionFailed, SourceError.timeout: return true
+        default: return SourceNetworkFailurePolicy.isNetworkFailure(error)
         }
     }
 
@@ -3364,6 +3364,11 @@ final class MetadataBackfillService {
                 String(seconds.finiteInt())
             )
         }
+    }
+
+    struct BackfillRangeExpansionError: LocalizedError, Sendable {
+        let format: String
+        var errorDescription: String? { "\(format) metadata range did not expand" }
     }
 
     private final class AsyncTimeoutBox<T: Sendable>: @unchecked Sendable {
@@ -3540,7 +3545,13 @@ final class MetadataBackfillService {
             // (常见于刚启动、源还没连上 / token 还没就绪),绝不能钉成永久失败,否则
             // 会一直卡在「无法读取歌曲详情」;不标记 → 下一轮回填自动重试。
             let transient = Self.isTransientBackfillError(error)
-            let sourceUnavailable = Self.isSourceUnavailableBackfillError(error)
+            var sourceUnavailable = Self.isSourceUnavailableBackfillError(error)
+            if !sourceUnavailable, Self.needsSourceEndpointProbe(error) {
+                sourceUnavailable = await sourceManager.metadataSourceEndpointsAreUnavailable(sourceID: song.sourceID)
+            }
+            guard !Task.isCancelled else {
+                return BackfillOutcome(song: nil, markFailed: false, cancelled: true)
+            }
             plog(String(format: "⚠️ Backfill failed for '%@' after %.2fs: %@ (%@)",
                         song.title, elapsed, error.localizedDescription,
                         transient ? "transient — will retry" : "permanent — marking failed"))
@@ -3668,7 +3679,7 @@ final class MetadataBackfillService {
                   ) {
                 let expandedHead = try await fetchRange(offset: 0, length: Int64(expandedByteCount))
                 guard expandedHead.count > metadataInputData.count else {
-                    throw SourceError.connectionFailed("FLAC metadata range did not expand")
+                    throw BackfillRangeExpansionError(format: "FLAC")
                 }
                 metadataInputData = expandedHead
                 metadata = await extractMetadata(
@@ -3693,7 +3704,7 @@ final class MetadataBackfillService {
             ) {
                 let expandedHead = try await fetchRange(offset: 0, length: Int64(expandedByteCount))
                 guard expandedHead.count > metadataInputData.count else {
-                    throw SourceError.connectionFailed("container metadata range did not expand")
+                    throw BackfillRangeExpansionError(format: parserExtension)
                 }
                 metadataInputData = expandedHead
                 metadata = await extractMetadata(

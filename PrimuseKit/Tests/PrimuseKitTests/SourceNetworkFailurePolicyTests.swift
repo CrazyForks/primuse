@@ -4,6 +4,25 @@ import Testing
 @testable import PrimuseKit
 
 @Suite struct SourceNetworkFailurePolicyTests {
+    @Test func wholeSourceRequiresEveryConfiguredRouteToBeUnreachable() async {
+        let lan = SourceConnectionEndpoint(host: "lan.invalid", port: 445, useSsl: false)
+        let remote = SourceConnectionEndpoint(host: "remote.invalid", port: 443, useSsl: true)
+        let offline: SourceNetworkFailurePolicy.EndpointProbe = { _ in throw URLError(.cannotConnectToHost) }
+        #expect(await SourceNetworkFailurePolicy.allEndpointsAreUnreachable([lan, remote], probe: offline))
+        #expect(await SourceNetworkFailurePolicy.allEndpointsAreUnreachable([lan, remote], probe: { endpoint in
+            if endpoint.host == lan.host { throw URLError(.timedOut) }
+        }) == false)
+        for endpoints: [SourceConnectionEndpoint?] in [[], [nil], [lan, nil]] {
+            #expect(await SourceNetworkFailurePolicy.allEndpointsAreUnreachable(endpoints, probe: offline) == false)
+        }
+        #expect(await SourceNetworkFailurePolicy.allEndpointsAreUnreachable([lan], probe: { _ in
+            throw CancellationError()
+        }) == false)
+        #expect(await SourceNetworkFailurePolicy.allEndpointsAreUnreachable([lan], probe: { _ in
+            throw URLError(.serverCertificateUntrusted)
+        }) == false)
+    }
+
     @Test func onlyTransportErrorsChangeNetworkHealth() {
         for code: URLError.Code in [.timedOut, .cannotFindHost, .cannotConnectToHost,
                                     .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet] {

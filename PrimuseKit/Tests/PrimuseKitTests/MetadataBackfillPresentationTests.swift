@@ -101,6 +101,30 @@ struct MetadataBackfillPresentationTests {
         )
     }
 
+    @Test("Concurrent diagnostic rows preserve paths and redact every credential form")
+    func concurrentDiagnosticRedaction() async {
+        let fixtures = [
+            ("/music/中文目录/Track 01.flac", "/music/中文目录/Track 01.flac"),
+            ("HTTPS://user:pass@host.test/a.flac?TOKEN=secret#part", "HTTPS://host.test/a.flac"),
+            ("Authorization: Bearer secret\nrefresh-token=secret; next",
+             "Authorization: ••••\nrefresh-token=•••• next"),
+            ("retry later TOKEN=abc&sig=xyz", "retry later TOKEN=••••&sig=••••"),
+        ]
+        let started = ContinuousClock.now
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    for _ in 0..<32 {
+                        for (input, expected) in fixtures {
+                            #expect(MetadataBackfillDisplayRedactionPolicy.redact(input) == expected)
+                        }
+                    }
+                }
+            }
+        }
+        print("Diagnostic redaction: 1024 rows elapsed=\(ContinuousClock.now - started)")
+    }
+
     @Test("Persisted diagnostics retain exact failure context")
     func diagnosticRoundTrip() throws {
         let timestamp = Date(timeIntervalSince1970: 1_725_000_000)

@@ -8415,6 +8415,20 @@ final class SourceManager {
         return inputSource
     }
 
+    func metadataSourceEndpointsAreUnavailable(sourceID: String) async -> Bool {
+        guard !Task.isCancelled,
+              let sources = try? await sourcesProvider(),
+              let source = sources.first(where: { $0.id == sourceID && !$0.isDeleted }) else {
+            return false
+        }
+        // A failed request may use a CDN or an older active route. Test all
+        // configured routes before parking the entire source, without changing
+        // the route selected by the connector.
+        return await SourceNetworkFailurePolicy.allEndpointsAreUnreachable(
+            source.connectionCandidates.map(\.endpoint)
+        )
+    }
+
     /// Metadata reads use the same runtime STRM resolution as playback. This
     /// prevents the backfill worker from parsing the wrapper text as audio and
     /// keeps signed URLs out of the persisted Song model.

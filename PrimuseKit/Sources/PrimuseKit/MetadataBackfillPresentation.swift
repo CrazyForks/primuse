@@ -213,44 +213,26 @@ public enum MetadataBackfillStatusPaginationPolicy {
 }
 
 public enum MetadataBackfillDisplayRedactionPolicy {
-    public static func redact(_ value: String) -> String {
-        var result = value
-        result = replacing(
-            pattern: #"(?i)(https?://)[^/@\s]+@"#,
-            in: result,
-            with: "$1"
-        )
-        result = replacing(
-            pattern: #"(?i)(https?://[^\s?#]+)(?:\?[^\s#]*)?(?:#[^\s]*)?"#,
-            in: result,
-            with: "$1"
-        )
-        result = replacing(
-            pattern: #"(?i)\bAuthorization:\s*[^\r\n,;]+"#,
-            in: result,
-            with: "Authorization: ••••"
-        )
-        return replacing(
-            pattern: #"(?i)\b(access[_-]?token|refresh[_-]?token|token|authorization|signature|sig)=([^\s&]+)"#,
-            in: result,
-            with: "$1=••••"
-        )
+    private static let rules: [(NSRegularExpression, String)] = [
+        (#"(?i)(https?://)[^/@\s]+@"#, "$1"),
+        (#"(?i)(https?://[^\s?#]+)(?:\?[^\s#]*)?(?:#[^\s]*)?"#, "$1"),
+        (#"(?i)\bAuthorization:\s*[^\r\n,;]+"#, "Authorization: ••••"),
+        (#"(?i)\b(access[_-]?token|refresh[_-]?token|token|authorization|signature|sig)=([^\s&]+)"#, "$1=••••"),
+    ].compactMap { pattern, replacement in
+        (try? NSRegularExpression(pattern: pattern)).map { ($0, replacement) }
     }
 
-    private static func replacing(
-        pattern: String,
-        in value: String,
-        with template: String
-    ) -> String {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else {
-            return value
+    public static func redact(_ value: String) -> String {
+        // Ordinary local paths cannot match any credential rule. Reuse the
+        // immutable expressions when a row does contain URL/header material.
+        guard value.contains(":") || value.contains("=") else { return value }
+        return rules.reduce(value) { result, rule in
+            rule.0.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..<result.endIndex, in: result),
+                withTemplate: rule.1
+            )
         }
-        let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        return expression.stringByReplacingMatches(
-            in: value,
-            range: range,
-            withTemplate: template
-        )
     }
 }
 
