@@ -103,13 +103,14 @@ struct ServerPlaylistIdentityTests {
 
 @Suite("Server favorite writeback policy")
 struct ServerFavoriteWritebackPolicyTests {
-    @Test("Only Emby, Navidrome and explicit Subsonic sources can write favorites")
+    @Test("Only Emby, Navidrome, Subsonic and Songloft sources can write favorites")
     func supportsOnlyExplicitFavoriteSources() {
         #expect(ServerFavoriteWritebackPolicy.supports(.emby))
         #expect(ServerFavoriteWritebackPolicy.supports(.navidrome))
         #expect(ServerFavoriteWritebackPolicy.supports(.subsonic))
+        #expect(ServerFavoriteWritebackPolicy.supports(.songloft))
 
-        for sourceType in MusicSourceType.allCases where ![.emby, .navidrome, .subsonic].contains(sourceType) {
+        for sourceType in MusicSourceType.allCases where ![.emby, .navidrome, .subsonic, .songloft].contains(sourceType) {
             #expect(!ServerFavoriteWritebackPolicy.supports(sourceType))
         }
     }

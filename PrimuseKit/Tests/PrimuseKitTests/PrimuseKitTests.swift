@@ -159,7 +159,7 @@ import Testing
 
 @Test func fileDeletionCapabilityExcludesReadOnlyCatalogues() {
     let readOnly: Set<MusicSourceType> = [
-        .upnp, .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu,
+        .upnp, .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu, .songloft,
         .appleMusic, .appleMusicLibrary,
     ]
 
@@ -264,7 +264,7 @@ import Testing
     let entireLibraryTypes: Set<MusicSourceType> = [
         .local, .appleMusicLibrary,
         .jellyfin, .emby, .plex,
-        .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu,
+        .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu, .songloft,
     ]
 
     for sourceType in MusicSourceType.allCases {

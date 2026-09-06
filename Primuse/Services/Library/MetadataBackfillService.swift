@@ -3379,7 +3379,9 @@ final class MetadataBackfillService {
 
     struct BackfillRangeExpansionError: LocalizedError, Sendable {
         let format: String
-        var errorDescription: String? { "\(format) metadata range did not expand" }
+        var errorDescription: String? {
+            "\(format): \(String(localized: "relay_share_error_source_read"))"
+        }
     }
 
     private final class AsyncTimeoutBox<T: Sendable>: @unchecked Sendable {
