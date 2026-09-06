@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ServerListeningStatsView: View {
     let source: MusicSource
+    var sourceSelection: AnyView? = nil
 
     @Environment(ServerListeningStatsService.self) private var statsService
     @State private var range: ServerListeningStatsRange = .month
@@ -64,6 +65,11 @@ struct ServerListeningStatsView: View {
     #if !os(macOS)
     private var mobileBody: some View {
         Form {
+            if let sourceSelection {
+                Section {
+                    sourceSelection
+                }
+            }
             serverStatusSection
 
             if isEventHistory {

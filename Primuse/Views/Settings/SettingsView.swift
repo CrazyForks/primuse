@@ -12,8 +12,7 @@ struct SettingsView: View {
     @Environment(MusicIntelligenceService.self) private var musicIntelligence
     @Binding private var scraperSettingsRoute: ScraperSettingsRouteState
     @State private var path: [SettingsDestination] = []
-    @State private var query = ""
-    @State private var isSearchPresented = false
+    @State private var search: SettingsSearchState
     @State private var rootItemID: String?
     @State private var rootFocusRevision = UUID()
     #if os(iOS)
@@ -21,8 +20,20 @@ struct SettingsView: View {
     private var navigationModeRawValue = AppNavigationMode.standard.rawValue
     #endif
 
-    init(scraperSettingsRoute: Binding<ScraperSettingsRouteState> = .constant(.init())) {
+    init(
+        scraperSettingsRoute: Binding<ScraperSettingsRouteState> = .constant(.init()),
+        search: SettingsSearchState? = nil
+    ) {
         _scraperSettingsRoute = scraperSettingsRoute
+        _search = State(initialValue: search ?? SettingsSearchState())
+    }
+
+    private var usesMinimalSearch: Bool {
+        #if os(iOS)
+        AppNavigationMode.resolve(navigationModeRawValue) == .minimal
+        #else
+        false
+        #endif
     }
 
     private var recentItems: [SettingDefinition] {
@@ -32,7 +43,7 @@ struct SettingsView: View {
 
     var body: some View {
         #if os(iOS)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), !usesMinimalSearch {
             searchableNavigation.searchToolbarBehavior(.minimize)
         } else {
             searchableNavigation
@@ -42,48 +53,56 @@ struct SettingsView: View {
         #endif
     }
 
+    private var settingsContent: some View {
+        SettingsFocusedPage(itemID: rootItemID) {
+            List {
+                if !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    searchResults
+                } else if search.isPresented && !recentItems.isEmpty {
+                    Section {
+                        ForEach(recentItems) { item in
+                            Button { open(item) } label: { SettingsSearchResultRow(item: item) }
+                                .buttonStyle(.plain)
+                        }
+                    } header: {
+                        HStack {
+                            Text(SettingsStrings.text("Recently used"))
+                            Spacer()
+                            Button(SettingsStrings.text("Clear")) { SettingsSearchHistory.shared.clear() }
+                                .textCase(nil)
+                        }
+                    }
+                } else {
+                    settingsRows
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .id(rootFocusRevision)
+    }
+
+    @ViewBuilder private var searchableContent: some View {
+        if usesMinimalSearch {
+            settingsContent
+        } else {
+            // Search belongs to this column; putting it on the stack hides it in iPad split view.
+            settingsContent
+                .searchable(text: $search.query, isPresented: $search.isPresented, placement: .toolbar,
+                            prompt: Text(SettingsStrings.text("Search settings")))
+        }
+    }
+
     private var searchableNavigation: some View {
         NavigationStack(path: $path) {
-            SettingsFocusedPage(itemID: rootItemID) {
-                List {
-                    if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        searchResults
-                    } else if isSearchPresented && !recentItems.isEmpty {
-                        Section {
-                            ForEach(recentItems) { item in
-                                Button { open(item) } label: { SettingsSearchResultRow(item: item) }
-                                    .buttonStyle(.plain)
-                            }
-                        } header: {
-                            HStack {
-                                Text(SettingsStrings.text("Recently used"))
-                                Spacer()
-                                Button(SettingsStrings.text("Clear")) { SettingsSearchHistory.shared.clear() }
-                                    .textCase(nil)
-                            }
-                        }
-                    } else {
-                        settingsRows
-                    }
-                }
-                .scrollDismissesKeyboard(.interactively)
-            }
-            .id(rootFocusRevision)
-            // Search belongs to this column; putting it on the stack hides it in iPad split view.
-            .searchable(text: $query, isPresented: $isSearchPresented, placement: .toolbar,
-                        prompt: Text(SettingsStrings.text("Search settings")))
+            searchableContent
             .autocorrectionDisabled()
             .navigationTitle("settings_title")
             .toolbarTitleDisplayMode(.inlineLarge)
             #if os(iOS)
-            .toolbar(AppNavigationMode.resolve(navigationModeRawValue) == .minimal ? .hidden : .automatic, for: .navigationBar)
+            .minimalNavigationRoot()
             .toolbar {
-                if #available(iOS 26.0, *) {
-                    if AppNavigationMode.resolve(navigationModeRawValue) == .minimal {
-                        DefaultToolbarItem(kind: .search, placement: .bottomBar)
-                    } else {
-                        DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
-                    }
+                if #available(iOS 26.0, *), !usesMinimalSearch {
+                    DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
                 }
             }
             #endif
@@ -116,9 +135,9 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var searchResults: some View {
-        let results = SettingsCatalog.search(query, showsIntelligence: musicIntelligence.shouldExposeRemoteConfiguration)
+        let results = SettingsCatalog.search(search.query, showsIntelligence: musicIntelligence.shouldExposeRemoteConfiguration)
         if results.isEmpty {
-            ContentUnavailableView.search(text: query)
+            ContentUnavailableView.search(text: search.query)
         } else {
             ForEach(results) { item in
                 Button { open(item) } label: { SettingsSearchResultRow(item: item) }
@@ -130,9 +149,10 @@ struct SettingsView: View {
     private func open(_ item: SettingDefinition) {
         guard let page = item.page else { return }
         SettingsSearchHistory.shared.record(item.id)
+        if usesMinimalSearch { search.isPresented = false }
         if page == .about || page == .appleTV {
-            isSearchPresented = false
-            query = ""
+            search.isPresented = false
+            search.query = ""
             path = []
             rootItemID = item.id
             rootFocusRevision = UUID()

@@ -6,8 +6,6 @@ enum LibrarySection: String, CaseIterable, Codable, Hashable, Identifiable, Send
 
     var id: String { rawValue }
 
-    var needsRootToolbar: Bool { self == .folders || self == .statistics }
-
     var title: LocalizedStringKey {
         switch self {
         case .recommendations: return "library_recommendations_title"
@@ -394,10 +392,7 @@ struct LibraryView: View {
             .navigationTitle(rootSection?.title ?? "library_title")
             .toolbarTitleDisplayMode(.inlineLarge)
             #if os(iOS)
-            .toolbar(
-                appNavigationMode == .minimal ? .hidden : .automatic,
-                for: .navigationBar
-            )
+            .minimalNavigationRoot()
             #endif
             .navigationDestination(for: LibrarySection.self) { section in
                 sectionDestination(section)
@@ -488,10 +483,7 @@ struct LibraryView: View {
             .navigationTitle(section.title)
             .toolbarTitleDisplayMode(.inline)
             #if os(iOS)
-            .toolbar(
-                appNavigationMode == .minimal && !section.needsRootToolbar ? .hidden : .automatic,
-                for: .navigationBar
-            )
+            .minimalNavigationRoot()
             .navigationBarBackButtonHidden(appNavigationMode == .minimal)
             #endif
             .onAppear {
@@ -1227,6 +1219,14 @@ struct LibraryView: View {
         "\(count.formatted()) \(String(localized: unitKey))"
     }
 
+    private var usesMinimalSectionControls: Bool {
+        #if os(iOS)
+        appNavigationMode == .minimal
+        #else
+        false
+        #endif
+    }
+
     @ViewBuilder
     private func destination(for section: LibrarySection) -> some View {
         switch section {
@@ -1236,9 +1236,9 @@ struct LibraryView: View {
                     .padding(.vertical, 16)
             }
         case .folders:
-            HomeFolderManagementView()
+            HomeFolderManagementView(usesInlineControls: usesMinimalSectionControls)
         case .statistics:
-            ListeningStatsView()
+            ListeningStatsView(usesInlineSourcePicker: usesMinimalSectionControls)
         case .recommendations:
             AIRecommendationLibraryView()
         case .songs:

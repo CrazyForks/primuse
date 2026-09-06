@@ -8,6 +8,13 @@ enum SettingsDestination: Hashable {
 
 @MainActor
 @Observable
+final class SettingsSearchState {
+    var query = ""
+    var isPresented = false
+}
+
+@MainActor
+@Observable
 final class SettingsNavigation {
     struct Request: Equatable {
         let token = UUID()

@@ -45,13 +45,14 @@ struct HomeFoldersSection: View {
 }
 
 struct HomeFolderManagementView: View {
+    var usesInlineControls = false
     @State private var model = HomeDiscoveryModel()
     #if os(iOS)
     @State private var editMode: EditMode = .inactive
     #endif
 
     var body: some View {
-        HomeFolderBrowser()
+        HomeFolderBrowser(usesInlineControls: usesInlineControls)
             .environment(model)
             .background { HomeDiscoveryObserver(model: model) }
             #if os(iOS)
@@ -176,6 +177,11 @@ private struct HomeFolderRow: View {
 
 struct HomeFolderBrowser: View {
     var nodeID: LibraryFolderNodeID?
+    var usesInlineControls = false
+    #if os(iOS)
+    @Environment(\.appNavigationMode) private var appNavigationMode
+    @Environment(\.editMode) private var editMode
+    #endif
     @Environment(HomeDiscoveryModel.self) private var model
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
@@ -188,10 +194,18 @@ struct HomeFolderBrowser: View {
         return model.index?.sourceNodes ?? []
     }
 
+    private var legacyBottomClearance: CGFloat {
+        #if os(iOS)
+        appNavigationMode == .minimal ? 0 : 90
+        #else
+        90
+        #endif
+    }
+
     var body: some View {
         List {
             if nodeID == nil, !pins.isEmpty {
-                Section(HomeDiscoveryText.string("pinned_folders")) {
+                Section {
                     ForEach(pins, id: \.self) { id in
                         if let node = model.index?.node(withID: id) {
                             HomeFolderRow(node: node)
@@ -209,6 +223,25 @@ struct HomeFolderBrowser: View {
                         var updated = pins
                         updated.remove(atOffsets: offsets)
                         pinsRawValue = HomeFolderPinStorage.encode(updated)
+                        #if os(iOS)
+                        if usesInlineControls, updated.isEmpty {
+                            editMode?.wrappedValue = .inactive
+                        }
+                        #endif
+                    }
+                } header: {
+                    HStack {
+                        Text(HomeDiscoveryText.string("pinned_folders"))
+                        #if os(iOS)
+                        if usesInlineControls {
+                            Spacer()
+                            EditButton()
+                                .font(.subheadline)
+                                .textCase(nil)
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("minimal.folders.edit")
+                        }
+                        #endif
                     }
                 }
             }
@@ -238,7 +271,9 @@ struct HomeFolderBrowser: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 90) }
+        .safeAreaInset(edge: .bottom, spacing: legacyBottomClearance == 0 ? 0 : nil) {
+            Color.clear.frame(height: legacyBottomClearance)
+        }
         .overlay {
             if model.index == nil {
                 ProgressView()
@@ -268,7 +303,7 @@ struct HomeFolderBrowser: View {
                 }
             }
             #if os(iOS)
-            if node == nil {
+            if node == nil, !usesInlineControls {
                 ToolbarItem(placement: .primaryAction) { EditButton() }
             }
             #endif

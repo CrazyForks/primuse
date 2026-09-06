@@ -9,6 +9,7 @@ import Charts
 /// - 日历活跃度、时长趋势与播放时段
 /// - Top 排行 (歌曲 / 艺术家 / 专辑 三个 tab)
 struct ListeningStatsView: View {
+    private let usesInlineSourcePicker: Bool
     @Environment(SourcesStore.self) private var sourcesStore
     @AppStorage("stats.selectedServerSourceID")
     private var selectedServerSourceID = ""
@@ -26,7 +27,12 @@ struct ListeningStatsView: View {
     @State private var showClearConfirm = false
     private let store = PlayHistoryStore.shared
 
-    init(initialRange: PlayHistoryStore.Range? = nil, initiallyShowsLocalHistory: Bool = false) {
+    init(
+        initialRange: PlayHistoryStore.Range? = nil,
+        initiallyShowsLocalHistory: Bool = false,
+        usesInlineSourcePicker: Bool = false
+    ) {
+        self.usesInlineSourcePicker = usesInlineSourcePicker
         #if os(macOS)
         _range = State(initialValue: initialRange ?? .year)
         #else
@@ -56,7 +62,10 @@ struct ListeningStatsView: View {
             #endif
 
             if let source = selectedServerSource {
-                ServerListeningStatsView(source: source)
+                ServerListeningStatsView(
+                    source: source,
+                    sourceSelection: showsInlineSourcePicker ? AnyView(inlineSourcePicker) : nil
+                )
             } else {
                 localBody
             }
@@ -65,7 +74,7 @@ struct ListeningStatsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if !serverSources.isEmpty {
+            if !serverSources.isEmpty, !usesInlineSourcePicker {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         sourcePicker
@@ -108,6 +117,9 @@ struct ListeningStatsView: View {
         let snapshot = makeStatsSnapshot(rankLimit: 20)
         Form {
             Section {
+                if showsInlineSourcePicker {
+                    inlineSourcePicker
+                }
                 Picker("stats_range", selection: $range) {
                     ForEach(PlayHistoryStore.Range.allCases) { r in
                         Text(LocalizedStringKey(r.localizationKey)).tag(r)
@@ -154,6 +166,17 @@ struct ListeningStatsView: View {
 
     private var selectedServerSource: MusicSource? {
         prefersLocalSource ? nil : serverSources.first { $0.id == selectedServerSourceID }
+    }
+
+    private var showsInlineSourcePicker: Bool {
+        usesInlineSourcePicker && !serverSources.isEmpty
+    }
+
+    private var inlineSourcePicker: some View {
+        sourcePicker
+            .pickerStyle(.menu)
+            .settingsAnchor("stats.source")
+            .accessibilityIdentifier("minimal.statistics.source")
     }
 
     private var statsSourcePicker: some View {

@@ -188,8 +188,29 @@ extension EnvironmentValues {
 }
 
 extension View {
+    func minimalNavigationRoot() -> some View {
+        modifier(MinimalNavigationRootModifier())
+    }
+
     func minimalNavigationDetail(isDetail: Bool = true) -> some View {
         modifier(MinimalNavigationDetailModifier(isDetail: isDetail))
+    }
+}
+
+private struct MinimalNavigationRootModifier: ViewModifier {
+    @Environment(\.appNavigationMode) private var appNavigationMode
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if appNavigationMode == .minimal {
+            // The outer layout already clears the status bar. NavigationStack
+            // can retain that top inset when a detail page is popped.
+            content
+                .ignoresSafeArea(.container, edges: .top)
+                .toolbar(.hidden, for: .navigationBar)
+        } else {
+            content
+        }
     }
 }
 
@@ -451,6 +472,7 @@ struct ContentView: View {
     @AppStorage("primuse.navigation.sidebarItem.v1")
     private var sidebarSelection: SidebarItem = .home
     @State private var searchText = ""
+    @State private var settingsSearch = SettingsSearchState()
     @State private var showNowPlaying = false
     @State private var nowPlayingPresentationID = UUID()
     @State private var batchSelectionActive = false
@@ -550,7 +572,7 @@ struct ContentView: View {
             }
 
             Tab(String(localized: "settings_title"), systemImage: "gearshape", value: 3) {
-                SettingsView(scraperSettingsRoute: $scraperSettingsRoute)
+                SettingsView(scraperSettingsRoute: $scraperSettingsRoute, search: settingsSearch)
                     .environment(\.minimalNavigationDetailScope, .settings)
                     .toolbar(systemTabBarVisibility, for: .tabBar)
             }
@@ -572,7 +594,8 @@ struct ContentView: View {
                 visibility: minimalTopNavigationHidden ? 0 : 1
             ) {
                 MinimalTopNavigationBar(
-                    searchText: $searchText,
+                    searchText: selectedTab == 3 ? $settingsSearch.query : $searchText,
+                    settingsSearchPresented: $settingsSearch.isPresented,
                     categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
                     libraryPages: MinimalNavigationPolicy.libraryPages(
                         visibleSections: visibleLibrarySections
@@ -605,6 +628,9 @@ struct ContentView: View {
             )
 
             tabRoot
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .contentShape(Rectangle())
                 .background {
                     MinimalNavigationScrollObserver(
                         categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
@@ -612,16 +638,16 @@ struct ContentView: View {
                         refreshID: selectedTab
                     )
                 }
-        }
-        .onPreferenceChange(MinimalNavigationDetailScopesPreferenceKey.self) { scopes in
-            minimalDetailScopes = scopes
-            minimalReturningDetailScopes.formIntersection(scopes)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+
             if miniPlayerVisible {
                 MinimalNowPlayingAccessory(onTap: presentNowPlaying)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .onPreferenceChange(MinimalNavigationDetailScopesPreferenceKey.self) { scopes in
+            minimalDetailScopes = scopes
+            minimalReturningDetailScopes.formIntersection(scopes)
         }
     }
 
@@ -934,6 +960,10 @@ struct ContentView: View {
     }
 
     private func submitMinimalSearch() {
+        if selectedTab == 3 {
+            settingsSearch.isPresented = false
+            return
+        }
         selectMinimalPage(.search)
         SearchHistoryStore.record(searchText)
     }
@@ -1387,6 +1417,7 @@ private struct MinimalNavigationScrollObserver: UIViewRepresentable {
 
 private struct MinimalTopNavigationBar: View {
     @Binding var searchText: String
+    @Binding var settingsSearchPresented: Bool
     @Binding var categoriesCollapsed: Bool
     let libraryPages: [MinimalNavigationPage]
     let selection: MinimalNavigationPage
@@ -1472,10 +1503,27 @@ private struct MinimalTopNavigationBar: View {
             value: categoriesCollapsed
         )
         .onChange(of: selection) { _, newSelection in
+            settingsSearchPresented = false
             if newSelection != .search {
                 searchFieldFocused = false
             }
         }
+        .onChange(of: searchFieldFocused) { _, isFocused in
+            if selection == .settings {
+                settingsSearchPresented = isFocused
+            }
+        }
+        .onChange(of: settingsSearchPresented) { _, isPresented in
+            if selection == .settings, !isPresented {
+                searchFieldFocused = false
+            }
+        }
+    }
+
+    private var searchPrompt: String {
+        selection == .settings
+            ? SettingsStrings.text("Search settings")
+            : String(localized: "search_title")
     }
 
     private var searchField: some View {
@@ -1484,19 +1532,20 @@ private struct MinimalTopNavigationBar: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(searchFieldFocused ? Color.accentColor : Color.secondary)
 
-            TextField("search_title", text: $searchText)
+            TextField(searchPrompt, text: $searchText)
                 .font(.system(size: 15.5))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .focused($searchFieldFocused)
                 .onSubmit(onSubmitSearch)
+                .accessibilityIdentifier("minimal.search")
 
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
                     searchFieldFocused = true
-                    select(.search)
+                    if selection != .settings { select(.search) }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15, weight: .semibold))
@@ -1526,12 +1575,12 @@ private struct MinimalTopNavigationBar: View {
         .contentShape(Capsule())
         .simultaneousGesture(
             TapGesture().onEnded {
-                select(.search)
+                if selection != .settings { select(.search) }
                 searchFieldFocused = true
             }
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text("search_title"))
+        .accessibilityLabel(Text(searchPrompt))
     }
 
     private var libraryHomeButton: some View {

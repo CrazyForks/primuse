@@ -363,6 +363,9 @@ struct SearchView: View {
         }
         .navigationTitle(usesMinimalNavigation ? Text("") : Text("search_title"))
         .toolbarTitleDisplayMode(usesMinimalNavigation ? .inline : .inlineLarge)
+        #if os(iOS)
+        .minimalNavigationRoot()
+        #endif
         .navigationDestination(for: PrimuseKit.Album.self) { AlbumDetailView(album: $0) }
         .navigationDestination(for: PrimuseKit.Artist.self) { ArtistDetailView(artist: $0) }
         #if os(iOS)
