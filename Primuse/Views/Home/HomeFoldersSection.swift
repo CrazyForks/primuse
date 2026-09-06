@@ -1,6 +1,19 @@
 import SwiftUI
 import PrimuseKit
 
+#if os(macOS)
+private struct MacFolderLibraryLocationActionKey: EnvironmentKey {
+    static let defaultValue: (@MainActor (Song) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var macFolderShowInLibrary: (@MainActor (Song) -> Void)? {
+        get { self[MacFolderLibraryLocationActionKey.self] }
+        set { self[MacFolderLibraryLocationActionKey.self] = newValue }
+    }
+}
+#endif
+
 struct HomeFoldersSection: View {
     @Environment(HomeDiscoveryModel.self) private var model
     @AppStorage(HomeFolderPinStorage.key) private var pinsRawValue = ""
@@ -213,10 +226,15 @@ struct HomeFolderBrowser: View {
     #endif
     #if os(macOS)
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.macFolderShowInLibrary) private var macShowInLibrary
     @State private var macListChromeHeight: CGFloat = 0
     @State private var macListViewportHeight: CGFloat = 0
     @State private var macSongAction: SongRowActionRequest?
-    @State private var macFolderPath: [LibraryFolderNodeID] = []
+    @State private var macFolderPath: [LibraryFolderNodeID?] = []
+    @State private var macSearchText = ""
+    @State private var macSearchScope: LibrarySearchScope?
+    @State private var macSearchContext: LibrarySearchScope?
+    @FocusState private var macSearchFocused: Bool
     #endif
     @Environment(HomeDiscoveryModel.self) private var model
     @Environment(MusicLibrary.self) private var library
@@ -225,7 +243,8 @@ struct HomeFolderBrowser: View {
 
     private var currentNodeID: LibraryFolderNodeID? {
         #if os(macOS)
-        macFolderPath.last ?? nodeID
+        if let location = macFolderPath.last { return location }
+        return nodeID
         #else
         nodeID
         #endif
@@ -250,13 +269,18 @@ struct HomeFolderBrowser: View {
         #if os(macOS)
         VStack(spacing: 0) {
             macHeader
-            if let currentNodeID {
+            if let context = macSearchContext {
+                SearchView(
+                    searchText: $macSearchText,
+                    scope: $macSearchScope,
+                    contextualScope: context,
+                    showsMacQuerySummary: false,
+                    onShowInLibrary: { song in macShowInLibrary?(song) }
+                )
+            } else if let currentNodeID {
                 macFolderList(nodeID: currentNodeID)
             } else {
-                folderList
-                    .listStyle(.inset)
-                    .scrollContentBackground(.hidden)
-                    .environment(\.defaultMinListRowHeight, 48)
+                macOverview
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -393,42 +417,165 @@ struct HomeFolderBrowser: View {
     }
 
     #if os(macOS)
-    private func openMacFolder(_ id: LibraryFolderNodeID) {
+    private var macOverview: some View {
+        MacFolderOverviewLayout(hasPins: !pins.isEmpty) {
+            ForEach(pins, id: \.self) { id in
+                if let folder = model.index?.node(withID: id) {
+                    MacFolderPinnedCard(
+                        title: HomeDiscoveryText.folderTitle(folder),
+                        source: model.index?.sourceNode(for: folder.sourceID).map(HomeDiscoveryText.folderTitle) ?? "",
+                        detail: String(format: HomeDiscoveryText.string("folder_counts"), folder.childNodeCount, folder.descendantSongCount),
+                        canPlay: folder.descendantSongCount > 0,
+                        onOpen: { openMacFolder(id) },
+                        onPlay: { playFolder(id, shuffle: false) }
+                    ) {
+                        HomeFolderArtwork(node: folder, size: 48)
+                    }
+                    .contextMenu { macPinnedFolderMenu(folder) }
+                } else {
+                    Label(HomeDiscoveryText.string("folder_unavailable"), systemImage: "folder.badge.questionmark")
+                        .foregroundStyle(PMColor.textMuted)
+                        .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+                        .contextMenu {
+                            Button(HomeDiscoveryText.string("unpin_folder"), systemImage: "pin.slash") { togglePin(id) }
+                        }
+                }
+            }
+        } sources: {
+            ForEach(children) { child in
+                childRow(child)
+            }
+        }
+        .overlay {
+            if model.index == nil {
+                ProgressView()
+            } else if children.isEmpty && pins.isEmpty {
+                ContentUnavailableView(
+                    HomeDiscoveryText.string("no_folders"),
+                    systemImage: "folder",
+                    description: Text(HomeDiscoveryText.string("folders_hint"))
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func macPinnedFolderMenu(_ folder: LibraryFolderNode) -> some View {
+        Button("play", systemImage: "play.fill") { playFolder(folder.id, shuffle: false) }
+            .disabled(folder.descendantSongCount == 0)
+        Button("shuffle", systemImage: "shuffle") { playFolder(folder.id, shuffle: true) }
+            .disabled(folder.descendantSongCount == 0)
+        Divider()
+        Button("ai_move_up", systemImage: "arrow.up") { moveMacPin(folder.id, by: -1) }
+            .disabled(pins.first == folder.id)
+        Button("ai_move_down", systemImage: "arrow.down") { moveMacPin(folder.id, by: 1) }
+            .disabled(pins.last == folder.id)
+        Button(HomeDiscoveryText.string("unpin_folder"), systemImage: "pin.slash") { togglePin(folder.id) }
+    }
+
+    private func moveMacPin(_ id: LibraryFolderNodeID, by offset: Int) {
+        var updated = pins
+        guard let index = updated.firstIndex(of: id), updated.indices.contains(index + offset) else { return }
+        updated.swapAt(index, index + offset)
+        pinsRawValue = HomeFolderPinStorage.encode(updated)
+    }
+
+    private var macBreadcrumbs: [LibraryFolderNode] {
+        var result: [LibraryFolderNode] = []
+        var visited = Set<LibraryFolderNodeID>()
+        var cursor = currentNodeID
+        while let id = cursor, visited.insert(id).inserted,
+              let folder = model.index?.node(withID: id) {
+            result.append(folder)
+            cursor = folder.parentID
+        }
+        return result.reversed()
+    }
+
+    private func openMacFolder(_ id: LibraryFolderNodeID?) {
         guard id != currentNodeID else { return }
         // Native navigation pushes recreate window history/chrome; keep folder changes inside this pane.
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             macSongAction = nil
+            closeMacSearch()
             macFolderPath.append(id)
         }
     }
 
+    private func navigateMacBreadcrumb(to id: LibraryFolderNodeID?) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            macSongAction = nil
+            closeMacSearch()
+            if id == nodeID {
+                macFolderPath.removeAll()
+            } else if let index = macFolderPath.firstIndex(of: id) {
+                macFolderPath = Array(macFolderPath.prefix(through: index))
+            } else {
+                macFolderPath.append(id)
+            }
+        }
+    }
+
     private func macFolderList(nodeID: LibraryFolderNodeID) -> some View {
+        GeometryReader { geometry in
+            macFolderContents(nodeID: nodeID, width: max(0, geometry.size.width - PMSpace.xxxl * 2))
+        }
+    }
+
+    private func macFolderContents(nodeID: LibraryFolderNodeID, width: CGFloat) -> some View {
         let folders = children
         let songIDs = model.index?.directSongIDs(in: nodeID) ?? []
+        let folderColumns = max(1, Int((width + 12) / 272))
+        let folderRows = (folders.count + folderColumns - 1) / folderColumns
+        let folderWidth = min(360, max(0, (width - CGFloat(folderColumns - 1) * 12) / CGFloat(folderColumns)))
         let hasSongSection = !folders.isEmpty && !songIDs.isEmpty
-        let songStart = folders.count + (hasSongSection ? 1 : 0)
+        let songStart = folderRows + (hasSongSection ? 1 : 0)
+        let columns = MacFolderSongColumns(width: width)
 
         return MacWindowedSongScrollView(
             rowCount: songStart + songIDs.count,
-            rowHeight: 56,
+            rowHeight: songIDs.isEmpty ? 80 : 52,
             chromeHeight: $macListChromeHeight,
             viewportHeight: $macListViewportHeight
         ) {
             if !folders.isEmpty || !songIDs.isEmpty {
-                macSectionHeader(folders.isEmpty ? String(localized: "tab_songs") : HomeDiscoveryText.string("folders"))
+                Group {
+                    if folders.isEmpty {
+                        MacFolderSongColumnsHeader(columns: columns)
+                    } else {
+                        macSectionHeader(HomeDiscoveryText.string("folders"))
+                    }
+                }
                     .padding(.horizontal, PMSpace.xxxl)
                     .padding(.vertical, 8)
             }
         } rowContent: { position in
-            if position < folders.count {
-                childRow(folders[position])
-            } else if hasSongSection && position == folders.count {
-                macSectionHeader(String(localized: "tab_songs"))
+            if position < folderRows {
+                HStack(spacing: 12) {
+                    ForEach((position * folderColumns)..<min((position + 1) * folderColumns, folders.count), id: \.self) { index in
+                        let folder = folders[index]
+                        MacFolderChildCard(
+                            title: HomeDiscoveryText.folderTitle(folder),
+                            detail: folder.childNodeCount > 0
+                                ? String(format: HomeDiscoveryText.string("folder_counts"), folder.childNodeCount, folder.descendantSongCount)
+                                : "\(folder.descendantSongCount.formatted()) \(String(localized: "songs_count"))",
+                            compact: !songIDs.isEmpty,
+                            onOpen: { openMacFolder(folder.id) }
+                        )
+                        .frame(width: folderWidth)
+                        .contextMenu { macChildFolderMenu(folder) }
+                    }
+                    Spacer(minLength: 0)
+                }
+            } else if hasSongSection && position == folderRows {
+                MacFolderSongColumnsHeader(columns: columns)
             } else {
                 let songID = songIDs[position - songStart]
-                MacHomeFolderSongRow(songID: songID, orderedSongIDs: songIDs) { song, action in
+                MacHomeFolderSongRow(songID: songID, orderedSongIDs: songIDs, position: position - songStart + 1, columns: columns) { song, action in
                     macSongAction = SongRowActionRequest(song: song, action: action)
                 }
                     .id(songID)
@@ -449,71 +596,189 @@ struct HomeFolderBrowser: View {
     }
 
     private func macSectionHeader(_ title: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(PMColor.textMuted)
-            Divider()
-        }
-        .accessibilityAddTraits(.isHeader)
+        Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(PMColor.textMuted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 
+    @ViewBuilder
     private var macHeader: some View {
-        HStack(spacing: 12) {
-            if currentNodeID != nil || showsInlineBack {
-                MacNavigationBackButton(accessibilityIdentifier: "folderInlineBack") {
-                    if macFolderPath.isEmpty {
-                        dismiss()
-                    } else {
-                        var transaction = Transaction(animation: nil)
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            macSongAction = nil
-                            macFolderPath.removeLast()
-                        }
+        if let node {
+            MacFolderDetailHeader(
+                title: HomeDiscoveryText.folderTitle(node),
+                detail: node.childNodeCount > 0
+                    ? String(format: HomeDiscoveryText.string("folder_counts"), node.childNodeCount, node.descendantSongCount)
+                    : "\(node.descendantSongCount.formatted()) \(String(localized: "songs_count"))",
+                isSource: node.kind == .source
+            ) {
+                macBackButton
+                ViewThatFits(in: .horizontal) {
+                    macBreadcrumbTrail(compact: false)
+                    macBreadcrumbTrail(compact: true)
+                }
+            } tools: {
+                if let context = macSearchContext {
+                    macSearchControls(context: context)
+                } else {
+                    Button {
+                        let context = LibrarySearchScope(
+                            title: HomeDiscoveryText.folderTitle(node),
+                            songIDs: Set(model.index?.songIDs(in: node.id, scope: .descendants) ?? []),
+                            includesSubfolders: true
+                        )
+                        macSearchScope = context
+                        macSearchContext = context
+                    } label: {
+                        Image(systemName: "magnifyingglass").frame(width: 30, height: 30)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("search_title")
+                    pinButton(node.id)
                 }
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(node.map(HomeDiscoveryText.folderTitle) ?? HomeDiscoveryText.string("folders"))
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(PMColor.text)
-                    .lineLimit(1)
-                if let node {
-                    Text("\(node.descendantSongCount.formatted()) \(String(localized: "songs_count"))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(PMColor.textMuted)
-                }
-            }
-            Spacer(minLength: 12)
-            if let node {
-                pinButton(node.id)
-                Button("play_all", systemImage: "play.fill") {
-                    playFolder(node.id, shuffle: false)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(node.descendantSongCount == 0)
+            } playback: {
                 Button("shuffle", systemImage: "shuffle") {
                     playFolder(node.id, shuffle: true)
                 }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .frame(width: 30, height: 30)
+                .disabled(node.descendantSongCount == 0)
+                Button("play_all", systemImage: "play.fill") {
+                    playFolder(node.id, shuffle: false)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
                 .disabled(node.descendantSongCount == 0)
             }
+        } else {
+            HStack(spacing: 12) {
+                if showsInlineBack || !macFolderPath.isEmpty { macBackButton }
+                Text(HomeDiscoveryText.string("folders"))
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(PMColor.text)
+                Spacer()
+            }
+            .padding(.horizontal, PMSpace.xxxl)
+            .padding(.vertical, 24)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 22)
-        .padding(.bottom, 16)
+    }
+
+    private var macBackButton: some View {
+        Button {
+            if macFolderPath.isEmpty {
+                dismiss()
+            } else {
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    macSongAction = nil
+                    closeMacSearch()
+                    macFolderPath.removeLast()
+                }
+            }
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(PMColor.textMuted)
+        .accessibilityLabel("back")
+        .accessibilityIdentifier("folderInlineBack")
+    }
+
+    @ViewBuilder
+    private func macChildFolderMenu(_ child: LibraryFolderNode) -> some View {
+        Button("play", systemImage: "play.fill") { playFolder(child.id, shuffle: false) }
+            .disabled(child.descendantSongCount == 0)
+        Button("shuffle", systemImage: "shuffle") { playFolder(child.id, shuffle: true) }
+            .disabled(child.descendantSongCount == 0)
+        if child.kind != .source {
+            let pinned = pins.contains(child.id)
+            Button(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"),
+                   systemImage: pinned ? "pin.slash" : "pin") {
+                togglePin(child.id)
+            }
+        }
+    }
+
+    private func macSearchControls(context: LibrarySearchScope) -> some View {
+        HStack(spacing: 6) {
+            TextField(
+                macSearchScope.map { String(format: String(localized: "search_scope_prompt_format"), $0.title) }
+                    ?? String(localized: "search_prompt"),
+                text: $macSearchText
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .padding(.horizontal, 10)
+            .frame(minWidth: 120, idealWidth: 220, maxWidth: 260, minHeight: 32)
+            .background(PMColor.bgElev, in: RoundedRectangle(cornerRadius: 8))
+            .focused($macSearchFocused)
+            .onExitCommand { closeMacSearch() }
+            .task { macSearchFocused = true }
+
+            SearchScopeSwitchButton(scope: $macSearchScope, context: context)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .help(macSearchScope == nil ? String(localized: "search_current_scope") : String(localized: "search_global"))
+            Button { closeMacSearch() } label: {
+                Image(systemName: "xmark").frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("close")
+        }
+    }
+
+    private func closeMacSearch() {
+        macSearchFocused = false
+        macSearchText = ""
+        macSearchContext = nil
+        macSearchScope = nil
+    }
+
+    private func macBreadcrumbTrail(compact: Bool) -> some View {
+        let ancestors = Array(macBreadcrumbs.dropLast())
+        return HStack(spacing: 7) {
+            Button(HomeDiscoveryText.string("folders")) { navigateMacBreadcrumb(to: nil) }
+            if compact, ancestors.count > 1 {
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                Menu {
+                    ForEach(ancestors.dropLast()) { folder in
+                        Button(HomeDiscoveryText.folderTitle(folder)) { navigateMacBreadcrumb(to: folder.id) }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuIndicator(.hidden)
+            }
+            ForEach(compact ? Array(ancestors.suffix(1)) : ancestors) { folder in
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                Button(HomeDiscoveryText.folderTitle(folder)) { navigateMacBreadcrumb(to: folder.id) }
+                    .lineLimit(1)
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(PMColor.textMuted)
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: !compact, vertical: true)
     }
     #endif
 
     private func childRow(_ child: LibraryFolderNode) -> some View {
         HStack {
             #if os(macOS)
-            Button { openMacFolder(child.id) } label: {
-                HomeFolderChildLabel(node: child)
-            }
-            .buttonStyle(.plain)
+            MacFolderDirectoryRow(
+                title: HomeDiscoveryText.folderTitle(child),
+                folderCount: child.childNodeCount,
+                songCount: child.descendantSongCount,
+                isSource: child.kind == .source,
+                onOpen: { openMacFolder(child.id) },
+                onPlay: { playFolder(child.id, shuffle: false) }
+            )
             #else
             NavigationLink {
                 HomeFolderBrowser(nodeID: child.id)
@@ -525,19 +790,7 @@ struct HomeFolderBrowser: View {
             #endif
         }
         #if os(macOS)
-        .contextMenu {
-            Button("play", systemImage: "play.fill") { playFolder(child.id, shuffle: false) }
-                .disabled(child.descendantSongCount == 0)
-            Button("shuffle", systemImage: "shuffle") { playFolder(child.id, shuffle: true) }
-                .disabled(child.descendantSongCount == 0)
-            if child.kind != .source {
-                let pinned = pins.contains(child.id)
-                Button(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"),
-                       systemImage: pinned ? "pin.slash" : "pin") {
-                    togglePin(child.id)
-                }
-            }
-        }
+        .contextMenu { macChildFolderMenu(child) }
         #endif
     }
 
@@ -570,6 +823,182 @@ struct HomeFolderBrowser: View {
 }
 
 #if os(macOS)
+private struct MacFolderOverviewLayout<Pinned: View, Sources: View>: View {
+    let hasPins: Bool
+    @ViewBuilder let pinned: Pinned
+    @ViewBuilder let sources: Sources
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 30) {
+                if hasPins {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(HomeDiscoveryText.string("pinned_folders"))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(PMColor.textMuted)
+                            .accessibilityAddTraits(.isHeader)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260, maximum: 400), spacing: 14)], spacing: 14) {
+                            pinned
+                        }
+                    }
+                }
+                LazyVStack(spacing: 2) {
+                    MacFolderColumnsHeader(title: String(localized: "sources_title"))
+                        .padding(.bottom, 6)
+                    sources
+                }
+            }
+            .padding(.horizontal, PMSpace.xxxl)
+            .padding(.bottom, 112)
+        }
+    }
+}
+
+private struct MacFolderColumnsHeader: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(HomeDiscoveryText.string("folders"))
+                .frame(width: 90, alignment: .trailing)
+            Text("tab_songs")
+                .frame(width: 100, alignment: .trailing)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(PMColor.textMuted)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(PMColor.divider).frame(height: 0.5)
+        }
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private struct MacFolderPinnedCard<Artwork: View>: View {
+    let title: String
+    let source: String
+    let detail: String
+    let canPlay: Bool
+    let onOpen: () -> Void
+    let onPlay: () -> Void
+    @ViewBuilder let artwork: Artwork
+    @State private var hovered = false
+    @FocusState private var playFocused: Bool
+
+    private var fullTitle: String {
+        source.isEmpty || source == title ? title : source + " / " + title
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Button(action: onOpen) {
+                HStack(spacing: 14) {
+                    artwork.frame(width: 48, height: 48)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(fullTitle)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(PMColor.text)
+                        Text(detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(PMColor.textMuted)
+                    }
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+                .background(hovered ? PMColor.rowHover : PMColor.card, in: RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(PMColor.cardBorder.opacity(hovered ? 1 : 0.5), lineWidth: 0.5)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .help(fullTitle)
+
+            Button(action: onPlay) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+                    .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 9))
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 16)
+            .focused($playFocused)
+            .opacity((hovered || playFocused) && canPlay ? 1 : 0)
+            .allowsHitTesting(hovered || playFocused)
+            .disabled(!canPlay)
+            .accessibilityLabel(String(localized: "play") + " · " + fullTitle)
+        }
+        .onHover { hovered = $0 }
+    }
+}
+
+private struct MacFolderDirectoryRow: View {
+    let title: String
+    let folderCount: Int
+    let songCount: Int
+    let isSource: Bool
+    let onOpen: () -> Void
+    let onPlay: () -> Void
+    @State private var hovered = false
+    @FocusState private var playFocused: Bool
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Button(action: onOpen) {
+                HStack(spacing: 12) {
+                    Image(systemName: isSource ? "externaldrive.fill" : "folder.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(PMColor.brand)
+                        .frame(width: 32, height: 32)
+                        .background(PMColor.brand.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(PMColor.text)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(folderCount.formatted())
+                        .frame(width: 90, alignment: .trailing)
+                    Text(songCount.formatted())
+                        .frame(width: 100, alignment: .trailing)
+                }
+                .font(.system(size: 12))
+                .monospacedDigit()
+                .foregroundStyle(PMColor.textMuted)
+                .padding(.horizontal, 12)
+                .frame(height: 48)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title + ", " + String(format: HomeDiscoveryText.string("folder_counts"), folderCount, songCount))
+
+            Button(action: onPlay) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(PMColor.brand)
+                    .frame(width: 32, height: 32)
+                    .background(PMColor.bgElev, in: RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 12)
+            .focused($playFocused)
+            .opacity((hovered || playFocused) && songCount > 0 ? 1 : 0)
+            .allowsHitTesting(hovered || playFocused)
+            .disabled(songCount == 0)
+            .accessibilityLabel(String(localized: "play") + " · " + title)
+        }
+        .pmRowBackground()
+        .onHover { hovered = $0 }
+    }
+}
+
 private struct MacFolderScrollReset: ViewModifier {
     let nodeID: LibraryFolderNodeID
     @State private var position = ScrollPosition()

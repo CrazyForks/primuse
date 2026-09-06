@@ -2,7 +2,7 @@
 import SwiftUI
 import PrimuseKit
 
-/// macOS 原生电台页。跟 `MacSourcesView` 同一套骨架：eyebrow + 大标题 + 摘要行
+/// macOS 原生电台页。跟 `MacSourcesView` 同一套骨架：大标题 + 摘要行
 /// 的 action bar，下面是 2 列卡片网格；卡片走 `pmCard`，按钮走 PM token，
 /// 不用 iOS 那套 Form / ContentUnavailableView / .bordered。
 struct MacRadioStationsView: View {
@@ -81,17 +81,10 @@ struct MacRadioStationsView: View {
     private var actionBar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: PMSpace.m16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(Lz("Live Radio"))
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(0.8)
-                        .textCase(.uppercase)
-                        .foregroundStyle(PMColor.textMuted)
-                    Text("radio_title")
-                        .font(.system(size: 32, weight: .bold))
-                        .tracking(-0.5)
-                        .foregroundStyle(PMColor.text)
-                }
+                Text("radio_title")
+                    .font(.system(size: 32, weight: .bold))
+                    .tracking(-0.5)
+                    .foregroundStyle(PMColor.text)
 
                 Spacer()
 

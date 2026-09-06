@@ -106,7 +106,7 @@ struct AlbumGridView: View {
     }
 
     /// 设计稿 LIB-02: 不再用带大封面的 hero header (那是全部歌曲/歌单的样式),
-    /// 而是左上角 "资料库 / 专辑" 小标题 + 右上排序, 下面五列封面网格。
+    /// 而是左上角专辑标题 + 右上排序, 下面五列封面网格。
     @ViewBuilder
     private var macGrid: some View {
         if let selectedAlbum {
@@ -188,16 +188,9 @@ struct AlbumGridView: View {
 
     private func albumsHeader(displayedCount: Int) -> some View {
         HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("library_title")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.8)
-                    .textCase(.uppercase)
-                    .foregroundStyle(PMColor.textMuted)
-                Text("tab_albums")
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(PMColor.text)
-            }
+            Text("tab_albums")
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(PMColor.text)
 
             Spacer()
 

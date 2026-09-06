@@ -244,6 +244,7 @@ struct SearchView: View {
     @Binding var searchText: String
     @Binding private var scope: LibrarySearchScope?
     private let contextualScope: LibrarySearchScope?
+    private let showsMacQuerySummary: Bool
     let onShowInLibrary: (PrimuseKit.Song) -> Void
     @State private var searchResults: [LibrarySearchResult] = []
     @State private var matchingAlbums: [PrimuseKit.Album] = []
@@ -272,11 +273,13 @@ struct SearchView: View {
         searchText: Binding<String>,
         scope: Binding<LibrarySearchScope?> = .constant(nil),
         contextualScope: LibrarySearchScope? = nil,
+        showsMacQuerySummary: Bool = true,
         onShowInLibrary: @escaping (PrimuseKit.Song) -> Void = { _ in }
     ) {
         self._searchText = searchText
         self._scope = scope
         self.contextualScope = contextualScope
+        self.showsMacQuerySummary = showsMacQuerySummary
         self.onShowInLibrary = onShowInLibrary
     }
 
@@ -536,48 +539,50 @@ struct SearchView: View {
     /// 仅展示当前查询并提供快速清除入口, 视觉上跟设计稿 S-01 对齐。
     private var macSearchHeader: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(PMColor.brand)
+            if showsMacQuerySummary {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(PMColor.brand)
 
-                if searchText.isEmpty {
-                    Text(appleMusicSearchEnabled
-                         ? String(localized: "search_placeholder_universal")
-                         : String(localized: "search_prompt"))
-                        .font(.system(size: 14))
-                        .foregroundStyle(PMColor.textFaint)
-                } else {
-                    Text(verbatim: searchText)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(PMColor.text)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                Text(appleMusicSearchEnabled
-                     ? String(localized: "search_scope_local_apple_music")
-                     : String(localized: "search_chip_local"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(PMColor.textMuted)
-                    .padding(.horizontal, 9)
-                    .frame(height: 24)
-                    .background(PMColor.glassBtn, in: Capsule())
-                    .overlay { Capsule().strokeBorder(PMColor.cardBorder, lineWidth: 0.5) }
-
-                if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
+                    if searchText.isEmpty {
+                        Text(appleMusicSearchEnabled
+                             ? String(localized: "search_placeholder_universal")
+                             : String(localized: "search_prompt"))
                             .font(.system(size: 14))
                             .foregroundStyle(PMColor.textFaint)
+                    } else {
+                        Text(verbatim: searchText)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(PMColor.text)
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Text(appleMusicSearchEnabled
+                         ? String(localized: "search_scope_local_apple_music")
+                         : String(localized: "search_chip_local"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(PMColor.textMuted)
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background(PMColor.glassBtn, in: Capsule())
+                        .overlay { Capsule().strokeBorder(PMColor.cardBorder, lineWidth: 0.5) }
+
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(PMColor.textFaint)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
+                .padding(.horizontal, 14)
+                .frame(height: 48)
+                .pmCard(cornerRadius: 12)
             }
-            .padding(.horizontal, 14)
-            .frame(height: 48)
-            .pmCard(cornerRadius: 12)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {

@@ -46,6 +46,9 @@ struct MacDetailContainer: View {
                 // 叠出第二条系统 bar (会出现 "搜索歌曲" + 排序按钮悬空在最顶)。
                 .toolbar(.hidden, for: .windowToolbar)
         }
+        .environment(\.macFolderShowInLibrary) { song in
+            onShowSongInLibrary(song)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .primuseDetailGoBack)) { _ in
             if !path.isEmpty { path.removeLast() }
         }
