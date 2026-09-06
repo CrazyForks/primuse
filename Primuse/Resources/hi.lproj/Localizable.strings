@@ -2624,6 +2624,8 @@
 "search_result_path_accessibility_format" = "पथ: %@";
 "search_running" = "खोजा जा रहा है...";
 "search_scope_local_apple_music" = "स्थानीय · Apple Music";
+"search_scope" = "खोज का दायरा";
+"search_scope_title_format" = "खोज का दायरा: %@";
 "search_global" = "वैश्विक खोज";
 "search_current_scope" = "वर्तमान दायरा";
 "search_scope_prompt_format" = "%@ में खोजें";

@@ -2517,6 +2517,8 @@
 "last_modified_label" = "Date de la source";
 "audio_quality_label" = "Qualité audio";
 "search_scope_local_apple_music" = "Local · Apple Music";
+"search_scope" = "Périmètre";
+"search_scope_title_format" = "Recherche dans : %@";
 "search_global" = "Recherche globale";
 "search_current_scope" = "Portée actuelle";
 "search_scope_prompt_format" = "Rechercher dans %@";

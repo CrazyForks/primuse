@@ -2430,6 +2430,8 @@
 "ai_recommendation_custom_prompt_placeholder" = "Tercih edilen sanatçıları, türleri, yayın yıllarını veya ne kadar keşfedileceğini açıklayın";
 "yearly_share_footer" = "Primuse tarafından oluşturulmuştur";
 "search_scope_local_apple_music" = "Yerel · Apple Music";
+"search_scope" = "Arama kapsamı";
+"search_scope_title_format" = "Arama kapsamı: %@";
 "search_global" = "Genel Arama";
 "search_current_scope" = "Geçerli Kapsam";
 "search_scope_prompt_format" = "%@ içinde ara";

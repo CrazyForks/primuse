@@ -2610,6 +2610,8 @@
 "last_modified_label" = "来源日期";
 "audio_quality_label" = "音频规格";
 "search_scope_local_apple_music" = "本地 · Apple Music";
+"search_scope" = "检索范围";
+"search_scope_title_format" = "检索范围 · %@";
 "search_global" = "全局搜索";
 "search_current_scope" = "当前范围";
 "search_scope_prompt_format" = "在%@中搜索";

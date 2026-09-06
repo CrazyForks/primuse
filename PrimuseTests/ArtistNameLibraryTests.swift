@@ -772,10 +772,51 @@ final class LibraryScopedSearchTests: XCTestCase {
         }
         let index = LibraryFolderIndexBuilder.build(sources: sources, songs: songs)
         let folder = try XCTUnwrap(index.nodeID(containingSongID: "album"))
-        let scope = LibrarySearchScope(title: "Album", songIDs: Set(index.songIDs(in: folder, scope: .descendants)),
-                                       includesSubfolders: true)
+        let scope = LibrarySearchScope.folder(
+            node: try XCTUnwrap(index.node(withID: folder)),
+            index: index,
+            title: { $0.displayName ?? "Folder" }
+        )
         XCTAssertEqual(Set(search(scope.songs(in: songs))), ["album", "disc"])
         XCTAssertEqual(search(scope.songs(in: songs.filter { $0.id != "disc" })), ["album"])
+        XCTAssertEqual(scope.kind, .folder)
+        XCTAssertEqual(scope.title, "Album")
+        XCTAssertEqual(scope.detail, "source › Music")
+        XCTAssertTrue(scope.includesSubfolders)
+    }
+
+    func testVirtualPlaylistUsesPlaylistIdentityAndDoesNotClaimSubfolders() throws {
+        let sourceID = AppleMusicLibraryIdentity.sourceID
+        let source = LibraryFolderSourceDescriptor(
+            sourceID: sourceID, displayName: "Music Service", scanRoots: [], pathSemantics: .opaque
+        )
+        let index = LibraryFolderIndexBuilder.build(
+            sources: [source],
+            songs: [song(id: "inside", sourceID: sourceID), song(id: "outside", sourceID: sourceID)],
+            virtualCollections: [
+                LibraryFolderVirtualCollectionDescriptor(
+                    sourceID: sourceID, identity: AppleMusicLibraryIdentity.systemPlaylistID,
+                    displayName: "Library Songs", kind: .librarySongs, songIDs: ["inside", "outside"]
+                ),
+                LibraryFolderVirtualCollectionDescriptor(
+                    sourceID: sourceID, identity: AppleMusicLibraryIdentity.userPlaylistIDPrefix + "road-trip",
+                    displayName: "Road Trip", kind: .playlist, songIDs: ["inside"]
+                ),
+            ]
+        )
+        let sourceNode = try XCTUnwrap(index.sourceNode(for: sourceID))
+        let node = try XCTUnwrap(index.children(of: sourceNode.id).first { $0.kind == .playlist })
+        let scope = LibrarySearchScope.folder(node: node, index: index, title: { $0.displayName ?? "Folder" })
+        XCTAssertEqual(scope.kind, .playlist)
+        XCTAssertEqual(scope.title, "Road Trip")
+        XCTAssertEqual(scope.detail, "Music Service")
+        XCTAssertEqual(scope.songIDs, ["inside"])
+        XCTAssertFalse(scope.includesSubfolders)
+        let sourceScope = LibrarySearchScope.folder(
+            node: sourceNode, index: index, title: { $0.displayName ?? "Folder" }
+        )
+        XCTAssertEqual(sourceScope.kind, .source)
+        XCTAssertFalse(sourceScope.includesSubfolders)
     }
 
     private func search(_ songs: [Song]) -> [String] {

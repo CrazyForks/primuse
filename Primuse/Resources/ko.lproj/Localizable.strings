@@ -2517,6 +2517,8 @@
 "last_modified_label" = "소스 날짜";
 "audio_quality_label" = "오디오 품질";
 "search_scope_local_apple_music" = "로컬 · Apple Music";
+"search_scope" = "검색 범위";
+"search_scope_title_format" = "검색 범위: %@";
 "search_global" = "전체 검색";
 "search_current_scope" = "현재 범위";
 "search_scope_prompt_format" = "%@에서 검색";

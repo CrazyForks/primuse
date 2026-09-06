@@ -1701,11 +1701,11 @@ final class LibrarySearchNavigationTests: XCTestCase {
         let navigation = LibrarySearchNavigation()
         var songs: Set<String> = ["first"]
         let owner = UUID()
-        navigation.register(owner: owner, tab: 0) {
+        navigation.register(owner: owner, tab: 1) {
             LibrarySearchScope(title: "Playlist", songIDs: songs)
         }
         songs.insert("new")
-        let captured = navigation.scope(for: 0)
+        let captured = navigation.scope(for: 1)
         navigation.remove(owner: owner)
         XCTAssertEqual(captured?.songIDs, ["first", "new"])
         XCTAssertNil(navigation.scope(for: 0))
@@ -1716,6 +1716,29 @@ final class LibrarySearchNavigationTests: XCTestCase {
     func testDirectoryOverviewKeepsGlobalSearch() {
         let navigation = LibrarySearchNavigation()
         navigation.register(owner: UUID(), tab: 1) { nil }
+        XCTAssertNil(navigation.scope(for: 1))
+    }
+
+    func testHomeAndSettingsNeverCaptureScopesEvenWithLibraryDetailPages() {
+        let navigation = LibrarySearchNavigation()
+        for tab in [0, 1, 2, 3] {
+            navigation.register(owner: UUID(), tab: tab) {
+                LibrarySearchScope(title: "Album", songIDs: ["song"], kind: .album)
+            }
+        }
+        XCTAssertNotNil(navigation.scope(for: 1))
+        for tab in [0, 2, 3] {
+            XCTAssertNil(navigation.scope(for: tab))
+        }
+    }
+
+    func testReturningToLibraryRootClearsThePreviousDetailScope() {
+        let navigation = LibrarySearchNavigation()
+        let detail = UUID()
+        navigation.register(owner: detail, tab: 1) {
+            LibrarySearchScope(title: "Playlist", songIDs: ["song"])
+        }
+        navigation.remove(owner: detail)
         XCTAssertNil(navigation.scope(for: 1))
     }
 

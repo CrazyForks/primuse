@@ -112,6 +112,9 @@ struct ArtistDetailView: View {
         }
         #if os(iOS)
         .minimalNavigationDetail()
+        .librarySearchContext {
+            LibrarySearchScope(title: displayArtistName, songIDs: Set(songs.map(\.id)), kind: .artist)
+        }
         #endif
         .songBatchActions(
             selection: selection,
@@ -774,6 +777,14 @@ private struct ArtistAllSongsView: View {
         .toolbarTitleDisplayMode(.inline)
         #if os(iOS)
         .minimalNavigationDetail()
+        .librarySearchContext {
+            let name = artist.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return LibrarySearchScope(
+                title: name.isEmpty ? String(localized: "unknown_artist") : name,
+                songIDs: Set(songs.map(\.id)),
+                kind: .artist
+            )
+        }
         #endif
         .songBatchActions(
             selection: selection,

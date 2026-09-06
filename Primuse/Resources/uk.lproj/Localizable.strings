@@ -2430,6 +2430,8 @@
 "ai_recommendation_custom_prompt_placeholder" = "Опишіть улюблених виконавців, жанри, роки випуску або як далеко досліджувати";
 "yearly_share_footer" = "Створено Primuse";
 "search_scope_local_apple_music" = "Місцевий · Apple Music";
+"search_scope" = "Область пошуку";
+"search_scope_title_format" = "Область пошуку: %@";
 "search_global" = "Глобальний пошук";
 "search_current_scope" = "Поточна область";
 "search_scope_prompt_format" = "Пошук у %@";

@@ -2624,6 +2624,8 @@
 "search_result_path_accessibility_format" = "Ruta: %@";
 "search_running" = "Buscando…";
 "search_scope_local_apple_music" = "Local · Apple Music";
+"search_scope" = "Ámbito de búsqueda";
+"search_scope_title_format" = "Buscar en: %@";
 "search_global" = "Búsqueda global";
 "search_current_scope" = "Ámbito actual";
 "search_scope_prompt_format" = "Buscar en %@";

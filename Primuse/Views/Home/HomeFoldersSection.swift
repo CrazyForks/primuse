@@ -390,12 +390,8 @@ struct HomeFolderBrowser: View {
         .navigationBarTitleDisplayMode(.inline)
         .minimalNavigationDetail(isDetail: nodeID != nil)
         .librarySearchContext {
-            guard let nodeID, let node else { return nil }
-            return LibrarySearchScope(
-                title: HomeDiscoveryText.folderTitle(node),
-                songIDs: Set(model.index?.songIDs(in: nodeID, scope: .descendants) ?? []),
-                includesSubfolders: true
-            )
+            guard let node, let index = model.index else { return nil }
+            return LibrarySearchScope.folder(node: node, index: index, title: HomeDiscoveryText.folderTitle)
         }
         .toolbar {
             if let node {

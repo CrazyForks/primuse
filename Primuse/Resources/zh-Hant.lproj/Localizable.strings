@@ -2494,6 +2494,8 @@
 "last_modified_label" = "來源日期";
 "audio_quality_label" = "音訊規格";
 "search_scope_local_apple_music" = "本機 · Apple Music";
+"search_scope" = "檢索範圍";
+"search_scope_title_format" = "檢索範圍 · %@";
 "search_global" = "全域搜尋";
 "search_current_scope" = "目前範圍";
 "search_scope_prompt_format" = "在%@中搜尋";

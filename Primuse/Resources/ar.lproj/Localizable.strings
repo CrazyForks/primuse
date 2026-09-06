@@ -2624,6 +2624,8 @@
 "search_result_path_accessibility_format" = "المسار: %@";
 "search_running" = "البحث…";
 "search_scope_local_apple_music" = "محلي · Apple Music";
+"search_scope" = "نطاق البحث";
+"search_scope_title_format" = "نطاق البحث: %@";
 "search_global" = "بحث شامل";
 "search_current_scope" = "النطاق الحالي";
 "search_scope_prompt_format" = "البحث في %@";

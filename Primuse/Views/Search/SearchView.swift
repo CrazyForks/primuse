@@ -3,12 +3,87 @@ import MusicKit
 import PrimuseKit
 
 struct LibrarySearchScope: Equatable {
+    enum Kind {
+        case playlist, smartPlaylist, folder, source, songs, album, artist, genre
+
+        var title: String {
+            switch self {
+            case .playlist: String(localized: "tab_playlists")
+            case .smartPlaylist: String(localized: "smart_playlists_section")
+            case .folder: String(localized: "library_browse_folder")
+            case .source: String(localized: "source_label")
+            case .songs: String(localized: "tab_songs")
+            case .album: String(localized: "tab_albums")
+            case .artist: String(localized: "tab_artists")
+            case .genre: String(localized: "tab_genres")
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .playlist: "music.note.list"
+            case .smartPlaylist: "sparkles"
+            case .folder: "folder.fill"
+            case .source: "externaldrive.fill"
+            case .songs: "music.note"
+            case .album: "square.stack.fill"
+            case .artist: "music.mic"
+            case .genre: "guitars.fill"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .playlist: .purple
+            case .smartPlaylist: .indigo
+            case .folder: .orange
+            case .source: .teal
+            case .songs: .blue
+            case .album: .pink
+            case .artist: .blue
+            case .genre: .green
+            }
+        }
+    }
+
     let title: String
     let songIDs: Set<String>
     var includesSubfolders = false
+    var kind: Kind = .playlist
+    var detail: String? = nil
 
     func songs(in visibleSongs: [PrimuseKit.Song]) -> [PrimuseKit.Song] {
         visibleSongs.filter { songIDs.contains($0.id) }
+    }
+
+    static func folder(
+        node: LibraryFolderNode,
+        index: LibraryFolderIndex,
+        title: (LibraryFolderNode) -> String
+    ) -> Self {
+        let kind: Kind
+        switch node.kind {
+        case .source: kind = .source
+        case .playlist: kind = .playlist
+        case .librarySongs, .notInPlaylist: kind = .songs
+        default: kind = .folder
+        }
+        var ancestors: [String] = []
+        var parentID = node.parentID
+        while let id = parentID, let parent = index.node(withID: id) {
+            ancestors.append(title(parent))
+            parentID = parent.parentID
+        }
+        return Self(
+            title: title(node),
+            songIDs: Set(index.songIDs(in: node.id, scope: .descendants)),
+            includesSubfolders: node.kind == .folder || node.kind == .scanRoot
+                || (node.kind == .source && index.children(of: node.id).contains {
+                    $0.kind == .folder || $0.kind == .scanRoot
+                }),
+            kind: kind,
+            detail: ancestors.isEmpty ? nil : ancestors.reversed().joined(separator: " › ")
+        )
     }
 }
 
@@ -33,7 +108,8 @@ final class LibrarySearchNavigation {
     }
 
     func scope(for tab: Int) -> LibrarySearchScope? {
-        entries.last { $0.tab == tab }?.resolve()
+        guard tab == 1 else { return nil }
+        return entries.last { $0.tab == tab }?.resolve()
     }
 }
 
@@ -85,17 +161,73 @@ struct SearchScopeSwitchButton: View {
         Button {
             scope = scope == nil ? context : nil
         } label: {
+            #if os(iOS)
+            Label("search_scope", systemImage: "scope")
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+            #else
             Label(
                 scope == nil ? String(localized: "search_current_scope") : String(localized: "search_global"),
                 systemImage: scope == nil ? (context.includesSubfolders ? "folder" : "music.note.list") : "globe"
             )
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
+            #endif
         }
         .accessibilityValue(Text(scope?.title ?? String(localized: "search_global")))
         .accessibilityIdentifier("search.scope.toggle")
     }
 }
+
+#if os(iOS)
+struct SearchScopeCard: View {
+    let scope: LibrarySearchScope
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: scope.kind.systemImage)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(scope.kind.color)
+                .frame(width: 44, height: 44)
+                .background(scope.kind.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(String(format: String(localized: "search_scope_title_format"), scope.kind.title))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(verbatim: scope.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = scope.detail, !detail.isEmpty {
+                    Text(verbatim: detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if scope.includesSubfolders {
+                    Label("search_scope_includes_subfolders", systemImage: "folder.badge.plus")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(scope.kind.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(scope.kind.color.opacity(0.24), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("search.scope.card")
+    }
+}
+#endif
 
 enum SearchCatalogPolicy {
     static func albums(
@@ -447,33 +579,16 @@ struct SearchView: View {
     }
 
     private var iosSearchContent: some View {
-        Group {
-            if searchText.isEmpty {
-                if library.visibleSongs.isEmpty {
-                    EmptyStateView(
-                        titleKey: "search_empty_library",
-                        descriptionKey: "search_empty_library_desc",
-                        systemImage: "magnifyingglass"
-                    )
-                } else {
-                    recentSearchView
-                }
-            } else if isSearching && renderedQuery != searchText {
-                searchingPlaceholder
-            } else if searchResults.isEmpty
-                        && matchingAlbums.isEmpty
-                        && matchingArtists.isEmpty
-                        && visibleSemanticResults.isEmpty
-                        && visibleAppleMusicSearchResults.isEmpty
-                        && !semanticSearchFeedback.isVisible {
-                if isSearching || renderedQuery != searchText {
-                    searchingPlaceholder
-                } else {
-                    ContentUnavailableView.search(text: searchText)
-                }
-            } else {
-                searchResultsView
+        VStack(spacing: 0) {
+            #if os(iOS)
+            if let scope {
+                SearchScopeCard(scope: scope)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
             }
+            #endif
+            iosSearchResults
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle(usesMinimalNavigation ? Text("") : Text("search_title"))
         .toolbarTitleDisplayMode(usesMinimalNavigation ? .inline : .inlineLarge)
@@ -502,6 +617,37 @@ struct SearchView: View {
             }
         }
         #endif
+    }
+
+    private var iosSearchResults: some View {
+        Group {
+            if searchText.isEmpty {
+                if library.visibleSongs.isEmpty {
+                    EmptyStateView(
+                        titleKey: "search_empty_library",
+                        descriptionKey: "search_empty_library_desc",
+                        systemImage: "magnifyingglass"
+                    )
+                } else {
+                    recentSearchView
+                }
+            } else if isSearching && renderedQuery != searchText {
+                searchingPlaceholder
+            } else if searchResults.isEmpty
+                        && matchingAlbums.isEmpty
+                        && matchingArtists.isEmpty
+                        && visibleSemanticResults.isEmpty
+                        && visibleAppleMusicSearchResults.isEmpty
+                        && !semanticSearchFeedback.isVisible {
+                if isSearching || renderedQuery != searchText {
+                    searchingPlaceholder
+                } else {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            } else {
+                searchResultsView
+            }
+        }
     }
 
     private var searchPrompt: String {

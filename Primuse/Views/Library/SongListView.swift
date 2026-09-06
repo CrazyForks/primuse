@@ -4410,10 +4410,11 @@ private struct LibraryFolderNodeView: View {
             .minimalNavigationDetail()
             .toolbar { iosToolbar }
             .librarySearchContext {
-                LibrarySearchScope(
-                    title: navigationTitle,
-                    songIDs: Set(folderCache.index?.songIDs(in: nodeID, scope: .descendants) ?? []),
-                    includesSubfolders: true
+                guard let index = folderCache.index, let node = index.node(withID: nodeID) else { return nil }
+                return LibrarySearchScope.folder(
+                    node: node,
+                    index: index,
+                    title: LibraryFolderNodePresentation.title
                 )
             }
             #endif

@@ -2083,6 +2083,9 @@ private struct GenreDetailView: View {
         .toolbarTitleDisplayMode(.inline)
         #if os(iOS)
         .minimalNavigationDetail()
+        .librarySearchContext {
+            LibrarySearchScope(title: genre.name, songIDs: Set(songs.map(\.id)), kind: .genre)
+        }
         #endif
         .songBatchActions(
             selection: selection,

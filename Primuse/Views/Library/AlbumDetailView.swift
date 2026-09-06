@@ -37,6 +37,14 @@ struct AlbumDetailView: View {
         }
         #if os(iOS)
         .minimalNavigationDetail()
+        .librarySearchContext {
+            LibrarySearchScope(
+                title: album.title,
+                songIDs: Set(songs.map(\.id)),
+                kind: .album,
+                detail: album.artistName
+            )
+        }
         #endif
         .songBatchActions(
             selection: selection,

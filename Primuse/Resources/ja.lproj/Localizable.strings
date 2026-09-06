@@ -2518,6 +2518,8 @@
 "last_modified_label" = "ソースの日付";
 "audio_quality_label" = "音質";
 "search_scope_local_apple_music" = "ローカル · Apple Music";
+"search_scope" = "検索範囲";
+"search_scope_title_format" = "検索範囲：%@";
 "search_global" = "全体を検索";
 "search_current_scope" = "現在の範囲";
 "search_scope_prompt_format" = "%@内を検索";

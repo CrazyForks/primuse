@@ -49,7 +49,8 @@ struct SmartPlaylistDetailView: View {
                 .librarySearchContext {
                     LibrarySearchScope(
                         title: smart?.name ?? String(localized: "tab_playlists"),
-                        songIDs: Set(self.matched.map(\.id))
+                        songIDs: Set(self.matched.map(\.id)),
+                        kind: .smartPlaylist
                     )
                 }
                 .scraperSourceRequiredAlert(isPresented: $showNoScraperSourceAlert)
