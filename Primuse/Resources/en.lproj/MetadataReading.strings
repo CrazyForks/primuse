@@ -1,6 +1,6 @@
 "title" = "Tag reading speed";
 "automatic" = "Automatic";
-"fast" = "Prioritize speed";
+"fast" = "Full Speed";
 "energySaving" = "Save energy";
 "help" = "Adjusts to playback, power and temperature. Changes apply while reading.";
 "playback" = "Protecting playback";
@@ -9,3 +9,7 @@
 "cooling" = "Paused until the device cools down";
 "background" = "Background reading";
 "rate" = "%.1f tracks/min";
+"fastWarningTitle" = "Enable full-speed reading?";
+"fastWarningMessage" = "Finish reading tags sooner. This may increase heat, battery use, and interface stuttering. Reading still slows down when the device is warm, Low Power Mode is on, or music is playing, and pauses if needed. You can switch modes at any time.";
+"fastWarningConfirm" = "Enable Full Speed";
+"cancel" = "Cancel";

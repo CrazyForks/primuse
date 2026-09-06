@@ -2991,7 +2991,9 @@ public enum MetadataBackfillExecutionPolicy {
     ) -> MetadataBackfillExecutionLimits {
         let isBackground = mode == .background || mode == .backgroundDuringPlayback
         let offline = environment.offlineSource || mode == .foregroundDeviceLocal
-        var workers = preference == .fast || offline ? 3 : 2
+        // Keep full-speed reads bounded even on machines with many cores;
+        // each parser can hold both a tag buffer and decoded artwork.
+        var workers = preference == .fast ? 4 : (offline ? 3 : 2)
         var delay: TimeInterval = 0
         var snapshot = preference == .fast ? 192 : 96
         var flush: TimeInterval = 5

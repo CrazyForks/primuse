@@ -286,6 +286,7 @@ final class MetadataBackfillService {
     @ObservationIgnored private var queueStatePersistenceTask: Task<Void, Never>?
 
     @ObservationIgnored private var worker: Task<Void, Never>?
+    @ObservationIgnored private var drainingWorker: Task<Void, Never>?
     @ObservationIgnored private var executionMode: MetadataBackfillExecutionMode = .standard
     @ObservationIgnored private var activeScheduler: MetadataReadScheduler<Song, BackfillOutcome>?
     @ObservationIgnored private var batchSchedulers: [String: MetadataReadScheduler<String, MetadataTagRereadBatch.Outcome>] = [:]
@@ -1164,7 +1165,13 @@ final class MetadataBackfillService {
         // this number stay >0 forever you can compare against
         // `library.songs.count` to confirm no infinite reprocessing.
         plog("📥 Backfill: gen=\(generation) mode=\(String(describing: executionMode)) bareInLib=\(remainingCount) batchHead=\(needsBackfill.count)")
+        let previousWorker = drainingWorker
+        drainingWorker = nil
         worker = Task { [weak self] in
+            // Cancellation is cooperative. Let the previous parser release
+            // its buffers and shared scheduler before admitting a new worker.
+            await previousWorker?.value
+            guard !Task.isCancelled else { return }
             await self?.runWorker()
             await MainActor.run { [weak self] in
                 guard let self, self.workerGeneration == generation else { return }
@@ -1259,6 +1266,7 @@ final class MetadataBackfillService {
     /// longer the "current" worker, so it must not touch shared state.
     func stop() {
         workerGeneration += 1
+        if let worker { drainingWorker = worker }
         worker?.cancel()
         worker = nil
         isRunning = false
@@ -1531,6 +1539,13 @@ final class MetadataBackfillService {
         songIDs: Set<String>
     ) {
         guard !sourceIDs.isEmpty else { return }
+        // Even an empty removed source stopped the shared worker. Preserve
+        // other sources' explicit intent and resume after cleanup completes.
+        defer {
+            markQueueDirty()
+            resumeReadingAfterSourceRemoval()
+        }
+        automaticForegroundSourceIDs.subtract(sourceIDs)
 
         if let activeSourceID = userInitiatedSourceID,
            sourceIDs.contains(activeSourceID) {
@@ -1562,7 +1577,17 @@ final class MetadataBackfillService {
         saveDiagnostics()
         saveInspectionState()
         saveRetryCounts()
-        markQueueDirty()
+    }
+
+    private func resumeReadingAfterSourceRemoval() {
+        #if os(iOS)
+        guard UIApplication.shared.applicationState == .active else { return }
+        #endif
+        if !resumeUserInitiatedIfNeeded(), !resumeAutomaticForegroundIfNeeded() {
+            #if !os(iOS)
+            start()
+            #endif
+        }
     }
 
     /// Re-evaluate the queue every time the library changes (e.g. a fresh

@@ -1,6 +1,6 @@
 "title" = "Vitesse de lecture des tags";
 "automatic" = "Automatique";
-"fast" = "Privilégier la vitesse";
+"fast" = "Pleine vitesse";
 "energySaving" = "Économiser l’énergie";
 "help" = "S’adapte à la lecture, au mode d’alimentation et à la température. Les changements s’appliquent pendant la lecture.";
 "playback" = "Priorité à la lecture audio";
@@ -9,3 +9,7 @@
 "cooling" = "En pause jusqu’au refroidissement";
 "background" = "Lecture en arrière-plan";
 "rate" = "%.1f titres/min";
+"fastWarningTitle" = "Activer la pleine vitesse ?";
+"fastWarningMessage" = "Termine la lecture des tags plus vite, mais peut augmenter la chaleur, la consommation et les saccades. La lecture ralentit toujours si l’appareil chauffe, si le mode économie d’énergie est activé ou pendant la lecture de musique, et se met en pause si nécessaire. Vous pouvez changer de mode à tout moment.";
+"fastWarningConfirm" = "Activer la pleine vitesse";
+"cancel" = "Annuler";

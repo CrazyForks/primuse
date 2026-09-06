@@ -211,6 +211,7 @@ struct MetadataBackfillPerformanceButton<Label: View>: View {
     private var storedMode = ""
     @AppStorage(MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
     private var legacyFast = false
+    @State private var showingFastConfirmation = false
     private let label: (MetadataReadingMode) -> Label
 
     init(@ViewBuilder label: @escaping (MetadataReadingMode) -> Label) { self.label = label }
@@ -222,7 +223,13 @@ struct MetadataBackfillPerformanceButton<Label: View>: View {
     var body: some View {
         Menu {
             Picker(MetadataReadingText.string("title"), selection: Binding(
-                get: { mode }, set: { storedMode = $0.rawValue }
+                get: { mode }, set: { selected in
+                    if selected == .fast, mode != .fast {
+                        showingFastConfirmation = true
+                    } else {
+                        storedMode = selected.rawValue
+                    }
+                }
             )) {
                 ForEach(MetadataReadingMode.allCases, id: \.self) { option in
                     SwiftUI.Label(MetadataReadingText.string(option.rawValue), systemImage: option.symbol)
@@ -237,6 +244,14 @@ struct MetadataBackfillPerformanceButton<Label: View>: View {
         .accessibilityValue(MetadataReadingText.string(mode.rawValue))
         .accessibilityHint(MetadataReadingText.string("help"))
         .accessibilityIdentifier("sources.metadataBackfillPerformance")
+        .alert(MetadataReadingText.string("fastWarningTitle"), isPresented: $showingFastConfirmation) {
+            Button(MetadataReadingText.string("fastWarningConfirm")) {
+                storedMode = MetadataReadingMode.fast.rawValue
+            }
+            Button(MetadataReadingText.string("cancel"), role: .cancel) {}
+        } message: {
+            Text(MetadataReadingText.string("fastWarningMessage"))
+        }
     }
 }
 

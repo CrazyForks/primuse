@@ -18,6 +18,32 @@ struct MetadataReadSchedulerTests {
         }
     }
 
+    @Test func fullSpeedUsesHigherButBoundedConcurrency() {
+        for offline in [false, true] {
+            let environment = MetadataReadingEnvironment(offlineSource: offline)
+            let automatic = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: .automatic, environment: environment
+            )
+            let fast = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: .fast, environment: environment
+            )
+            #expect(fast.workerCount > automatic.workerCount)
+            #expect(fast.workerCount <= 4)
+            #expect(fast.interRequestDelay == 0)
+        }
+    }
+
+    @Test func everyModeReducesWorkAsSoonAsTemperatureRises() {
+        for preference in MetadataReadingMode.allCases {
+            let warm = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: preference,
+                environment: .init(thermalState: .fair)
+            )
+            #expect(warm.workerCount == 1)
+            #expect(warm.interRequestDelay >= 0.35)
+        }
+    }
+
     @Test func speedNeverOverridesThermalOrPlaybackProtection() {
         for preference in MetadataReadingMode.allCases {
             let paused = MetadataBackfillExecutionPolicy.limits(
@@ -105,6 +131,51 @@ struct MetadataReadSchedulerTests {
         }
         await Task.yield()
         task.cancel()
+        await task.value
+        #expect(reads == 0)
+    }
+
+    @Test @MainActor func delayedReadsWaitForThermalRecovery() async throws {
+        let scheduler = MetadataReadScheduler<Int, Int>()
+        var workers = 1
+        var reads: [Int] = []
+        let task = Task {
+            await scheduler.run(
+                items: [1, 2],
+                limits: { .init(workerCount: workers, snapshotLimit: 2, interRequestDelay: 0.05, flushInterval: 5) },
+                read: { item in reads.append(item); return item },
+                completed: { _, _ in }
+            )
+        }
+        defer { task.cancel() }
+        try await waitUntil { scheduler.inFlightCount == 1 }
+        workers = 0
+        scheduler.configurationChanged()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(reads.isEmpty)
+        #expect(scheduler.inFlightCount == 0)
+        workers = 1
+        scheduler.configurationChanged()
+        await task.value
+        #expect(reads == [1, 2])
+    }
+
+    @Test @MainActor func invalidatedDelayedItemNeverStartsReading() async throws {
+        let scheduler = MetadataReadScheduler<Int, Int>()
+        var valid = true
+        var reads = 0
+        let task = Task {
+            await scheduler.run(
+                items: [1],
+                limits: { .init(workerCount: 1, snapshotLimit: 1, interRequestDelay: 0.05, flushInterval: 5) },
+                shouldRead: { _ in valid },
+                read: { item in reads += 1; return item },
+                completed: { _, _ in Issue.record("Invalidated work must not produce a result") }
+            )
+        }
+        defer { task.cancel() }
+        try await waitUntil { scheduler.inFlightCount == 1 }
+        valid = false
         await task.value
         #expect(reads == 0)
     }

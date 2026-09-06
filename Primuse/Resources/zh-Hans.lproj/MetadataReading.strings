@@ -1,6 +1,6 @@
 "title" = "标签读取速度";
 "automatic" = "自动";
-"fast" = "优先速度";
+"fast" = "全速";
 "energySaving" = "节能";
 "help" = "根据播放、电量模式和温度调整，读取过程中切换即可生效。";
 "playback" = "优先保障播放";
@@ -9,3 +9,7 @@
 "cooling" = "等待设备降温后继续";
 "background" = "后台读取";
 "rate" = "%.1f 首/分钟";
+"fastWarningTitle" = "开启全速读取？";
+"fastWarningMessage" = "尽快完成标签读取，可能增加发热、耗电和界面卡顿。温度偏高、低电量或播放音乐时仍会自动降速，必要时暂停。可随时切回其他档位。";
+"fastWarningConfirm" = "我知道，开启全速";
+"cancel" = "取消";

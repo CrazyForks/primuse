@@ -1,6 +1,6 @@
 "title" = "Etiket okuma hızı";
 "automatic" = "Otomatik";
-"fast" = "Hıza öncelik ver";
+"fast" = "Tam hız";
 "energySaving" = "Enerji tasarrufu";
 "help" = "Çalmaya, güç moduna ve sıcaklığa uyum sağlar. Değişiklikler okuma sırasında uygulanır.";
 "playback" = "Çalmaya öncelik veriliyor";
@@ -9,3 +9,7 @@
 "cooling" = "Aygıt soğuyana kadar duraklatıldı";
 "background" = "Arka planda okuma";
 "rate" = "%.1f parça/dk";
+"fastWarningTitle" = "Tam hızda okuma açılsın mı?";
+"fastWarningMessage" = "Etiketleri daha hızlı okumak ısınmayı, pil tüketimini ve arayüz takılmalarını artırabilir. Cihaz ısındığında, Düşük Güç Modu açıkken veya müzik çalarken okuma yine yavaşlar ve gerekirse duraklar. Modu istediğiniz zaman değiştirebilirsiniz.";
+"fastWarningConfirm" = "Tam hızı aç";
+"cancel" = "İptal";

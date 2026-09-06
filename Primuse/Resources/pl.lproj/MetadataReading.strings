@@ -1,6 +1,6 @@
 "title" = "Szybkość odczytu tagów";
 "automatic" = "Automatycznie";
-"fast" = "Priorytet szybkości";
+"fast" = "Pełna prędkość";
 "energySaving" = "Oszczędzanie energii";
 "help" = "Dostosowuje się do odtwarzania, zasilania i temperatury. Zmiany działają podczas odczytu.";
 "playback" = "Priorytet odtwarzania";
@@ -9,3 +9,7 @@
 "cooling" = "Wstrzymano do schłodzenia urządzenia";
 "background" = "Odczyt w tle";
 "rate" = "%.1f utworów/min";
+"fastWarningTitle" = "Włączyć pełną prędkość?";
+"fastWarningMessage" = "Szybsze odczytywanie tagów może zwiększyć nagrzewanie, zużycie baterii i przycięcia interfejsu. Odczyt nadal zwalnia, gdy urządzenie jest rozgrzane, działa w trybie niskiego zużycia energii lub odtwarza muzykę, i w razie potrzeby się wstrzymuje. Tryb można zmienić w każdej chwili.";
+"fastWarningConfirm" = "Włącz pełną prędkość";
+"cancel" = "Anuluj";
