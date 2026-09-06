@@ -2,7 +2,7 @@
 "automatic" = "Automatisch";
 "fast" = "Volle Geschwindigkeit";
 "energySaving" = "Energie sparen";
-"help" = "Passt sich Wiedergabe, Stromsparmodus und Temperatur an. Änderungen wirken beim Lesen.";
+"help" = "Passt sich an Prozessorkerne, Arbeitsspeicher, Wiedergabe und Temperatur an. Moduswechsel gelten sofort; Schutzfunktionen bleiben auch bei voller Geschwindigkeit aktiv.";
 "playback" = "Wiedergabe hat Vorrang";
 "lowPower" = "Stromsparmodus";
 "thermal" = "Zum Abkühlen verlangsamt";

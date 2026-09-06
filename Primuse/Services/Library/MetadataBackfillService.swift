@@ -186,6 +186,9 @@ final class MetadataBackfillService {
     /// Sources whose bytes live in the app sandbox and remain readable while
     /// Wi-Fi-only blocks connector and File Provider traffic.
     private let offlineReadableSourceIDs: () -> Set<String>
+    // A filesystem reader may use a mounted/provider volume. Its CPU budget
+    // must not grant the offline network-policy exemption of sandbox copies.
+    private let localFileSourceIDs: () -> Set<String>
     private let manuallyReadableSourceIDs: () -> Set<String>
     private let metadataService = MetadataService()
     private let failedURL: URL
@@ -310,19 +313,11 @@ final class MetadataBackfillService {
     }
 
     private func readingEnvironment(sourceID: String? = nil) -> MetadataReadingEnvironment {
-        let thermal: MetadataReadingThermalState = switch ProcessInfo.processInfo.thermalState {
-        case .nominal: .nominal
-        case .fair: .fair
-        case .serious: .serious
-        case .critical: .critical
-        @unknown default: .serious
-        }
         let sourceIDs = sourceID.map { Set([$0]) } ?? activeSourceIDs
-        return MetadataReadingEnvironment(
-            thermalState: thermal,
-            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+        let localIDs = offlineReadableSourceIDs().union(localFileSourceIDs())
+        return MetadataReadingEnvironment.current(
             playbackActive: playbackIsActive(),
-            offlineSource: !sourceIDs.isEmpty && sourceIDs.isSubset(of: offlineReadableSourceIDs())
+            offlineSource: !sourceIDs.isEmpty && sourceIDs.isSubset(of: localIDs)
         )
     }
 
@@ -402,6 +397,7 @@ final class MetadataBackfillService {
         backfillableSourceIDs: @escaping () -> Set<String> = { [] },
         bareOnlySourceIDs: @escaping () -> Set<String> = { [] },
         offlineReadableSourceIDs: @escaping () -> Set<String> = { [] },
+        localFileSourceIDs: @escaping () -> Set<String> = { [] },
         manuallyReadableSourceIDs: (() -> Set<String>)? = nil,
         playbackIsActive: @escaping () -> Bool = { false }
     ) {
@@ -411,6 +407,7 @@ final class MetadataBackfillService {
         self.backfillableSourceIDs = backfillableSourceIDs
         self.bareOnlySourceIDs = bareOnlySourceIDs
         self.offlineReadableSourceIDs = offlineReadableSourceIDs
+        self.localFileSourceIDs = localFileSourceIDs
         self.manuallyReadableSourceIDs = manuallyReadableSourceIDs ?? backfillableSourceIDs
         let appSupport = FileManager.default.primuseDirectoryURL(for: .applicationSupportDirectory)
         let directory = appSupport.appendingPathComponent("Primuse", isDirectory: true)
@@ -1063,7 +1060,9 @@ final class MetadataBackfillService {
         center: NotificationCenter = .default,
         didChange: @escaping @MainActor @Sendable (Notification.Name) -> Void
     ) -> [NSObjectProtocol] {
-        [UserDefaults.didChangeNotification,
+        // ProcessInfo starts thermal monitoring on the first state access.
+        _ = ProcessInfo.processInfo.thermalState
+        return [UserDefaults.didChangeNotification,
          ProcessInfo.thermalStateDidChangeNotification,
          Notification.Name.NSProcessInfoPowerStateDidChange].map { name in
             // MusicKit can post defaults changes while holding a lock needed

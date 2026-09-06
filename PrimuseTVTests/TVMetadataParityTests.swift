@@ -7,6 +7,127 @@ import UIKit
 
 @MainActor
 final class TVMetadataParityTests: XCTestCase {
+    func testDeviceResizeAndThermalRecoveryDoNotWaitForSlowSibling() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let probe = MetadataQueueProbe()
+        var environment = MetadataReadingEnvironment(device: .init(
+            platform: .television, activeProcessorCount: 6, physicalMemory: 2 * 1_024 * 1_024 * 1_024
+        ))
+        let scanner = TVSourceScanner(
+            metadataInspections: TVMetadataInspectionStore(url: url),
+            readingEnvironment: { _ in environment }, readingMode: { .fast },
+            readMetadata: { song, _, _ in await probe.read(song) }
+        )
+        let entries = (0..<10).map { index in
+            TVDirEntry(name: "\(index).mp3", isDir: false, size: 4096, path: "/\(index).mp3")
+        }
+        let source = MusicSource(id: UUID().uuidString, name: "Queue fixture", type: .smb)
+        let task = Task {
+            await scanner.scan(source: source, lister: ListedFiles(entries: entries), dirs: ["/"],
+                               credential: nil, existingSongs: [], onSkeletonBatch: { _ in }, onMetadataBatch: { _ in })
+        }
+        defer { task.cancel() }
+        try await waitForMetadataReads(2, probe: probe)
+        let initial = await probe.started
+        await probe.release(initial[1])
+        try await waitForMetadataReads(3, probe: probe)
+        let started = await probe.started
+        // The first read remains blocked while a freed slot accepts new work.
+        environment.thermalState = .critical
+        scanner.readingConfigurationChanged()
+        await probe.release(started[2])
+        try await Task.sleep(for: .milliseconds(50))
+        let pausedCount = await probe.started.count
+        XCTAssertEqual(pausedCount, 3)
+        environment.thermalState = .nominal
+        environment.device = .init(platform: .television, activeProcessorCount: 6,
+                                   physicalMemory: 4 * 1_024 * 1_024 * 1_024)
+        scanner.readingConfigurationChanged()
+        try await waitForMetadataReads(6, probe: probe)
+        await probe.releaseAll()
+        let result = await task.value
+        let allReads = await probe.started
+        XCTAssertEqual(allReads.count, 10)
+        XCTAssertEqual(Set(allReads).count, 10)
+        XCTAssertTrue(result.metadataCompleted)
+        XCTAssertEqual(result.songs.count, 10)
+    }
+
+    func testMetadataDeliveryFailureExitsEvenDuringThermalPause() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var thermal = MetadataReadingThermalState.nominal
+        let scanner = TVSourceScanner(
+            metadataInspections: TVMetadataInspectionStore(url: url),
+            readingEnvironment: { _ in .init(thermalState: thermal) }, readingMode: { .energySaving },
+            readMetadata: { song, _, _ in
+                TVMetadataEnrichmentResult(song: song, status: .enriched, errorDescription: nil, inspectionComplete: true)
+            }
+        )
+        let entries = (0..<25).map {
+            TVDirEntry(name: "\($0).mp3", isDir: false, size: 4096, path: "/\($0).mp3")
+        }
+        let result = await scanner.scan(
+            source: MusicSource(id: UUID().uuidString, name: "Queue fixture", type: .smb),
+            lister: ListedFiles(entries: entries), dirs: ["/"], credential: nil, existingSongs: [],
+            onSkeletonBatch: { _ in }, onMetadataBatch: { _ in
+                thermal = .critical
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+        )
+        if case .metadataDeliveryFailed = result.completion {} else {
+            XCTFail("Publication errors must leave the queue through the existing failure path")
+        }
+        XCTAssertFalse(result.metadataCompleted)
+        XCTAssertFalse(result.enumerationCompleted, "A failed scan must not authorize pruning")
+        XCTAssertEqual(result.songs.count, 25)
+    }
+
+    private func waitForMetadataReads(_ count: Int, probe: MetadataQueueProbe) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while await probe.started.count < count, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let actual = await probe.started.count
+        XCTAssertEqual(actual, count)
+        guard actual == count else { throw URLError(.timedOut) }
+    }
+
+    private actor MetadataQueueProbe {
+        var started: [String] = []
+        private var gates: [String: CheckedContinuation<Void, Never>] = [:]
+        private var released: Set<String> = []
+        private var allReleased = false
+
+        func read(_ song: Song) async -> TVMetadataEnrichmentResult {
+            started.append(song.id)
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if allReleased || released.contains(song.id) || Task.isCancelled {
+                        continuation.resume()
+                    } else { gates[song.id] = continuation }
+                }
+            } onCancel: {
+                Task { await self.release(song.id) }
+            }
+            return TVMetadataEnrichmentResult(song: song, status: Task.isCancelled ? .cancelled : .enriched,
+                                              errorDescription: nil, inspectionComplete: true)
+        }
+
+        func release(_ id: String) {
+            released.insert(id)
+            gates.removeValue(forKey: id)?.resume()
+        }
+
+        func releaseAll() {
+            allReleased = true
+            let active = Array(gates.values)
+            gates.removeAll()
+            active.forEach { $0.resume() }
+        }
+    }
+
     private func song() -> Song {
         Song(id: UUID().uuidString, title: "Track", albumTitle: "Album", artistName: "Folder",
              albumArtistName: "Folder", duration: 120, fileFormat: .mp3,

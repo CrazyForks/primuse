@@ -3,6 +3,7 @@ import AMSMB2
 import CryptoKit
 import Foundation
 import PrimuseKit
+import UIKit
 
 /// 目录项(浏览/扫描用)。
 struct TVDirEntry: Sendable, Identifiable, Hashable {
@@ -342,9 +343,38 @@ final class TVSourceScanner {
     var currentFile: String = ""
     var metadataIssueCount = 0
     private let metadataInspections: TVMetadataInspectionStore
+    @ObservationIgnored var readingEnvironment: (Bool) -> MetadataReadingEnvironment
+    @ObservationIgnored private let readingMode: () -> MetadataReadingMode
+    @ObservationIgnored private let readMetadata: @Sendable (
+        Song, SidecarDirectoryIndex<TVDirEntry>, TVMetadataReaderPool
+    ) async -> TVMetadataEnrichmentResult
+    @ObservationIgnored private var metadataScheduler: MetadataReadScheduler<Int, TVMetadataEnrichmentResult>?
 
-    init(metadataInspections: TVMetadataInspectionStore = .shared) {
+    init(
+        metadataInspections: TVMetadataInspectionStore = .shared,
+        readingEnvironment: @escaping (Bool) -> MetadataReadingEnvironment = {
+            .current(playbackActive: false, offlineSource: $0)
+        },
+        readingMode: @escaping () -> MetadataReadingMode = {
+            MetadataReadingMode.resolve(
+                storedValue: UserDefaults.standard.string(forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey),
+                legacyFastEnabled: UserDefaults.standard.bool(forKey: MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
+            )
+        },
+        readMetadata: @escaping @Sendable (
+            Song, SidecarDirectoryIndex<TVDirEntry>, TVMetadataReaderPool
+        ) async -> TVMetadataEnrichmentResult = {
+            await TVMetadataEnricher.enrich(song: $0, sidecars: $1, using: $2)
+        }
+    ) {
         self.metadataInspections = metadataInspections
+        self.readingEnvironment = readingEnvironment
+        self.readingMode = readingMode
+        self.readMetadata = readMetadata
+    }
+
+    func readingConfigurationChanged() {
+        metadataScheduler?.configurationChanged()
     }
 
     private static let maximumScanDepth = 64
@@ -1018,87 +1048,80 @@ final class TVSourceScanner {
         }
         var pendingMetadataBatch: [Song] = []
         var metadataFailureCount = 0
-        var itemOffset = 0
-        do {
-            while itemOffset < items.count {
-                try Task.checkCancellation()
-                let upperBound = min(
-                    itemOffset + TVScanPipelinePolicy.metadataConcurrency,
-                    items.count
-                )
-                let positions = Array(itemOffset..<upperBound)
-                let results = await withTaskGroup(
-                    of: (Int, TVMetadataEnrichmentResult).self,
-                    returning: [(Int, TVMetadataEnrichmentResult)].self
-                ) { group in
-                    for position in positions {
-                        let item = items[position]
-                        if !rereadMetadata, TVScanPipelinePolicy.canReuseMetadata(
-                            existing: item.existing,
-                            candidate: item.candidate
-                        ), let existing = item.existing,
-                           await metadataInspections.isCurrent(existing, sidecars: item.sidecars) {
-                            var reused = item.song
-                            reused.coverArtFileName = existing.coverArtFileName
-                            reused.lyricsFileName = existing.lyricsFileName
-                            group.addTask {
-                                (position, TVMetadataEnrichmentResult(song: reused, status: .enriched,
-                                                                     errorDescription: nil, inspectionComplete: true))
-                            }
-                            continue
-                        }
-                        group.addTask {
-                            let result = await TVMetadataEnricher.enrich(
-                                song: item.song,
-                                sidecars: item.sidecars,
-                                using: readerPool
-                            )
-                            return (position, result)
-                        }
-                    }
-                    var values: [(Int, TVMetadataEnrichmentResult)] = []
-                    for await value in group { values.append(value) }
-                    return values.sorted { $0.0 < $1.0 }
-                }
-
-                for (position, result) in results {
-                    switch result.status {
-                    case .enriched:
-                        if !result.inspectionComplete { metadataFailureCount += 1 }
-                        await metadataInspections.record(
-                            result.song, sidecars: items[position].sidecars, complete: result.inspectionComplete
-                        )
-                        items[position].song = result.song
-                        songsByID[result.song.id] = result.song
-                        pendingMetadataBatch.append(result.song)
-                    case .failed, .timedOut:
-                        metadataFailureCount += 1
-                    case .cancelled:
-                        throw CancellationError()
-                    }
-                    metadataIssueCount = metadataFailureCount
-                    if pendingMetadataBatch.count
-                        >= TVScanPipelinePolicy.publicationBatchSize {
-                        let batch = Array(
-                            pendingMetadataBatch.prefix(
-                                TVScanPipelinePolicy.publicationBatchSize
-                            )
-                        )
-                        do {
-                            try await onMetadataBatch(batch)
-                            pendingMetadataBatch.removeFirst(batch.count)
-                        } catch is CancellationError {
-                            throw CancellationError()
-                        } catch {
-                            throw TVScanPipelineError.metadataDelivery(
-                                error.localizedDescription
-                            )
-                        }
-                    }
-                }
-                itemOffset = upperBound
-                currentFile = items[upperBound - 1].song.filePath
+        let metadataItems = items
+        let scheduler = MetadataReadScheduler<Int, TVMetadataEnrichmentResult>()
+        metadataScheduler = scheduler
+        // Read thermalState before observing it, as required by ProcessInfo.
+        _ = readingEnvironment(source.type == .local)
+        let observers = [ProcessInfo.thermalStateDidChangeNotification,
+                         UserDefaults.didChangeNotification,
+                         UIApplication.didEnterBackgroundNotification,
+                         UIApplication.didBecomeActiveNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
+                Task { @MainActor in scheduler.configurationChanged() }
             }
+        }
+        defer {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }
+            if metadataScheduler === scheduler { metadataScheduler = nil }
+        }
+        var deliveryError: (any Error)?
+        do {
+            let cancelled = await scheduler.run(
+                items: Array(metadataItems.indices),
+                limits: { [self] in
+                    MetadataBackfillExecutionPolicy.limits(
+                        for: UIApplication.shared.applicationState == .background ? .background : .standard,
+                        preference: readingMode(),
+                        environment: readingEnvironment(source.type == .local)
+                    )
+                },
+                shouldContinue: { deliveryError == nil },
+                read: { [self] position in
+                    let item = metadataItems[position]
+                    if !rereadMetadata, TVScanPipelinePolicy.canReuseMetadata(
+                        existing: item.existing, candidate: item.candidate
+                    ), let existing = item.existing,
+                       await metadataInspections.isCurrent(existing, sidecars: item.sidecars) {
+                        var reused = item.song
+                        reused.coverArtFileName = existing.coverArtFileName
+                        reused.lyricsFileName = existing.lyricsFileName
+                        return TVMetadataEnrichmentResult(song: reused, status: .enriched,
+                                                          errorDescription: nil, inspectionComplete: true)
+                    }
+                    return await readMetadata(item.song, item.sidecars, readerPool)
+                }
+            ) { [self] position, result in
+                switch result.status {
+                case .enriched:
+                    if !result.inspectionComplete { metadataFailureCount += 1 }
+                    await metadataInspections.record(
+                        result.song, sidecars: metadataItems[position].sidecars, complete: result.inspectionComplete
+                    )
+                    songsByID[result.song.id] = result.song
+                    pendingMetadataBatch.append(result.song)
+                case .failed, .timedOut:
+                    metadataFailureCount += 1
+                case .cancelled:
+                    deliveryError = CancellationError()
+                    return
+                }
+                metadataIssueCount = metadataFailureCount
+                currentFile = result.song.filePath
+                if pendingMetadataBatch.count >= TVScanPipelinePolicy.publicationBatchSize {
+                    let batch = Array(pendingMetadataBatch.prefix(TVScanPipelinePolicy.publicationBatchSize))
+                    do {
+                        try await onMetadataBatch(batch)
+                        pendingMetadataBatch.removeFirst(batch.count)
+                    } catch is CancellationError {
+                        deliveryError = CancellationError()
+                    } catch {
+                        deliveryError = TVScanPipelineError.metadataDelivery(error.localizedDescription)
+                    }
+                }
+            }
+            if let deliveryError { throw deliveryError }
+            if cancelled { throw CancellationError() }
             try Task.checkCancellation()
             try await flush(
                 &pendingMetadataBatch,

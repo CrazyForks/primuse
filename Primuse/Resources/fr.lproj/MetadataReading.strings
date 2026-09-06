@@ -2,7 +2,7 @@
 "automatic" = "Automatique";
 "fast" = "Pleine vitesse";
 "energySaving" = "Économiser l’énergie";
-"help" = "S’adapte à la lecture, au mode d’alimentation et à la température. Les changements s’appliquent pendant la lecture.";
+"help" = "S’adapte aux cœurs, à la mémoire, à la lecture et à la température. Le changement de mode est immédiat ; les protections restent actives à pleine vitesse.";
 "playback" = "Priorité à la lecture audio";
 "lowPower" = "Mode économie d’énergie";
 "thermal" = "Ralentissement pour refroidir l’appareil";

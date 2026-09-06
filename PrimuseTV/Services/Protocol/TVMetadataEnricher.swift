@@ -140,7 +140,8 @@ actor TVMetadataReaderPool {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 12
         configuration.timeoutIntervalForResource = 20
-        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpMaximumConnectionsPerHost = MetadataReadingDeviceProfile.current
+            .maximumWorkers(offlineSource: false)
         session = URLSession(configuration: configuration)
     }
 

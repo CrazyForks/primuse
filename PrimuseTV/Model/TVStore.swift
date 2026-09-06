@@ -333,6 +333,10 @@ final class TVStore {
         hasPendingSnapshotRecovery = pendingSnapshotRecovery
         locallyRemovedSourceIDs = Set(defaults.stringArray(forKey: "tv.removedSourceIDs") ?? [])
         locallyScannedSourceIDs = Set(defaults.stringArray(forKey: "tv.scannedSourceIDs") ?? [])
+        scanner.readingEnvironment = { [weak self] offline in
+            .current(playbackActive: self?.isPlaying == true || self?.isLoading == true,
+                     offlineSource: offline)
+        }
         engine.onEnded = { [weak self] in self?.handlePlaybackEnded() }
         engine.onFailure = { [weak self] message in
             self?.handlePlaybackFailure(message)
@@ -3139,6 +3143,7 @@ final class TVStore {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.observePlaybackChanges()
+                self.scanner.readingConfigurationChanged()
                 self.updateListeningMonitor()
             }
         }

@@ -4,6 +4,78 @@ import Testing
 
 @Suite("Adaptive metadata reading")
 struct MetadataReadSchedulerTests {
+    @Test func deviceBudgetsAccountForCoresMemoryAndPlatform() {
+        let gib: UInt64 = 1_024 * 1_024 * 1_024
+        let profiles: [(MetadataReadingDeviceProfile.Platform, Int, UInt64, Int)] = [
+            (.mobile, 2, 2, 1), (.mobile, 6, 3, 3), (.mobile, 6, 8, 5),
+            (.mobile, 10, 16, 6), (.desktop, 8, 8, 4), (.desktop, 16, 32, 8),
+            (.television, 4, 2, 2), (.television, 6, 4, 4)
+        ]
+        for (platform, cores, memory, expected) in profiles {
+            let profile = MetadataReadingDeviceProfile(
+                platform: platform, activeProcessorCount: cores, physicalMemory: memory * gib
+            )
+            let environment = MetadataReadingEnvironment(offlineSource: true, device: profile)
+            let fast = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: .fast, environment: environment
+            )
+            let automatic = MetadataBackfillExecutionPolicy.limits(
+                for: .standard, preference: .automatic, environment: environment
+            )
+            #expect(fast.workerCount == expected)
+            #expect(automatic.workerCount <= fast.workerCount)
+            #expect(automatic.workerCount >= 1)
+            #expect(profile.maximumWorkers(offlineSource: false) == min(expected, 4))
+        }
+    }
+
+    @Test func deviceBudgetDoesNotTrustLargeOrMissingHardwareValues() {
+        for platform in [MetadataReadingDeviceProfile.Platform.mobile, .desktop, .television] {
+            let missing = MetadataReadingDeviceProfile(platform: platform, activeProcessorCount: 0, physicalMemory: 0)
+            #expect(missing.maximumWorkers(offlineSource: true) == 1)
+            let large = MetadataReadingDeviceProfile(platform: platform, activeProcessorCount: Int.max, physicalMemory: UInt64.max)
+            #expect(large.maximumWorkers(offlineSource: true) <= 8)
+            #expect(large.maximumWorkers(offlineSource: false) <= 4)
+        }
+    }
+
+    @Test func deviceCapacityNeverOverridesProtection() {
+        for platform in [MetadataReadingDeviceProfile.Platform.mobile, .desktop, .television] {
+            for preference in MetadataReadingMode.allCases {
+                let device = MetadataReadingDeviceProfile(
+                    platform: platform, activeProcessorCount: 64, physicalMemory: 128 * 1_024 * 1_024 * 1_024
+                )
+                var environment = MetadataReadingEnvironment(offlineSource: true, device: device)
+                environment.thermalState = .critical
+                #expect(MetadataBackfillExecutionPolicy.limits(for: .standard, preference: preference, environment: environment).workerCount == 0)
+                environment.thermalState = .nominal
+                environment.lowPowerMode = true
+                #expect(MetadataBackfillExecutionPolicy.limits(for: .standard, preference: preference, environment: environment).workerCount == 1)
+                environment.lowPowerMode = false
+                environment.playbackActive = true
+                let playing = MetadataBackfillExecutionPolicy.limits(for: .standard, preference: preference, environment: environment)
+                #expect(playing.workerCount <= (platform == .television ? 1 : 2))
+                #expect(MetadataBackfillExecutionPolicy.limits(for: .background, preference: preference, environment: environment).workerCount == 1)
+            }
+        }
+    }
+
+    @Test @MainActor func completionFailureStopsEvenWhenBudgetBecomesZero() async {
+        let scheduler = MetadataReadScheduler<Int, Int>()
+        var workers = 1
+        var failed = false
+        var reads: [Int] = []
+        let cancelled = await scheduler.run(
+            items: [1, 2, 3],
+            limits: { .init(workerCount: workers, snapshotLimit: 3, interRequestDelay: 0, flushInterval: 5) },
+            shouldContinue: { !failed },
+            read: { item in reads.append(item); return item },
+            completed: { _, _ in failed = true; workers = 0 }
+        )
+        #expect(cancelled)
+        #expect(reads == [1])
+    }
+
     @Test func preferencesMigrateWithoutOverridingExplicitSelection() {
         #expect(MetadataReadingMode.resolve(storedValue: nil, legacyFastEnabled: false) == .automatic)
         #expect(MetadataReadingMode.resolve(storedValue: nil, legacyFastEnabled: true) == .fast)

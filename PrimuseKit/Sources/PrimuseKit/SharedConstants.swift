@@ -2939,22 +2939,104 @@ public enum MetadataReadingConstraint: String, Sendable {
     case none, playback, lowPower, thermal, cooling, background
 }
 
+public struct MetadataReadingDeviceProfile: Sendable, Equatable {
+    public enum Platform: Sendable {
+        case mobile, desktop, television
+    }
+
+    public let platform: Platform
+    public let activeProcessorCount: Int
+    public let physicalMemory: UInt64
+
+    public init(platform: Platform, activeProcessorCount: Int, physicalMemory: UInt64) {
+        self.platform = platform
+        self.activeProcessorCount = max(1, activeProcessorCount)
+        self.physicalMemory = physicalMemory
+    }
+
+    // A deterministic compatibility profile for callers without device context.
+    public static let baseline = Self(
+        platform: .mobile, activeProcessorCount: 6, physicalMemory: 4 * 1_024 * 1_024 * 1_024
+    )
+
+    public static var current: Self {
+        #if os(macOS)
+        let platform = Platform.desktop
+        #elseif os(tvOS)
+        let platform = Platform.television
+        #else
+        let platform = Platform.mobile
+        #endif
+        return Self(platform: platform,
+                    activeProcessorCount: ProcessInfo.processInfo.activeProcessorCount,
+                    physicalMemory: ProcessInfo.processInfo.physicalMemory)
+    }
+
+    public func maximumWorkers(offlineSource: Bool) -> Int {
+        let gib: UInt64 = 1_024 * 1_024 * 1_024
+        // These are conservative admission limits, not a CPU benchmark. Leave
+        // room for rendering/playback and bound tag plus artwork allocations;
+        // a large desktop's logical core count must not multiply readers freely.
+        let platformLimit: Int
+        let memoryPerWorker: UInt64
+        let reservedProcessors: Int
+        switch platform {
+        case .mobile:
+            platformLimit = 6
+            memoryPerWorker = gib
+            reservedProcessors = 1
+        case .desktop:
+            platformLimit = 8
+            memoryPerWorker = 2 * gib
+            reservedProcessors = 2
+        case .television:
+            platformLimit = 4
+            memoryPerWorker = gib
+            reservedProcessors = 1
+        }
+        let processors = max(1, activeProcessorCount - reservedProcessors)
+        let memory = max(1, Int(clamping: physicalMemory / memoryPerWorker))
+        // Remote reads also compete for one source's connection/rate budget.
+        return min(platformLimit, processors, memory, offlineSource ? platformLimit : 4)
+    }
+}
+
 public struct MetadataReadingEnvironment: Sendable {
     public var thermalState: MetadataReadingThermalState
     public var lowPowerMode: Bool
     public var playbackActive: Bool
     public var offlineSource: Bool
+    public var device: MetadataReadingDeviceProfile
 
     public init(
         thermalState: MetadataReadingThermalState = .nominal,
         lowPowerMode: Bool = false,
         playbackActive: Bool = false,
-        offlineSource: Bool = false
+        offlineSource: Bool = false,
+        device: MetadataReadingDeviceProfile = .baseline
     ) {
         self.thermalState = thermalState
         self.lowPowerMode = lowPowerMode
         self.playbackActive = playbackActive
         self.offlineSource = offlineSource
+        self.device = device
+    }
+
+    public static func current(playbackActive: Bool, offlineSource: Bool) -> Self {
+        let thermal: MetadataReadingThermalState = switch ProcessInfo.processInfo.thermalState {
+        case .nominal: .nominal
+        case .fair: .fair
+        case .serious: .serious
+        case .critical: .critical
+        @unknown default: .serious
+        }
+        #if os(iOS) || os(macOS)
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        #else
+        let lowPower = false
+        #endif
+        return Self(thermalState: thermal, lowPowerMode: lowPower,
+                    playbackActive: playbackActive, offlineSource: offlineSource, device: .current)
     }
 }
 
@@ -2991,9 +3073,9 @@ public enum MetadataBackfillExecutionPolicy {
     ) -> MetadataBackfillExecutionLimits {
         let isBackground = mode == .background || mode == .backgroundDuringPlayback
         let offline = environment.offlineSource || mode == .foregroundDeviceLocal
-        // Keep full-speed reads bounded even on machines with many cores;
-        // each parser can hold both a tag buffer and decoded artwork.
-        var workers = preference == .fast ? 4 : (offline ? 3 : 2)
+        let ceiling = environment.device.maximumWorkers(offlineSource: offline)
+        let automatic = offline ? min(4, (ceiling + 2) / 2) : min(3, (ceiling + 1) / 2)
+        var workers = preference == .fast ? ceiling : min(ceiling, automatic)
         var delay: TimeInterval = 0
         var snapshot = preference == .fast ? 192 : 96
         var flush: TimeInterval = 5
@@ -3004,7 +3086,7 @@ public enum MetadataBackfillExecutionPolicy {
             flush = 10
         }
         if environment.playbackActive {
-            workers = min(workers, offline ? 2 : 1)
+            workers = min(workers, offline && environment.device.platform != .television ? 2 : 1)
         }
         if environment.lowPowerMode {
             workers = 1

@@ -2,7 +2,7 @@
 "automatic" = "Automatycznie";
 "fast" = "Pełna prędkość";
 "energySaving" = "Oszczędzanie energii";
-"help" = "Dostosowuje się do odtwarzania, zasilania i temperatury. Zmiany działają podczas odczytu.";
+"help" = "Dostosowuje się do rdzeni, pamięci, odtwarzania i temperatury. Zmiana trybu działa od razu; zabezpieczenia pozostają aktywne przy pełnej prędkości.";
 "playback" = "Priorytet odtwarzania";
 "lowPower" = "Tryb niskiego zużycia energii";
 "thermal" = "Wolniejszy odczyt dla schłodzenia";

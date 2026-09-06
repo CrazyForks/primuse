@@ -6,7 +6,6 @@ import Foundation
 /// catalogue from drifting from the generic connector scanner.
 public enum TVScanPipelinePolicy {
     public static let publicationBatchSize = 20
-    public static let metadataConcurrency = 2
 
     public static func songID(
         sourceID: String,

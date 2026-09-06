@@ -2,7 +2,7 @@
 "automatic" = "Otomatik";
 "fast" = "Tam hız";
 "energySaving" = "Enerji tasarrufu";
-"help" = "Çalmaya, güç moduna ve sıcaklığa uyum sağlar. Değişiklikler okuma sırasında uygulanır.";
+"help" = "İşlemci çekirdeklerine, belleğe, oynatmaya ve sıcaklığa uyarlanır. Mod değişiklikleri hemen uygulanır; tam hızda da korumalar etkin kalır.";
 "playback" = "Çalmaya öncelik veriliyor";
 "lowPower" = "Düşük Güç Modu";
 "thermal" = "Soğutmak için yavaşlatıldı";

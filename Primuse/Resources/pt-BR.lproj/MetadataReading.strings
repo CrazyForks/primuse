@@ -2,7 +2,7 @@
 "automatic" = "Automático";
 "fast" = "Velocidade máxima";
 "energySaving" = "Economizar energia";
-"help" = "Adapta-se à reprodução, à energia e à temperatura. As mudanças são aplicadas durante a leitura.";
+"help" = "Adapta-se aos núcleos, à memória, à reprodução e à temperatura. A mudança de modo é imediata; a velocidade máxima mantém as proteções.";
 "playback" = "Priorizando a reprodução";
 "lowPower" = "Modo de Pouca Energia";
 "thermal" = "Leitura reduzida para resfriar";

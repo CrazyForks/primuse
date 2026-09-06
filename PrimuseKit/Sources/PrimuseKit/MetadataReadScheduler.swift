@@ -24,6 +24,7 @@ public final class MetadataReadScheduler<Item: Sendable, Outcome: Sendable> {
         items: [Item],
         limits: @escaping @MainActor () -> MetadataBackfillExecutionLimits,
         shouldRead: @escaping @MainActor (Item) -> Bool = { _ in true },
+        shouldContinue: @escaping @MainActor () -> Bool = { true },
         priority: TaskPriority = .utility,
         read: @escaping @MainActor @Sendable (Item) async -> Outcome,
         completed: @escaping @MainActor (Item, Outcome) async -> Void
@@ -53,6 +54,7 @@ public final class MetadataReadScheduler<Item: Sendable, Outcome: Sendable> {
                 } else if case .skipped = event {
                     inFlightCount -= 1
                 }
+                guard shouldContinue() else { didCancel = true; break }
                 let budget = limits()
                 while !Task.isCancelled,
                       inFlightCount < budget.workerCount,

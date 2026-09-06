@@ -651,6 +651,13 @@ final class AppServices {
                 []
                 #endif
             },
+            localFileSourceIDs: {
+                #if os(macOS)
+                Set(store.sources.filter { $0.isEnabled && $0.type == .local }.map(\.id))
+                #else
+                []
+                #endif
+            },
             manuallyReadableSourceIDs: {
                 Set(store.sources.filter {
                     $0.isEnabled
