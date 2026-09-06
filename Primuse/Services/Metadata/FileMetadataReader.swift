@@ -311,20 +311,35 @@ enum FileMetadataReader {
         private var cachedData: Data?
         private var cachedExtension: String?
         private var cachedMetadata: Metadata?
+        private var cachedCompleteFLAC = false
 
         func read(from data: Data, fileExtension: String, id3TailData: Data? = nil) async -> Metadata {
             guard !data.isEmpty else { return Metadata() }
+            // Legacy FLAC files can also carry ID3 tails. Keep their original
+            // AVFoundation/native merge precedence independently of the cache.
+            if id3TailData != nil, fileExtension.lowercased() == "flac" {
+                return await FileMetadataReader.read(from: data, fileExtension: fileExtension,
+                                                     id3TailData: id3TailData)
+            }
             let metadata: Metadata
             if cachedData == data, cachedExtension == fileExtension, let cachedMetadata {
                 metadata = cachedMetadata
+            } else if let native = completeFLACMetadata(from: data, fileExtension: fileExtension) {
+                metadata = native
+                cachedData = data
+                cachedExtension = fileExtension
+                cachedMetadata = metadata
+                cachedCompleteFLAC = true
             } else {
                 metadata = await readAssetMetadata(from: data, fileExtension: fileExtension)
                 cachedData = data
                 cachedExtension = fileExtension
                 cachedMetadata = metadata
+                cachedCompleteFLAC = false
             }
             return applyingRangeFallbacks(to: metadata, data: data,
-                                          fileExtension: fileExtension, id3TailData: id3TailData)
+                                          fileExtension: fileExtension, id3TailData: id3TailData,
+                                          flacAlreadyParsed: cachedCompleteFLAC)
         }
     }
 
@@ -341,13 +356,89 @@ enum FileMetadataReader {
         return metadata
     }
 
+    /// Complete FLAC metadata already describes the audio and tags. Avoid
+    /// opening an AVAsset for each remote prefix; unusual or incomplete files
+    /// retain the AVFoundation fallback. Bitrate requires the full file size,
+    /// which the backfill service supplies after parsing the bounded prefix.
+    static func completeFLACMetadata(from data: Data, fileExtension: String) -> Metadata? {
+        guard fileExtension.lowercased() == "flac",
+              data.starts(with: Data("fLaC".utf8)) else { return nil }
+        var cursor = 4
+        var hasComments = false
+        var hasPicture = false
+        var complete = false
+        while cursor + 4 <= data.count {
+            let header = data[cursor]
+            let type = header & 0x7F
+            let length = readUInt24BE(data, at: cursor + 1)
+            let start = cursor + 4
+            guard length <= data.count - start else { return nil }
+            let end = start + length
+            if cursor == 4 {
+                guard type == 0, length == 34 else { return nil }
+                let minimum = Int(data[start]) << 8 | Int(data[start + 1])
+                let maximum = Int(data[start + 2]) << 8 | Int(data[start + 3])
+                guard minimum >= 16, maximum >= minimum else { return nil }
+            } else {
+                switch type {
+                case 1: break
+                case 3:
+                    guard length.isMultiple(of: 18) else { return nil }
+                case 4:
+                    guard !hasComments,
+                          completeFLACComments(data.subdata(in: start..<end)) else { return nil }
+                    hasComments = true
+                case 6:
+                    // Preserve AVFoundation's artwork selection for files
+                    // carrying several pictures or nonstandard picture data.
+                    guard !hasPicture,
+                          parseFLACPicture(data.subdata(in: start..<end)) != nil else { return nil }
+                    hasPicture = true
+                default: return nil
+                }
+            }
+            cursor = end
+            if header & 0x80 != 0 {
+                complete = true
+                break
+            }
+        }
+        guard complete, let flac = parseFLACMetadata(from: data),
+              (flac.duration ?? 0) > 0, (flac.sampleRate ?? 0) > 0,
+              let bitDepth = flac.bitDepth, (4...32).contains(bitDepth) else { return nil }
+        var metadata = Metadata()
+        applyFLACFallback(to: &metadata, parsed: flac)
+        return metadata
+    }
+
+    private static func completeFLACComments(_ block: Data) -> Bool {
+        var cursor = 0
+        guard let vendorLength = readUInt32LE(block, cursor: &cursor),
+              skip(vendorLength, in: block, cursor: &cursor),
+              let count = readUInt32LE(block, cursor: &cursor), count <= 10_000 else { return false }
+        for _ in 0..<count {
+            guard let length = readUInt32LE(block, cursor: &cursor),
+                  length <= block.count - cursor,
+                  let text = String(data: block.subdata(in: cursor..<(cursor + length)), encoding: .utf8),
+                  let separator = text.firstIndex(of: "=") else { return false }
+            let key = text[..<separator].uppercased()
+            guard !key.isEmpty,
+                  key != "METADATA_BLOCK_PICTURE", key != "COVERART" else { return false }
+            cursor += length
+        }
+        return cursor == block.count
+    }
+
     private static func applyingRangeFallbacks(
-        to base: Metadata, data: Data, fileExtension: String, id3TailData: Data?
+        to base: Metadata, data: Data, fileExtension: String, id3TailData: Data?,
+        flacAlreadyParsed: Bool = false
     ) -> Metadata {
         var metadata = base
         applyISOBaseMediaLyricsFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyID3Fallback(to: &metadata, data: data, tailData: id3TailData)
-        applyFLACFallback(to: &metadata, data: data, fileExtension: fileExtension)
+        if !flacAlreadyParsed {
+            applyFLACFallback(to: &metadata, data: data, fileExtension: fileExtension)
+        }
         applyWAVEFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyMPEGFrameFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyContainerTagFallback(to: &metadata, headData: data, tailData: id3TailData,
@@ -1370,6 +1461,10 @@ enum FileMetadataReader {
             return
         }
 
+        applyFLACFallback(to: &metadata, parsed: flac)
+    }
+
+    private static func applyFLACFallback(to metadata: inout Metadata, parsed flac: FLACNativeMetadata) {
         if metadata.duration == nil || (metadata.duration ?? 0) <= 0 {
             metadata.duration = flac.duration
         }

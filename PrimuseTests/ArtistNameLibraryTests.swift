@@ -88,6 +88,119 @@ final class FileAlbumArtistLibraryTests: XCTestCase {
         XCTAssertEqual(metadata.albumArtist, "Host; Guest")
     }
 
+    func testCompleteFLACRangePreservesTagsAndAudioProperties() async throws {
+        let data = completeFLACFixture()
+        let native = try XCTUnwrap(FileMetadataReader.completeFLACMetadata(from: data, fileExtension: "FLAC"))
+        let reference = await FileMetadataReader.read(from: data, fileExtension: "flac")
+        let result = await FileMetadataReader.RangeReadSession().read(from: data, fileExtension: "flac")
+        for metadata in [native, reference, result] {
+            XCTAssertEqual(metadata.title, "Track")
+            XCTAssertEqual(metadata.sourceArtistNames, ["Singer One", "Singer Two"])
+            XCTAssertEqual(metadata.artist, "Singer One; Singer Two")
+            XCTAssertEqual(metadata.albumTitle, "Compilation")
+            XCTAssertEqual(metadata.albumArtist, "Various Artists")
+            XCTAssertEqual(metadata.trackNumber, 2)
+            XCTAssertEqual(metadata.discNumber, 1)
+            XCTAssertEqual(metadata.year, 2026)
+            XCTAssertEqual(metadata.genre, "Pop")
+            XCTAssertEqual(metadata.sampleRate, 44_100)
+            XCTAssertEqual(metadata.lyricsText, "[00:00.00]Original lyrics")
+            XCTAssertEqual(metadata.replayGainTrackGain, -7.5)
+            XCTAssertEqual(metadata.replayGainTrackPeak, 0.95)
+            XCTAssertEqual(metadata.replayGainAlbumGain, -6)
+            XCTAssertEqual(metadata.replayGainAlbumPeak, 0.98)
+            XCTAssertEqual(metadata.coverArtData, flacCoverFixture)
+        }
+        // AVFoundation may round a bounded FLAC prefix to whole audio frames
+        // and report zero bit depth; STREAMINFO has the exact source values.
+        for metadata in [native, result] {
+            XCTAssertEqual(try XCTUnwrap(metadata.duration), 1, accuracy: 0.001)
+            XCTAssertEqual(metadata.bitDepth, 16)
+            XCTAssertEqual(metadata.lyricsLanguageCode, "en")
+            XCTAssertEqual(metadata.languageTaggedLyrics["zh-Hans"], "[00:00.00]译文")
+        }
+        XCTAssertEqual(result.languageTaggedLyrics, reference.languageTaggedLyrics)
+        XCTAssertEqual(result.languageTaggedTranslations, reference.languageTaggedTranslations)
+        XCTAssertEqual(result.translatedLyricsText, reference.translatedLyricsText)
+    }
+
+    func testFLACFastSessionPreservesLegacyTailPrecedence() async {
+        let head = completeFLACFixture()
+        let tail = tagFixture(format: "mp3", key: "TPE2", singer: "Tail Artist")
+        let session = FileMetadataReader.RangeReadSession()
+        _ = await session.read(from: head, fileExtension: "flac")
+        let result = await session.read(from: head, fileExtension: "flac", id3TailData: tail)
+        let reference = await FileMetadataReader.read(from: head, fileExtension: "flac", id3TailData: tail)
+        XCTAssertEqual(result.artist, "Singer One; Singer Two")
+        XCTAssertEqual(result.title, reference.title)
+        XCTAssertEqual(result.artist, reference.artist)
+        XCTAssertEqual(result.sourceArtistNames, reference.sourceArtistNames)
+        XCTAssertEqual(result.albumArtist, reference.albumArtist)
+        XCTAssertEqual(result.lyricsText, reference.lyricsText)
+        XCTAssertEqual(result.coverArtData, reference.coverArtData)
+        let withoutTail = await session.read(from: head, fileExtension: "flac")
+        XCTAssertEqual(withoutTail.sourceArtistNames, ["Singer One", "Singer Two"])
+        XCTAssertEqual(withoutTail.duration ?? 0, 1, accuracy: 0.001)
+    }
+
+    func testFLACFastPathFallsBackForIncompleteOrUnusualMetadata() async {
+        let data = completeFLACFixture()
+        // Every cut inside the metadata chain must wait for the remaining
+        // blocks, including a cover that arrives in an expanded range.
+        let metadataEnd = data.count - 142
+        for count in 0..<metadataEnd {
+            XCTAssertNil(FileMetadataReader.completeFLACMetadata(
+                from: Data(data.prefix(count)), fileExtension: "flac"
+            ), "prefix \(count)")
+        }
+        var unknownDuration = data
+        unknownDuration[21] &= 0xF0
+        unknownDuration.replaceSubrange(22..<26, with: [0, 0, 0, 0])
+        var invalidStreamInfo = data
+        invalidStreamInfo[8] = 0
+        invalidStreamInfo[9] = 0
+        var invalidCommentLength = data
+        // STREAMINFO ends at 42; the following comments begin with vendor length.
+        invalidCommentLength.replaceSubrange(46..<50, with: [255, 255, 255, 127])
+        let unusual = [unknownDuration, invalidStreamInfo, invalidCommentLength,
+                       completeFLACFixture(extraPicture: true),
+                       Data("ID3".utf8) + data]
+        for candidate in unusual {
+            XCTAssertNil(FileMetadataReader.completeFLACMetadata(from: candidate, fileExtension: "flac"))
+            let reference = await FileMetadataReader.read(from: candidate, fileExtension: "flac")
+            let result = await FileMetadataReader.RangeReadSession().read(from: candidate, fileExtension: "flac")
+            XCTAssertEqual(result.title, reference.title)
+            XCTAssertEqual(result.artist, reference.artist)
+            XCTAssertEqual(result.duration, reference.duration)
+            XCTAssertEqual(result.coverArtData, reference.coverArtData)
+        }
+        let session = FileMetadataReader.RangeReadSession()
+        let prefix = await session.read(from: Data(data.prefix(42)), fileExtension: "flac")
+        XCTAssertNil(prefix.coverArtData)
+        let expanded = await session.read(from: data, fileExtension: "flac")
+        XCTAssertEqual(expanded.coverArtData, flacCoverFixture)
+        XCTAssertEqual(expanded.artist, "Singer One; Singer Two")
+    }
+
+    func testFLACRangeParsingCostWithCompleteMetadata() async {
+        let data = completeFLACFixture()
+        let count = 16
+        let oldStart = ContinuousClock.now
+        for _ in 0..<count {
+            let result = await FileMetadataReader.read(from: data, fileExtension: "flac")
+            XCTAssertEqual(result.title, "Track")
+            XCTAssertGreaterThan(result.duration ?? 0, 0)
+        }
+        let oldElapsed = ContinuousClock.now - oldStart
+        let newStart = ContinuousClock.now
+        for _ in 0..<count {
+            let result = await FileMetadataReader.RangeReadSession().read(from: data, fileExtension: "flac")
+            XCTAssertEqual(result.title, "Track")
+            XCTAssertEqual(result.duration ?? 0, 1, accuracy: 0.001)
+        }
+        print("FLAC metadata benchmark: \(count) files AVFoundation=\(oldElapsed) native=\(ContinuousClock.now - newStart)")
+    }
+
     func testRereadAlbumArtistRemovesPreviouslySplitAlbums() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("AlbumArtistRebuild-\(UUID().uuidString)", isDirectory: true)
@@ -143,6 +256,40 @@ final class FileAlbumArtistLibraryTests: XCTestCase {
             ),
             duration: 180, fileFormat: .mp3, filePath: "\(id).mp3", sourceID: "local-tags"
         )
+    }
+
+    private var flacCoverFixture: Data {
+        Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
+    }
+
+    private func completeFLACFixture(extraPicture: Bool = false) -> Data {
+        func uint32(_ value: Int, littleEndian: Bool = false) -> Data {
+            Data((littleEndian ? [0, 8, 16, 24] : [24, 16, 8, 0]).map { UInt8((value >> $0) & 255) })
+        }
+        func block(_ type: UInt8, _ body: Data, last: Bool = false) -> Data {
+            Data([type | (last ? 0x80 : 0)]) + uint32(body.count).suffix(3) + body
+        }
+        // STREAMINFO and frames encode one second of 44.1 kHz, 16-bit stereo silence.
+        let streamInfo = Data(base64Encoded: "EgASAAAADgAAEArEQvAAAKxE0rEgGZAZtjnVp+KzRj6clw==")!
+        let frames = Data(base64Encoded: "//hZGABrAAAAAAAAEIr/+FkYAWwAAAAAAACH///4WRgCZQAAAAAAAL5l//hZGANiAAAAAAAAKRD/+FkYBHcAAAAAAADNUf/4WRgFcAAAAAAAAFok//hZGAZ5AAAAAAAAY77/+FkYB34AAAAAAAD0y//4WRgIUwAAAAAAACs5//h5GAkKQ3AAAAAAAACYhQ==")!
+        let tags = ["TITLE=Track", "ARTIST=Singer One", "ARTIST=Singer Two", "ALBUM=Compilation",
+                    "ALBUMARTIST=Various Artists", "TRACKNUMBER=2/10", "DISCNUMBER=1/2",
+                    "DATE=2026-09-06", "GENRE=Pop", "LYRICS=[00:00.00]Original lyrics",
+                    "LYRICS:en=[00:00.00]Original lyrics", "LYRICS:zh-Hans=[00:00.00]译文",
+                    "LYRICS_LANGUAGE=en", "REPLAYGAIN_TRACK_GAIN=-7.5 dB", "REPLAYGAIN_TRACK_PEAK=0.95",
+                    "REPLAYGAIN_ALBUM_GAIN=-6 dB", "REPLAYGAIN_ALBUM_PEAK=0.98"]
+        var comments = uint32(0, littleEndian: true) + uint32(tags.count, littleEndian: true)
+        for tag in tags {
+            let bytes = Data(tag.utf8)
+            comments += uint32(bytes.count, littleEndian: true) + bytes
+        }
+        let mime = Data("image/png".utf8)
+        let cover = flacCoverFixture
+        let picture = uint32(3) + uint32(mime.count) + mime + uint32(0)
+            + uint32(1) + uint32(1) + uint32(24) + uint32(0) + uint32(cover.count) + cover
+        var result = Data("fLaC".utf8) + block(0, streamInfo) + block(4, comments)
+        if extraPicture { result += block(6, picture) }
+        return result + block(6, picture, last: true) + frames
     }
 
     private func tagFixture(

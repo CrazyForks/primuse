@@ -4,6 +4,28 @@ import Testing
 
 @Suite("Metadata format inspection policy")
 struct MetadataInspectionPolicyTests {
+    @Test("WAV DTS probes preserve the bounded byte search")
+    func boundedWaveSignatureSearch() {
+        let limit = 64 * 1024
+        var wave = Data(repeating: 0x55, count: limit + 4)
+        wave.replaceSubrange(0..<4, with: Data("RIFF".utf8))
+        wave.replaceSubrange(8..<12, with: Data("WAVE".utf8))
+        let started = ContinuousClock.now
+        for _ in 0..<12 {
+            #expect(AudioFileSignaturePolicy.inspect(wave) == .riffWave)
+        }
+        print("WAV signature benchmark: 12 prefixes elapsed=\(ContinuousClock.now - started)")
+        for pattern: [UInt8] in [[0x7F, 0xFE, 0x80, 0x01], [0xFE, 0x7F, 0x01, 0x80],
+                                [0x1F, 0xFF, 0xE8, 0x00], [0xFF, 0x1F, 0x00, 0xE8]] {
+            for offset in [13, limit - 4, limit - 3, limit] {
+                var candidate = wave
+                candidate.replaceSubrange(offset..<(offset + 4), with: pattern)
+                #expect(AudioFileSignaturePolicy.inspect(candidate)
+                        == (offset <= limit - 4 ? .dtsInWave : .riffWave))
+            }
+        }
+    }
+
     @Test("Every declared import format has an explicit inspection route")
     func allDeclaredFormatsHaveInspectionRoute() {
         #expect(PrimuseConstants.supportedAudioExtensions.count == 44)

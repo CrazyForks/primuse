@@ -183,6 +183,51 @@ struct MetadataReadSchedulerTests {
         #expect(automatic.interRequestDelay == 1.5)
     }
 
+    @Test func thermalWorkBudgetExcludesIOWaitButIncludesOtherAppCPUWork() {
+        let light = MetadataBackfillExecutionPolicy.processingDuration(
+            cpuTimeBefore: 10, cpuTimeAfter: 10.02, fallback: 1.2
+        )
+        #expect(abs(light - 0.02) < 0.000001)
+        let idle = MetadataBackfillExecutionPolicy.limits(
+            for: .userInitiated, preference: .fast,
+            environment: .init(thermalState: .serious), recentProcessingDuration: light
+        )
+        #expect(idle.workerCount == 1)
+        #expect(idle.interRequestDelay == 0.1)
+        // CPU work on multiple threads may exceed elapsed wall time; retaining
+        // all of it prevents playback/UI work from disappearing from the budget.
+        let busy = MetadataBackfillExecutionPolicy.processingDuration(
+            cpuTimeBefore: 10, cpuTimeAfter: 10.6, fallback: 0.4
+        )
+        #expect(abs(busy - 0.6) < 0.000001)
+        let hot = MetadataBackfillExecutionPolicy.limits(
+            for: .userInitiated, preference: .fast,
+            environment: .init(thermalState: .serious), recentProcessingDuration: busy
+        )
+        #expect(hot.workerCount == 1)
+        #expect(hot.interRequestDelay == 1.5)
+    }
+
+    @Test func unavailableCPUCountersKeepConservativeCooldown() {
+        let invalid: [(Double?, Double?)] = [(nil, 10), (10, nil), (10, 9), (-1, 10),
+                                             (.nan, 10), (10, .infinity)]
+        for (before, after) in invalid {
+            #expect(MetadataBackfillExecutionPolicy.processingDuration(
+                cpuTimeBefore: before, cpuTimeAfter: after, fallback: 0.8
+            ) == 0.8)
+        }
+        for fallback in [-1.0, .nan, .infinity] {
+            let cost = MetadataBackfillExecutionPolicy.processingDuration(
+                cpuTimeBefore: nil, cpuTimeAfter: nil, fallback: fallback
+            )
+            let limits = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: .fast,
+                environment: .init(thermalState: .serious), recentProcessingDuration: cost
+            )
+            #expect(limits.interRequestDelay == 1.5)
+        }
+    }
+
     @Test func continuedProcessingKeepsSelectedSpeedAndAllDeviceProtections() {
         for platform in [MetadataReadingDeviceProfile.Platform.mobile, .desktop, .television] {
             for thermal in [MetadataReadingThermalState.nominal, .fair, .serious, .critical] {

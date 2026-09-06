@@ -250,11 +250,10 @@ public enum AudioFileSignaturePolicy {
     private static func containsDTSSync(_ data: Data) -> Bool {
         let limit = min(data.count, 64 * 1024)
         guard limit >= 4 else { return false }
-        for offset in 0...(limit - 4) {
-            for pattern in dtsSyncPatterns
-            where data[offset..<(offset + 4)].elementsEqual(pattern) {
-                return true
-            }
+        // Keep the same unaligned 64 KiB probe without constructing four
+        // Swift Data slices at every byte of an ordinary PCM prefix.
+        for pattern in dtsSyncPatterns {
+            if data.range(of: Data(pattern), in: 0..<limit) != nil { return true }
         }
         return false
     }

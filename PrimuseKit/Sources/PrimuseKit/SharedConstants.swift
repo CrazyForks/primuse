@@ -3041,6 +3041,20 @@ public struct MetadataReadingEnvironment: Sendable {
 }
 
 public enum MetadataBackfillExecutionPolicy {
+    /// Process CPU time includes parsing, playback, and UI work across executor
+    /// hops, while disk/network waits do not inflate the thermal work budget.
+    /// An unavailable or invalid counter keeps the conservative wall-time fallback.
+    public static func processingDuration(
+        cpuTimeBefore: TimeInterval?, cpuTimeAfter: TimeInterval?,
+        fallback: TimeInterval
+    ) -> TimeInterval {
+        guard let before = cpuTimeBefore, let after = cpuTimeAfter,
+              before.isFinite, after.isFinite, before >= 0, after >= before else {
+            return fallback.isFinite && fallback >= 0 ? fallback : 0.5
+        }
+        return after - before
+    }
+
     public static let highPerformanceAfterScanDefaultsKey =
         "primuse.metadataBackfill.highPerformanceAfterScan"
     public static let readingModeDefaultsKey = "primuse.metadataBackfill.readingMode"
@@ -3113,7 +3127,7 @@ public enum MetadataBackfillExecutionPolicy {
         case .serious:
             workers = min(workers, 1)
             // For cheap, network-bound tags, budget three times the recent
-            // non-network work as rest. Expensive/unknown work keeps the
+            // measured CPU work as rest. Expensive/unknown work keeps the
             // existing 1.5s cooldown, and critical heat always pauses reads.
             let cooldown: TimeInterval
             if preference == .fast, let recentProcessingDuration,

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import PrimuseKit
 #if os(iOS)
@@ -3573,9 +3574,13 @@ final class MetadataBackfillService {
             : .bulkBounded
         var rangeElapsed: TimeInterval = 0
         var rangeCount = 0
+        let cpuStarted = Self.processCPUTime()
         defer {
             if !Task.isCancelled {
-                recordProcessingDuration(max(0, Date().timeIntervalSince(started) - rangeElapsed))
+                recordProcessingDuration(MetadataBackfillExecutionPolicy.processingDuration(
+                    cpuTimeBefore: cpuStarted, cpuTimeAfter: Self.processCPUTime(),
+                    fallback: max(0, Date().timeIntervalSince(started) - rangeElapsed)
+                ))
             }
         }
         func fetchRange(offset: Int64, length: Int64) async throws -> Data {
@@ -4051,6 +4056,13 @@ final class MetadataBackfillService {
             artistInspected: artistInspectionCompleted,
             artworkGivenUp: artworkStillMissing
         )
+    }
+
+    private static func processCPUTime() -> TimeInterval? {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return nil }
+        return Double(usage.ru_utime.tv_sec) + Double(usage.ru_stime.tv_sec)
+            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
     }
 
     /// Keep parsing state local to this song; store assets only after all
