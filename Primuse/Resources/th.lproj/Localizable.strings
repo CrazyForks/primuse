@@ -1890,6 +1890,9 @@
 "metadata_status_reason_title" = "ชื่อ/อัลบั้ม";
 "metadata_status_reason_unknown" = "การอ่านเมทาดาทาล้มเหลว แต่แหล่งที่มาไม่ส่งคืนข้อผิดพลาดที่เฉพาะเจาะจงมากขึ้น";
 "metadata_status_refresh" = "รีเฟรชสถานะ";
+"metadata_status_reread_filtered" = "อ่านแท็กของเพลงที่กรองทั้งหมดอีกครั้ง";
+"metadata_status_reread_progress_format" = "กำลังอ่านแท็ก: %1$lld / %2$lld";
+"metadata_status_reread_result_format" = "สำเร็จ: %1$lld เพลง ล้มเหลว: %2$lld เพลง ข้าม (กำลังอ่านอยู่หรือไม่พร้อมใช้งาน): %3$lld เพลง";
 "metadata_status_result_title" = "ผลการอ่านเมทาดาทา";
 "metadata_status_retry" = "จำเป็นต้องลองอีกครั้ง";
 "metadata_status_retry_failed" = "ลองเพลงปัญหาอีกครั้ง";

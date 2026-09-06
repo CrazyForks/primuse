@@ -8,6 +8,7 @@ public actor StreamResolverRegistry {
     public static let shared = StreamResolverRegistry()
 
     private let runtime: SourceConnectionRuntime
+    private let endpointProbe: SourceNetworkFailurePolicy.EndpointProbe
     private var resolvers: [MusicSourceType: StreamResolver] = [:]
     private let cloudDriveResolver: CloudDriveStreamResolver
     private struct RoutedResolverState: Sendable {
@@ -16,8 +17,12 @@ public actor StreamResolverRegistry {
     }
     private var routedResolverStates: [String: RoutedResolverState] = [:]
 
-    public init(runtime: SourceConnectionRuntime = .shared) {
+    public init(
+        runtime: SourceConnectionRuntime = .shared,
+        endpointProbe: @escaping SourceNetworkFailurePolicy.EndpointProbe = SourceConnectionPreflight.check
+    ) {
         self.runtime = runtime
+        self.endpointProbe = endpointProbe
         // Phase 1:Subsonic 家族共用一个无状态 resolver。直接在 init 里建表
         // (actor init 是同步的,不能调用 actor-isolated 方法)。
         let subsonic = SubsonicStreamResolver()
@@ -178,7 +183,7 @@ public actor StreamResolverRegistry {
             do {
                 if Self.requiresReachabilityProbe(source.type), candidate.kind != .vendorRemote {
                     guard let endpoint = candidate.endpoint else { throw URLError(.badURL) }
-                    try await SourceConnectionPreflight.check(endpoint)
+                    try await endpointProbe(endpoint)
                 }
                 let result = try await operation(routedSource)
                 try Task.checkCancellation()
@@ -187,7 +192,10 @@ public actor StreamResolverRegistry {
             } catch {
                 lastError = error
                 guard !Task.isCancelled,
-                      SourceNetworkFailurePolicy.isNetworkFailure(error) else { throw error }
+                      SourceNetworkFailurePolicy.isNetworkFailure(error),
+                      await SourceNetworkFailurePolicy.endpointIsUnreachable(
+                        candidate.endpoint, probe: endpointProbe
+                      ) else { throw error }
                 await resolver.invalidateSession(sourceID: source.id)
                 routedResolverStates[source.id] = nil
                 await runtime.recordFailure(

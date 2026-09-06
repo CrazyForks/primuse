@@ -3259,6 +3259,9 @@
 "metadata_status_retry_started_format" = "已重新排入 %d 首問題歌曲，並繼續讀取。";
 "metadata_status_no_retryable_work" = "目前沒有可重新排入的歌曲；你仍可在列表中單獨重讀。";
 "metadata_status_refresh" = "重新整理狀態";
+"metadata_status_reread_filtered" = "重新讀取目前篩選結果的全部標籤";
+"metadata_status_reread_progress_format" = "正在讀取標籤：%1$lld / %2$lld";
+"metadata_status_reread_result_format" = "完成 %1$lld 首，失敗 %2$lld 首，略過 %3$lld 首（正在讀取或無法讀取）。";
 "metadata_status_filter" = "狀態篩選";
 "metadata_status_filter_all" = "全部";
 "metadata_status_filter_pending" = "待檢查";

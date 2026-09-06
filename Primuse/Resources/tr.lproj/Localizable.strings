@@ -1562,6 +1562,9 @@
 "META-03 · Paste JSON or Import from URL" = "META-03 · JSON'yi yapıştırın veya URL'den içe aktarın";
 "metadata_writeback_plex_missing_album" = "Bu Plex parçasının yazılabilir albüm öğesi yok.";
 "metadata_status_refresh" = "Durumu Yenile";
+"metadata_status_reread_filtered" = "Filtrelenen tüm şarkıların etiketlerini yeniden oku";
+"metadata_status_reread_progress_format" = "Etiketler okunuyor: %1$lld / %2$lld";
+"metadata_status_reread_result_format" = "Tamamlanan: %1$lld. Başarısız: %2$lld. Atlanan (zaten okunuyor veya kullanılamıyor): %3$lld.";
 "yearly_meta_sources_title" = "En çok kullanılan kaynak";
 "lyrics_editor_mode_structured" = "Satırlar";
 "Search…" = "Ara…";

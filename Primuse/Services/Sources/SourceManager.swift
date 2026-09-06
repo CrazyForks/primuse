@@ -943,18 +943,24 @@ actor SourceConnectionRouter {
     private let sourceID: String
     private let runtime: SourceConnectionRuntime
     private let candidates: [RoutedConnectorCandidate]
+    private let endpointProbe: SourceNetworkFailurePolicy.EndpointProbe
     private let routeDidChange: @MainActor @Sendable (SourceConnectionCandidateKind?) -> Void
-    private var activeIndex: Int?
+    private var selectionRevision: UInt64 = 0
+    private var activeIndex: Int? {
+        didSet { selectionRevision &+= 1 }
+    }
     private var routeGeneration: UInt64?
 
     init(
         sourceID: String,
         candidates: [RoutedConnectorCandidate],
         runtime: SourceConnectionRuntime = .shared,
+        endpointProbe: @escaping SourceNetworkFailurePolicy.EndpointProbe = SourceConnectionPreflight.check,
         routeDidChange: @escaping @MainActor @Sendable (SourceConnectionCandidateKind?) -> Void
     ) {
         self.sourceID = sourceID
         self.runtime = runtime
+        self.endpointProbe = endpointProbe
         self.candidates = candidates
         self.routeDidChange = routeDidChange
     }
@@ -985,7 +991,7 @@ actor SourceConnectionRouter {
         do {
             return (try await operation(candidates[initialIndex].connector), initialIndex)
         } catch {
-            guard canFailOver(after: error) else { throw error }
+            guard await canFailOver(after: error, at: initialIndex) else { throw error }
             await retireFailedRoute(at: initialIndex, error: error)
             return try await attemptRead(
                 operation,
@@ -1002,7 +1008,7 @@ actor SourceConnectionRouter {
         do {
             return try await operation(candidates[index].connector)
         } catch {
-            if canFailOver(after: error) {
+            if await canFailOver(after: error, at: index) {
                 await retireFailedRoute(at: index, error: error)
             }
             throw error
@@ -1015,7 +1021,7 @@ actor SourceConnectionRouter {
     /// retire the failed route so the caller's next safe retry uses fallback.
     func noteDeferredReadFailure(_ error: Error, routeIndex: Int) async {
         guard candidates.indices.contains(routeIndex) else { return }
-        guard canFailOver(after: error) else { return }
+        guard await canFailOver(after: error, at: routeIndex) else { return }
         await retireFailedRoute(at: routeIndex, error: error)
     }
 
@@ -1057,7 +1063,7 @@ actor SourceConnectionRouter {
                     await routeDidChange(preferredKind)
                     return preferredIndex
                 } catch {
-                    guard canFailOver(after: error) else { throw error }
+                    guard await canFailOver(after: error, at: preferredIndex) else { throw error }
                     // A failed network probe must leave the working fallback alive.
                     await candidates[preferredIndex].connector.disconnect()
                     await recordNetworkFailure(of: preferredKind, error: error)
@@ -1089,7 +1095,7 @@ actor SourceConnectionRouter {
                 return index
             } catch {
                 lastError = error
-                guard canFailOver(after: error) else { throw error }
+                guard await canFailOver(after: error, at: index) else { throw error }
                 await candidates[index].connector.disconnect()
                 await recordNetworkFailure(of: kind, error: error)
             }
@@ -1103,7 +1109,7 @@ actor SourceConnectionRouter {
         try Task.checkCancellation()
         let candidate = candidates[index]
         if candidate.kind == .localAddress, let endpoint = candidate.endpoint {
-            try await SourceConnectionPreflight.check(endpoint)
+            try await endpointProbe(endpoint)
         }
         try Task.checkCancellation()
         // TCP reachability is deliberately not treated as success. Each
@@ -1200,7 +1206,7 @@ actor SourceConnectionRouter {
                 return (try await operation(candidates[index].connector), index)
             } catch {
                 lastError = error
-                guard canFailOver(after: error) else { throw error }
+                guard await canFailOver(after: error, at: index) else { throw error }
                 await retireFailedRoute(at: index, error: error)
                 excluded.insert(index)
             }
@@ -1220,11 +1226,28 @@ actor SourceConnectionRouter {
 
     private func recordNetworkFailure(of kind: SourceConnectionCandidateKind, error: any Error) async {
         let failure = error as NSError
-        plog("Source route network failure source=\(sourceID.prefix(8)) kind=\(kind.rawValue) error=\(failure.domain)/\(failure.code)")
+        plog("Source route network failure source=\(sourceID.prefix(8)) kind=\(kind.rawValue) error=\(failure.domain)/\(failure.code) endpointProbe=unreachable")
         await runtime.recordFailure(of: kind, for: sourceID)
     }
 
-    private func canFailOver(after error: Error) -> Bool {
+    private func canFailOver(after error: Error, at index: Int) async -> Bool {
+        guard isTransportFailure(error) else { return false }
+        let revision = selectionRevision
+        let generation = await runtime.routeGeneration()
+        let unreachable = await SourceNetworkFailurePolicy.endpointIsUnreachable(
+            candidates[index].endpoint,
+            probe: endpointProbe
+        )
+        let currentGeneration = await runtime.routeGeneration()
+        guard revision == selectionRevision, generation == currentGeneration else { return false }
+        if !unreachable, !Task.isCancelled {
+            let failure = error as NSError
+            plog("Source request failed; route retained source=\(sourceID.prefix(8)) kind=\(candidates[index].kind.rawValue) error=\(failure.domain)/\(failure.code)")
+        }
+        return unreachable
+    }
+
+    private func isTransportFailure(_ error: Error) -> Bool {
         guard !Task.isCancelled else { return false }
         if let ioError = error as? IOError {
             return SourceNetworkFailurePolicy.isNetworkFailure(

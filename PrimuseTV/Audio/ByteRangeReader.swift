@@ -45,56 +45,23 @@ actor TVProtocolOperationGate {
 
 struct TVRoutedByteRangeReaderCandidate: Sendable {
     let kind: SourceConnectionCandidateKind
+    let endpoint: SourceConnectionEndpoint?
     let reader: any ByteRangeReader
 }
 
 enum TVSourceConnectionFailoverPolicy {
     static func allowsRetry(after error: Error) -> Bool {
-        if error is CancellationError { return false }
-        if let error = error as? StreamResolveError {
-            switch error {
-            case .missingCredential, .authFailed, .needs2FA:
-                return false
-            case .unsupportedSourceType, .badServerResponse, .cannotBuildURL, .relayUnavailable:
-                return true
-            }
-        }
-        if let error = error as? FnMusicServiceError {
-            switch error {
-            case .missingCredential, .authenticationFailed:
-                return false
-            case .invalidURL, .badServerResponse, .invalidResponse:
-                return true
-            }
-        }
-        if let error = error as? DaoLiYuServiceError {
-            switch error {
-            case .missingCredential, .authenticationFailed:
-                return false
-            case .invalidURL, .badServerResponse, .invalidResponse:
-                return true
-            }
-        }
+        guard !Task.isCancelled else { return false }
+        return SourceNetworkFailurePolicy.isNetworkFailure(error)
+    }
 
-        if let error = error as? SongloftServiceError {
-            switch error {
-            case .missingCredential, .authenticationFailed: return false
-            case .badServerResponse(403): return false
-            default: return true
-            }
-        }
-
-        let nsError = error as NSError
-        if nsError.domain == NSPOSIXErrorDomain,
-           [Int(EACCES), Int(EPERM)].contains(nsError.code) {
-            return false
-        }
-        if nsError.domain == NSURLErrorDomain {
-            return nsError.code != NSURLErrorCancelled
-                && nsError.code != NSURLErrorUserCancelledAuthentication
-                && nsError.code != NSURLErrorUserAuthenticationRequired
-        }
-        return true
+    static func confirmsUnreachableEndpoint(
+        after error: Error,
+        endpoint: SourceConnectionEndpoint?,
+        probe: SourceNetworkFailurePolicy.EndpointProbe = SourceConnectionPreflight.check
+    ) async -> Bool {
+        guard allowsRetry(after: error) else { return false }
+        return await SourceNetworkFailurePolicy.endpointIsUnreachable(endpoint, probe: probe)
     }
 }
 
@@ -109,14 +76,20 @@ enum TVRoutedByteRangeReaderError: Error {
 actor TVRoutedByteRangeReader: ByteRangeReader {
     private let sourceID: String
     private let candidates: [TVRoutedByteRangeReaderCandidate]
+    private let endpointProbe: SourceNetworkFailurePolicy.EndpointProbe
     private var activeIndex: Int?
     private var expectedLength: Int64?
     private var routeGeneration: UInt64?
     private let operationGate = TVProtocolOperationGate()
 
-    init(sourceID: String, candidates: [TVRoutedByteRangeReaderCandidate]) {
+    init(
+        sourceID: String,
+        candidates: [TVRoutedByteRangeReaderCandidate],
+        endpointProbe: @escaping SourceNetworkFailurePolicy.EndpointProbe = SourceConnectionPreflight.check
+    ) {
         self.sourceID = sourceID
         self.candidates = candidates
+        self.endpointProbe = endpointProbe
     }
 
     func contentLength() async throws -> Int64 {
@@ -184,12 +157,13 @@ actor TVRoutedByteRangeReader: ByteRangeReader {
             routeGeneration = currentGeneration
         }
         var lastError: Error = TVRoutedByteRangeReaderError.noConnection
-        let activeKind = await SourceConnectionRuntime.shared.activeKind(for: sourceID)
+        let preferredKind = await SourceConnectionRuntime.shared.preferredKind(
+            for: sourceID, availableKinds: candidates.map(\.kind)
+        )
         var orderedIndices = Array(candidates.indices)
-        let preferredIndex = activeIndex
-            ?? activeKind.flatMap { kind in
+        let preferredIndex = preferredKind.flatMap { kind in
                 candidates.firstIndex(where: { $0.kind == kind })
-            }
+            } ?? activeIndex
         if let preferredIndex,
            let position = orderedIndices.firstIndex(of: preferredIndex) {
             orderedIndices.remove(at: position)
@@ -207,12 +181,14 @@ actor TVRoutedByteRangeReader: ByteRangeReader {
                 return result
             } catch {
                 lastError = error
-                guard TVSourceConnectionFailoverPolicy.allowsRetry(after: error) else {
+                guard await TVSourceConnectionFailoverPolicy.confirmsUnreachableEndpoint(
+                    after: error, endpoint: candidates[index].endpoint, probe: endpointProbe
+                ) else {
                     throw error
                 }
                 await candidates[index].reader.close()
                 activeIndex = nil
-                await SourceConnectionRuntime.shared.invalidate(sourceID: sourceID)
+                await SourceConnectionRuntime.shared.recordFailure(of: candidates[index].kind, for: sourceID)
             }
         }
         throw lastError

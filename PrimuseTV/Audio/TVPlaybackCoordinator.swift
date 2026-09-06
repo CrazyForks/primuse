@@ -1100,7 +1100,7 @@ final class TVPlaybackCoordinator {
                 ) else {
                     return nil
                 }
-                return TVRoutedByteRangeReaderCandidate(kind: candidate.kind, reader: reader)
+                return TVRoutedByteRangeReaderCandidate(kind: candidate.kind, endpoint: candidate.endpoint, reader: reader)
             }
             guard candidates.isEmpty == false else { return nil }
             return TVRoutedByteRangeReader(sourceID: source.id, candidates: candidates)

@@ -44,6 +44,23 @@ import Testing
         )))
     }
 
+    @Test func onlyIndependentEndpointFailureConfirmsUnreachableRoute() async {
+        let endpoint = SourceConnectionEndpoint(host: "lan.invalid", port: 4533, useSsl: false)
+        #expect(await SourceNetworkFailurePolicy.endpointIsUnreachable(endpoint, probe: { _ in }) == false)
+        #expect(await SourceNetworkFailurePolicy.endpointIsUnreachable(endpoint, probe: { _ in
+            throw URLError(.cannotConnectToHost)
+        }))
+        #expect(await SourceNetworkFailurePolicy.endpointIsUnreachable(endpoint, probe: { _ in
+            throw URLError(.serverCertificateUntrusted)
+        }) == false)
+        #expect(await SourceNetworkFailurePolicy.endpointIsUnreachable(endpoint, probe: { _ in
+            throw CancellationError()
+        }) == false)
+        #expect(await SourceNetworkFailurePolicy.endpointIsUnreachable(nil, probe: { _ in
+            Issue.record("Missing endpoint must not be probed")
+        }) == false)
+    }
+
     @Test func temporaryLANFailureExpiresWithoutAWiFiChange() async {
         let runtime = SourceConnectionRuntime()
         let start = Date(timeIntervalSince1970: 100)

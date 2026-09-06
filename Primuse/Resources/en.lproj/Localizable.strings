@@ -3059,6 +3059,9 @@
 "metadata_status_retry_started_format" = "%d problem songs were queued again and reading continues.";
 "metadata_status_no_retryable_work" = "No songs can be queued again now. You can still reread an individual row.";
 "metadata_status_refresh" = "Refresh Status";
+"metadata_status_reread_filtered" = "Read Tags for All Filtered Songs Again";
+"metadata_status_reread_progress_format" = "Reading tags: %1$lld / %2$lld";
+"metadata_status_reread_result_format" = "Completed: %1$lld. Failed: %2$lld. Skipped (already reading or unavailable): %3$lld.";
 "metadata_status_filter" = "Status Filter";
 "metadata_status_filter_all" = "All";
 "metadata_status_filter_pending" = "Pending";

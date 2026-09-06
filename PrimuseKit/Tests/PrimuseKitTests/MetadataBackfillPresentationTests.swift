@@ -269,3 +269,64 @@ struct MetadataBackfillPresentationTests {
         )
     }
 }
+
+
+@Suite("Metadata tag batch reread")
+@MainActor
+struct MetadataTagRereadBatchTests {
+    @Test func readsEntireSnapshotOnceAndContinuesAfterFailures() async {
+        var selection = (0..<221).map(String.init)
+        let original = selection
+        var reads: [String] = []
+        var updates: [MetadataTagRereadProgress] = []
+        let result = await MetadataTagRereadBatch.run(songIDs: selection + ["0", "220"]) { id in
+            reads.append(id)
+            selection.removeAll()
+            if id == "10" { return .failed }
+            if id == "12" { return .skipped }
+            return .completed
+        } progress: { updates.append($0) }
+        #expect(reads == original)
+        #expect(result.total == 221)
+        #expect(result.completed == 219)
+        #expect(result.failed == 1)
+        #expect(result.skipped == 1)
+        #expect(result.processed == 221)
+        #expect(updates.first?.processed == 0)
+        #expect(updates.last == result)
+    }
+
+    @Test func cancellationStopsRemainingReadsWithoutCountingCancellationAsFailure() async {
+        var reads: [String] = []
+        let task = Task { @MainActor in
+            await MetadataTagRereadBatch.run(songIDs: ["a", "b", "c"]) { id in
+                reads.append(id)
+                if id == "b" {
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return .failed
+                }
+                return .completed
+            } progress: { _ in }
+        }
+        let result = await task.value
+        #expect(reads == ["a", "b"])
+        #expect(result.isCancelled)
+        #expect(result.completed == 1)
+        #expect(result.failed == 0)
+    }
+
+    @Test func cancellationBeforeStartDoesNotReadFiles() async {
+        var reads = 0
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await MetadataTagRereadBatch.run(songIDs: ["a"]) { _ in
+                reads += 1
+                return .completed
+            } progress: { _ in }
+        }
+        let result = await task.value
+        #expect(reads == 0)
+        #expect(result.isCancelled)
+        #expect(result.processed == 0)
+    }
+}

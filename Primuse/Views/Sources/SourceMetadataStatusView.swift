@@ -64,6 +64,8 @@ struct SourceMetadataStatusView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var isProjecting = false
     @State private var resultMessage: String?
+    @State private var batchRereadTask: Task<Void, Never>?
+    @State private var batchProgress: MetadataTagRereadProgress?
 
     private var summary: MetadataBackfillSourceSummary {
         backfill.sourceStatusSummary(forSource: source.id)
@@ -98,6 +100,7 @@ struct SourceMetadataStatusView: View {
         .onDisappear {
             searchDebounceTask?.cancel()
             projectionTask?.cancel()
+            batchRereadTask?.cancel()
         }
         .alert(
             "metadata_status_result_title",
@@ -183,6 +186,19 @@ struct SourceMetadataStatusView: View {
 
     @ViewBuilder
     private var resultRows: some View {
+        if let progress = batchProgress {
+            HStack {
+                Text(batchProgressText(progress))
+                .font(.caption)
+                .monospacedDigit()
+                Spacer()
+                if batchRereadTask != nil {
+                    ProgressView().controlSize(.small)
+                    Button("cancel") { batchRereadTask?.cancel() }
+                        .buttonStyle(.borderless)
+                }
+            }
+        }
         if isProjecting, projectedItems.isEmpty {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 220)
@@ -421,25 +437,7 @@ struct SourceMetadataStatusView: View {
                 }
             }
 
-            Button {
-                reload(force: true)
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.secondary.opacity(0.09))
-                        .frame(width: 28, height: 28)
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.caption2.weight(.semibold))
-                }
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("metadata_status_refresh")
-            .accessibilityLabel(Text("metadata_status_refresh"))
-            .accessibilityIdentifier("metadata-status-refresh")
-            .padding(.trailing, 16)
+            batchRefreshButton.padding(.trailing, 16)
         }
         .textCase(nil)
     }
@@ -448,6 +446,36 @@ struct SourceMetadataStatusView: View {
         MetadataBackfillStatusFilter.allCases.filter { filter in
             filter == .all || filter == selectedFilter || summary.count(for: filter) > 0
         }
+    }
+
+    private var batchRefreshButton: some View {
+        Button {
+            rereadFilteredItems()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color.secondary.opacity(0.09))
+                    .frame(width: 28, height: 28)
+                if backfill.batchRereadingSourceIDs.contains(source.id) {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.caption2.weight(.semibold))
+                }
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .disabled(
+            batchRereadTask != nil || backfill.batchRereadingSourceIDs.contains(source.id)
+                || isProjecting || projectedItems.isEmpty || !source.isEnabled
+                || searchText.trimmingCharacters(in: .whitespacesAndNewlines) != debouncedSearchText
+        )
+        .help("metadata_status_reread_filtered")
+        .accessibilityLabel(Text("metadata_status_reread_filtered"))
+        .accessibilityIdentifier("metadata-status-refresh")
     }
 
     private func compactFilterChip(_ filter: MetadataBackfillStatusFilter) -> some View {
@@ -616,6 +644,7 @@ struct SourceMetadataStatusView: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                batchRefreshButton
             }
 
             TextField("metadata_status_search", text: $searchText)
@@ -1177,6 +1206,39 @@ struct SourceMetadataStatusView: View {
             }
             reload(force: true)
         }
+    }
+
+    private func rereadFilteredItems() {
+        guard batchRereadTask == nil else { return }
+        let songIDs = projectedItems.map(\.songID)
+        batchRereadTask = Task { @MainActor in
+            defer { batchRereadTask = nil }
+            let result = await backfill.rereadTags(songIDs: songIDs, expectedSourceID: source.id) {
+                batchProgress = $0
+            }
+            reload(force: true)
+            guard !Task.isCancelled else { return }
+            resultMessage = String(
+                format: String(localized: "metadata_status_reread_result_format"),
+                Int64(result.completed), Int64(result.failed), Int64(result.skipped)
+            )
+        }
+    }
+
+    private func batchProgressText(_ progress: MetadataTagRereadProgress) -> String {
+        if progress.isCancelled {
+            return String(localized: "reread_song_tags_failure_cancelled")
+        }
+        if batchRereadTask == nil {
+            return String(
+                format: String(localized: "metadata_status_reread_result_format"),
+                Int64(progress.completed), Int64(progress.failed), Int64(progress.skipped)
+            )
+        }
+        return String(
+            format: String(localized: "metadata_status_reread_progress_format"),
+            Int64(progress.processed), Int64(progress.total)
+        )
     }
 
     private func stateTitle(_ state: MetadataBackfillItemState) -> LocalizedStringKey {

@@ -55,6 +55,61 @@ final class TVMetadataParityTests: XCTestCase {
         XCTAssertEqual(displayed.map(\.time), [1, 3])
     }
 
+    func testOnlyConfirmedEndpointFailuresAllowRouteFallback() async throws {
+        let endpoint = SourceConnectionEndpoint(host: "lan.invalid", port: 4533, useSsl: false)
+        let errors: [any Error] = [StreamResolveError.badServerResponse(503),
+                                  URLError(.serverCertificateUntrusted), URLError(.cancelled),
+                                  SongloftServiceError.authenticationFailed,
+                                  TVRoutedByteRangeReaderError.contentLengthMismatch]
+        for error in errors {
+            let allowed = await TVSourceConnectionFailoverPolicy.confirmsUnreachableEndpoint(
+                after: error, endpoint: endpoint, probe: { _ in
+                    XCTFail("Business errors must not trigger a reachability probe")
+                    throw URLError(.cannotConnectToHost)
+                }
+            )
+            XCTAssertFalse(allowed)
+        }
+        let retained = await TVSourceConnectionFailoverPolicy.confirmsUnreachableEndpoint(
+            after: URLError(.timedOut), endpoint: endpoint, probe: { _ in }
+        )
+        XCTAssertFalse(retained)
+        let fallback = await TVSourceConnectionFailoverPolicy.confirmsUnreachableEndpoint(
+            after: URLError(.timedOut), endpoint: endpoint, probe: { _ in throw URLError(.cannotConnectToHost) }
+        )
+        XCTAssertTrue(fallback)
+    }
+
+    func testByteReaderRequestTimeoutKeepsReachableRoute() async throws {
+        for reachable in [true, false] {
+            let sourceID = UUID().uuidString
+            await SourceConnectionRuntime.shared.observeNetworkPath(prefersLocalNetwork: true, pathChanged: false)
+            let local = RouteHealthByteReader(failReads: true)
+            let remote = RouteHealthByteReader(failReads: false)
+            let reader = TVRoutedByteRangeReader(sourceID: sourceID, candidates: [
+                .init(kind: .localAddress, endpoint: .init(host: "lan.invalid", port: 445, useSsl: false), reader: local),
+                .init(kind: .publicAddress, endpoint: .init(host: "wan.invalid", port: 445, useSsl: false), reader: remote)
+            ], endpointProbe: { _ in
+                if !reachable { throw URLError(.cannotConnectToHost) }
+            })
+            _ = try await reader.contentLength()
+            do {
+                let data = try await reader.read(offset: 0, length: 1)
+                XCTAssertFalse(reachable)
+                XCTAssertEqual(data, Data([1]))
+            } catch {
+                XCTAssertTrue(reachable)
+                XCTAssertEqual((error as? URLError)?.code, .timedOut)
+            }
+            let active = await SourceConnectionRuntime.shared.activeKind(for: sourceID)
+            let remoteReads = await remote.reads
+            XCTAssertEqual(active, reachable ? .localAddress : .publicAddress)
+            XCTAssertEqual(remoteReads, reachable ? 0 : 1)
+            await reader.close()
+            await SourceConnectionRuntime.shared.invalidate(sourceID: sourceID)
+        }
+    }
+
     func testSourceRoutesDoNotReadTranscodedServerFilesAsTags() {
         for type in [MusicSourceType.local, .smb, .nfs, .ftp, .webdav, .oneDrive, .dropbox] {
             XCTAssertTrue(TVPlaybackMetadataPolicy.supports(type), type.rawValue)
@@ -329,4 +384,16 @@ final class TVMetadataParityTests: XCTestCase {
         XCTAssertNotEqual(first, TVSourceAssetReader.cacheIdentity(source: source, credential: .init(password: "first")))
     }
 }
+private actor RouteHealthByteReader: ByteRangeReader {
+    let failReads: Bool
+    var reads = 0
+    init(failReads: Bool) { self.failReads = failReads }
+    func contentLength() async throws -> Int64 { 10 }
+    func read(offset: Int64, length: Int64) async throws -> Data {
+        reads += 1
+        if failReads { throw URLError(.timedOut) }
+        return Data([1])
+    }
+}
+
 #endif

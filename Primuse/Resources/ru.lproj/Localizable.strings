@@ -1562,6 +1562,9 @@
 "META-03 · Paste JSON or Import from URL" = "META-03 · Вставьте JSON или импортируйте из URL.";
 "metadata_writeback_plex_missing_album" = "Этот трек Plex не имеет записываемого элемента альбома.";
 "metadata_status_refresh" = "Обновить статус";
+"metadata_status_reread_filtered" = "Повторно прочитать теги всех отфильтрованных треков";
+"metadata_status_reread_progress_format" = "Чтение тегов: %1$lld / %2$lld";
+"metadata_status_reread_result_format" = "Завершено: %1$lld. Ошибок: %2$lld. Пропущено (уже читаются или недоступны): %3$lld.";
 "yearly_meta_sources_title" = "Наиболее часто используемый источник";
 "lyrics_editor_mode_structured" = "Строки";
 "Search…" = "Искать…";

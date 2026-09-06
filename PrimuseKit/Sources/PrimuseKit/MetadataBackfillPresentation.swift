@@ -1,5 +1,49 @@
 import Foundation
 
+public struct MetadataTagRereadProgress: Sendable, Equatable {
+    public let total: Int
+    public var completed = 0
+    public var failed = 0
+    public var skipped = 0
+    public var isCancelled = false
+    public var processed: Int { completed + failed + skipped }
+
+    public init(total: Int) { self.total = total }
+}
+
+public enum MetadataTagRereadBatch {
+    public enum Outcome: Sendable { case completed, failed, skipped }
+
+    /// Freeze the complete filtered selection before rows start disappearing
+    /// from the status list. Serial reads preserve the single-file I/O budget.
+    @MainActor
+    public static func run(
+        songIDs: [String],
+        read: (String) async -> Outcome,
+        progress: (MetadataTagRereadProgress) -> Void
+    ) async -> MetadataTagRereadProgress {
+        var seen = Set<String>()
+        let snapshot = songIDs.filter { seen.insert($0).inserted }
+        var result = MetadataTagRereadProgress(total: snapshot.count)
+        progress(result)
+        for songID in snapshot {
+            guard !Task.isCancelled else { break }
+            let outcome = await read(songID)
+            guard !Task.isCancelled else { break }
+            switch outcome {
+            case .completed: result.completed += 1
+            case .failed: result.failed += 1
+            case .skipped: result.skipped += 1
+            }
+            progress(result)
+            await Task.yield()
+        }
+        result.isCancelled = Task.isCancelled
+        progress(result)
+        return result
+    }
+}
+
 /// A mutually-exclusive, user-visible state for one song's embedded metadata
 /// inspection. Keeping these cases disjoint prevents one failed request from
 /// making an entire source look as though every queued song failed.

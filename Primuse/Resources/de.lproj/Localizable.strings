@@ -3282,6 +3282,9 @@
 "metadata_status_retry_started_format" = "%d Problemtitel wurden erneut eingereiht und werden weitergelesen.";
 "metadata_status_no_retryable_work" = "Derzeit kann kein Titel erneut eingereiht werden. Einzelne Einträge können weiterhin neu gelesen werden.";
 "metadata_status_refresh" = "Status aktualisieren";
+"metadata_status_reread_filtered" = "Tags aller gefilterten Titel erneut lesen";
+"metadata_status_reread_progress_format" = "Tags werden gelesen: %1$lld / %2$lld";
+"metadata_status_reread_result_format" = "Abgeschlossen: %1$lld. Fehlgeschlagen: %2$lld. Übersprungen (werden bereits gelesen oder sind nicht verfügbar): %3$lld.";
 "metadata_status_filter" = "Statusfilter";
 "metadata_status_filter_all" = "Alle";
 "metadata_status_filter_pending" = "Ausstehend";

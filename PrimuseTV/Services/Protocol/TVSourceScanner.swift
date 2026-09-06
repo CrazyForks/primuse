@@ -60,6 +60,7 @@ extension TVDirectoryLister {
 
 private struct TVRoutedDirectoryListerCandidate: Sendable {
     let kind: SourceConnectionCandidateKind
+    let endpoint: SourceConnectionEndpoint?
     let lister: any TVDirectoryLister
 }
 
@@ -84,7 +85,9 @@ private actor TVRoutedDirectoryLister: TVDirectoryLister {
             routeGeneration = currentGeneration
         }
         var lastError: Error = TVScanError.connectFailed
-        let activeKind = await SourceConnectionRuntime.shared.activeKind(for: sourceID)
+        let activeKind = await SourceConnectionRuntime.shared.preferredKind(
+            for: sourceID, availableKinds: candidates.map(\.kind)
+        )
         let orderedIndices = candidates.indices.sorted { lhs, rhs in
             if candidates[lhs].kind == activeKind { return true }
             if candidates[rhs].kind == activeKind { return false }
@@ -104,11 +107,13 @@ private actor TVRoutedDirectoryLister: TVDirectoryLister {
                 return entries
             } catch {
                 lastError = error
-                guard TVSourceConnectionFailoverPolicy.allowsRetry(after: error) else {
+                guard await TVSourceConnectionFailoverPolicy.confirmsUnreachableEndpoint(
+                    after: error, endpoint: candidates[index].endpoint
+                ) else {
                     throw error
                 }
                 activeIndex = nil
-                await SourceConnectionRuntime.shared.invalidate(sourceID: sourceID)
+                await SourceConnectionRuntime.shared.recordFailure(of: candidates[index].kind, for: sourceID)
             }
         }
         throw lastError
@@ -393,7 +398,7 @@ final class TVSourceScanner {
                 guard let lister = makeSingleLister(source: routedSource, credential: credential) else {
                     return nil
                 }
-                return TVRoutedDirectoryListerCandidate(kind: candidate.kind, lister: lister)
+                return TVRoutedDirectoryListerCandidate(kind: candidate.kind, endpoint: candidate.endpoint, lister: lister)
             }
             guard candidates.isEmpty == false else { return nil }
             return TVRoutedDirectoryLister(sourceID: source.id, candidates: candidates)
@@ -1243,11 +1248,13 @@ final class TVSourceScanner {
             } catch {
                 lastError = error
                 if error is TVScanPipelineError { throw error }
-                guard TVSourceConnectionFailoverPolicy.allowsRetry(after: error) else {
+                guard await TVSourceConnectionFailoverPolicy.confirmsUnreachableEndpoint(
+                    after: error, endpoint: candidate.endpoint
+                ) else {
                     throw error
                 }
                 invalidateFnMusicClient(sourceID: source.id)
-                await SourceConnectionRuntime.shared.invalidate(sourceID: source.id)
+                await SourceConnectionRuntime.shared.recordFailure(of: candidate.kind, for: source.id)
             }
         }
         throw lastError

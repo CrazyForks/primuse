@@ -4,6 +4,23 @@ import Network
 /// Route health needs transport evidence. Service responses, trust decisions,
 /// cancellation and unknown errors must not quarantine a reachable endpoint.
 public enum SourceNetworkFailurePolicy {
+    public typealias EndpointProbe = @Sendable (SourceConnectionEndpoint) async throws -> Void
+
+    /// A request may reach a CDN, wait for transcoding, or lose just one socket.
+    /// Only an independent probe of the configured endpoint can retire a route.
+    public static func endpointIsUnreachable(
+        _ endpoint: SourceConnectionEndpoint?,
+        probe: EndpointProbe = SourceConnectionPreflight.check
+    ) async -> Bool {
+        guard !Task.isCancelled, let endpoint, endpoint.normalized.isUsable else { return false }
+        do {
+            try await probe(endpoint)
+            return false
+        } catch {
+            return !Task.isCancelled && isNetworkFailure(error)
+        }
+    }
+
     public static func isNetworkFailure(_ error: any Error) -> Bool {
         classify(error, depth: 0)
     }

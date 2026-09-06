@@ -30,7 +30,9 @@ import Testing
 
     @Test func networkFailureUsesFallbackAndKeepsItsRoute() async throws {
         let runtime = SourceConnectionRuntime()
-        let registry = StreamResolverRegistry(runtime: runtime)
+        let registry = StreamResolverRegistry(runtime: runtime, endpointProbe: { endpoint in
+            if endpoint.host == "lan.invalid" { throw URLError(.cannotConnectToHost) }
+        })
         let resolver = RoutingResolver()
         await registry.register(resolver, for: [.smb])
         let source = makeSource()
@@ -40,6 +42,25 @@ import Testing
         #expect(result.host == "wan.invalid")
         #expect(await runtime.activeKind(for: source.id) == .publicAddress)
         #expect(await resolver.hosts == ["lan.invalid", "wan.invalid"])
+    }
+
+    @Test func mediaTimeoutDoesNotRetireReachableEndpoint() async throws {
+        let runtime = SourceConnectionRuntime()
+        let registry = StreamResolverRegistry(runtime: runtime, endpointProbe: { _ in })
+        let resolver = RoutingResolver()
+        await registry.register(resolver, for: [.smb])
+        let source = makeSource()
+        let song = Song(id: "song", title: "T", fileFormat: .flac, filePath: "/s.flac", sourceID: source.id)
+        _ = try await registry.streamURL(for: song, source: source, credential: nil)
+        await resolver.failNext(URLError(.timedOut))
+        do {
+            _ = try await registry.streamURL(for: song, source: source, credential: nil)
+            Issue.record("Expected media timeout")
+        } catch { #expect((error as? URLError)?.code == .timedOut) }
+        #expect(await runtime.activeKind(for: source.id) == .localAddress)
+        let result = try await registry.streamURL(for: song, source: source, credential: nil)
+        #expect(result.host == "lan.invalid")
+        #expect(await resolver.hosts == ["lan.invalid", "lan.invalid", "lan.invalid"])
     }
 
     private func makeSource() -> MusicSource {

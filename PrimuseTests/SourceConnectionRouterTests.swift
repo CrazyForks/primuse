@@ -41,6 +41,33 @@ final class SourceConnectionRouterTests: XCTestCase {
         }
     }
 
+    func testRequestTimeoutsAndExternalMediaFailuresKeepReachableLAN() async throws {
+        let errors: [any Error] = [
+            URLError(.timedOut),
+            URLError(.networkConnectionLost, userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "https://cdn.invalid/art.jpg")!]),
+            NSError(domain: NSPOSIXErrorDomain, code: Int(ECONNRESET))
+        ]
+        for error in errors {
+            let fixture = Fixture()
+            _ = try await fixture.read()
+            await fixture.local.failNextRead(error)
+            do { _ = try await fixture.read(); XCTFail("Expected request failure") } catch {}
+            let next = try await fixture.read()
+            XCTAssertEqual(next, "lan")
+            await fixture.router.noteDeferredReadFailure(error, routeIndex: 0)
+            await fixture.local.failNextRead(error)
+            do {
+                _ = try await fixture.router.withMutation { try await ($0 as! RouterTestConnector).read() }
+                XCTFail("Expected mutation failure")
+            } catch {}
+            XCTAssertEqual(fixture.events.values, [.localAddress])
+            let disconnects = await fixture.local.disconnections
+            let publicConnections = await fixture.remote.connections
+            XCTAssertEqual(disconnects, 0)
+            XCTAssertEqual(publicConnections, 0)
+        }
+    }
+
     func testTransportErrorsFailOverAndClearCurrentDisplayBeforeFallback() async throws {
         let errors: [any Error] = [URLError(.timedOut), URLError(.networkConnectionLost),
                                   NSError(domain: NSPOSIXErrorDomain, code: Int(ECONNRESET)),
@@ -50,6 +77,7 @@ final class SourceConnectionRouterTests: XCTestCase {
             let fixture = Fixture()
             _ = try await fixture.read()
             await fixture.local.failNextRead(error)
+            await fixture.probe.setReachable(false)
             let result = try await fixture.read()
             XCTAssertEqual(result, "wan")
             XCTAssertEqual(fixture.events.values, [.localAddress, nil, .publicAddress])
@@ -82,9 +110,19 @@ final class SourceConnectionRouterTests: XCTestCase {
         }
     }
 
-    func testNetworkHandshakeFailureUsesPublicAddress() async throws {
+    func testHandshakeTimeoutDoesNotRetireReachableEndpoint() async throws {
         let fixture = Fixture()
-        await fixture.local.failNextConnect(URLError(.cannotConnectToHost))
+        await fixture.local.failNextConnect(URLError(.timedOut))
+        do { _ = try await fixture.read(); XCTFail("Expected handshake timeout") } catch {}
+        let result = try await fixture.read()
+        XCTAssertEqual(result, "lan")
+        let publicConnections = await fixture.remote.connections
+        XCTAssertEqual(publicConnections, 0)
+    }
+
+    func testUnreachableEndpointUsesPublicAddress() async throws {
+        let fixture = Fixture()
+        await fixture.probe.setReachable(false)
         let result = try await fixture.read()
         XCTAssertEqual(result, "wan")
     }
@@ -93,6 +131,7 @@ final class SourceConnectionRouterTests: XCTestCase {
         for error: any Error in [SourceError.connectionFailed("write rejected"), URLError(.networkConnectionLost)] {
             let fixture = Fixture()
             _ = try await fixture.read()
+            await fixture.probe.setReachable(false)
             await fixture.local.failNextRead(error)
             do {
                 _ = try await fixture.router.withMutation { try await ($0 as! RouterTestConnector).read() }
@@ -111,6 +150,7 @@ final class SourceConnectionRouterTests: XCTestCase {
         await fixture.router.noteDeferredReadFailure(PagedSongCatalogError.unavailable, routeIndex: read.routeIndex)
         let active = await fixture.runtime.activeKind(for: fixture.id)
         XCTAssertEqual(active, .localAddress)
+        await fixture.probe.setReachable(false)
         await fixture.router.noteDeferredReadFailure(URLError(.networkConnectionLost), routeIndex: read.routeIndex)
         XCTAssertNil(fixture.events.values.last!)
         let next = try await fixture.read()
@@ -119,9 +159,10 @@ final class SourceConnectionRouterTests: XCTestCase {
 
     func testExpiredNetworkFailureRetriesLANWhilePublicRouteRemainsUsable() async throws {
         let fixture = Fixture()
-        await fixture.local.failNextConnect(URLError(.cannotConnectToHost))
+        await fixture.probe.setReachable(false)
         _ = try await fixture.read()
         await fixture.runtime.recordFailure(of: .localAddress, for: fixture.id, now: .distantPast)
+        await fixture.probe.setReachable(true)
         let result = try await fixture.read()
         XCTAssertEqual(result, "lan")
         let publicDisconnects = await fixture.remote.disconnections
@@ -130,9 +171,10 @@ final class SourceConnectionRouterTests: XCTestCase {
 
     func testFailedFailbackDoesNotTurnBusinessErrorIntoNetworkRejection() async throws {
         let fixture = Fixture()
-        await fixture.local.failNextConnect(URLError(.cannotConnectToHost))
+        await fixture.probe.setReachable(false)
         _ = try await fixture.read()
         await fixture.runtime.recordFailure(of: .localAddress, for: fixture.id, now: .distantPast)
+        await fixture.probe.setReachable(true)
         await fixture.local.failNextConnect(SourceError.authenticationFailed)
         do {
             _ = try await fixture.read()
@@ -147,9 +189,10 @@ final class SourceConnectionRouterTests: XCTestCase {
 
     func testNetworkChangeClearsStaleDisplayEvenIfReconnectFails() async throws {
         let fixture = Fixture()
-        await fixture.local.failNextConnect(URLError(.cannotConnectToHost))
+        await fixture.probe.setReachable(false)
         _ = try await fixture.read()
         await fixture.runtime.observeNetworkPath(prefersLocalNetwork: true, pathChanged: true)
+        await fixture.probe.setReachable(true)
         await fixture.local.failNextConnect(SourceError.authenticationFailed)
         do { _ = try await fixture.read(); XCTFail("Expected authentication failure") } catch {}
         XCTAssertNil(fixture.events.values.last!)
@@ -179,10 +222,11 @@ final class SourceConnectionRouterTests: XCTestCase {
     let local = RouterTestConnector(sourceID: "lan")
     let remote = RouterTestConnector(sourceID: "wan")
     let events = RouteEvents()
+    let probe = RouterEndpointProbe()
     lazy var router = SourceConnectionRouter(sourceID: id, candidates: [
-        .init(kind: .localAddress, endpoint: nil, connector: local),
-        .init(kind: .publicAddress, endpoint: nil, connector: remote)
-    ], runtime: runtime) { [events] in events.values.append($0) }
+        .init(kind: .localAddress, endpoint: .init(host: "lan.invalid", port: 445, useSsl: false), connector: local),
+        .init(kind: .publicAddress, endpoint: .init(host: "wan.invalid", port: 445, useSsl: false), connector: remote)
+    ], runtime: runtime, endpointProbe: { [probe] in try await probe.check($0) }) { [events] in events.values.append($0) }
     func read() async throws -> String {
         try await router.withRead { try await ($0 as! RouterTestConnector).read() }
     }
@@ -213,4 +257,12 @@ private actor RouterTestConnector: MusicSourceConnector {
     func localURL(for path: String) async throws -> URL { URL(fileURLWithPath: path) }
     func streamData(for path: String) async throws -> AsyncThrowingStream<Data, Error> { .init { $0.finish() } }
     func scanAudioFiles(from path: String) async throws -> AsyncThrowingStream<RemoteFileItem, Error> { .init { $0.finish() } }
+}
+
+private actor RouterEndpointProbe {
+    private var reachable = true
+    func setReachable(_ reachable: Bool) { self.reachable = reachable }
+    func check(_ endpoint: SourceConnectionEndpoint) throws {
+        if endpoint.host == "lan.invalid", !reachable { throw URLError(.cannotConnectToHost) }
+    }
 }

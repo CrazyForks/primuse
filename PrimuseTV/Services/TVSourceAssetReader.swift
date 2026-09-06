@@ -20,16 +20,15 @@ actor TVSourceAssetReader {
 
     func artworkData(reference: String, source: MusicSource, credential: SourceCredential?, maximumBytes: Int) async -> Data? {
         let candidates = await SourceConnectionRuntime.shared.orderedCandidates(for: source)
-        let routes: [(MusicSource, SourceConnectionCandidateKind?)] = candidates.isEmpty
-            ? [(source, nil)]
-            : candidates.map { (source.applyingConnectionCandidate($0), $0.kind) }
-        for (routed, kind) in routes {
+        let routes = candidates.isEmpty
+            ? [source]
+            : candidates.map { source.applyingConnectionCandidate($0) }
+        for routed in routes {
             guard !Task.isCancelled else { return nil }
             do {
                 guard let connector = connector(for: routed, credential: credential) else { return nil }
                 let data = try await connector.fetchArtworkData(for: reference, maximumBytes: maximumBytes, purpose: .thumbnail)
                 try Task.checkCancellation()
-                if let kind { await SourceConnectionRuntime.shared.record(kind, for: source.id) }
                 return data
             } catch is CancellationError { return nil }
             catch { continue }
@@ -39,10 +38,10 @@ actor TVSourceAssetReader {
 
     func lyrics(path: String, source: MusicSource, credential: SourceCredential?) async -> ServerLyricsReadResult {
         let candidates = await SourceConnectionRuntime.shared.orderedCandidates(for: source)
-        let routes: [(MusicSource, SourceConnectionCandidateKind?)] = candidates.isEmpty
-            ? [(source, nil)]
-            : candidates.map { (source.applyingConnectionCandidate($0), $0.kind) }
-        for (routed, kind) in routes {
+        let routes = candidates.isEmpty
+            ? [source]
+            : candidates.map { source.applyingConnectionCandidate($0) }
+        for routed in routes {
             guard !Task.isCancelled else { return .unavailable }
             let result: ServerLyricsReadResult
             if routed.type == .daoliyu {
@@ -57,7 +56,6 @@ actor TVSourceAssetReader {
             }
             guard !Task.isCancelled else { return .unavailable }
             if case .unavailable = result { continue }
-            if let kind { await SourceConnectionRuntime.shared.record(kind, for: source.id) }
             return result
         }
         return .unavailable

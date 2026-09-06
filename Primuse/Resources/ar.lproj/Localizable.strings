@@ -1890,6 +1890,9 @@
 "metadata_status_reason_title" = "العنوان/الألبوم";
 "metadata_status_reason_unknown" = "فشلت قراءة البيانات الوصفية، لكن المصدر لم يُرجع خطأ أكثر تحديدًا.";
 "metadata_status_refresh" = "تحديث الحالة";
+"metadata_status_reread_filtered" = "إعادة قراءة وسوم جميع الأغاني المصفاة";
+"metadata_status_reread_progress_format" = "قراءة الوسوم: %1$lld / %2$lld";
+"metadata_status_reread_result_format" = "اكتمل: %1$lld. فشل: %2$lld. تم تخطي %3$lld (قيد القراءة أو غير متاحة).";
 "metadata_status_result_title" = "نتيجة قراءة البيانات الوصفية";
 "metadata_status_retry" = "مطلوب إعادة المحاولة";
 "metadata_status_retry_failed" = "إعادة محاولة أغاني المشكلة";

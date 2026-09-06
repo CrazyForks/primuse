@@ -248,6 +248,7 @@ final class MetadataBackfillService {
     /// not show a spinner while another provider is being processed.
     private(set) var activeSourceIDs: Set<String> = []
     private(set) var manuallyReadingSongIDs: Set<String> = []
+    private(set) var batchRereadingSourceIDs: Set<String> = []
     @ObservationIgnored private var activeReadSongIDs: Set<String> = []
     private struct PlaybackTagReadIdentity: Hashable, Sendable {
         let songID: String
@@ -2161,6 +2162,31 @@ final class MetadataBackfillService {
         }
     }
 
+    func rereadTags(
+        songIDs: [String],
+        expectedSourceID: String,
+        progress: (MetadataTagRereadProgress) -> Void
+    ) async -> MetadataTagRereadProgress {
+        guard batchRereadingSourceIDs.insert(expectedSourceID).inserted else {
+            var result = MetadataTagRereadProgress(total: Set(songIDs).count)
+            result.skipped = result.total
+            progress(result)
+            return result
+        }
+        defer {
+            batchRereadingSourceIDs.remove(expectedSourceID)
+            refreshStatusSnapshot()
+        }
+        return await MetadataTagRereadBatch.run(songIDs: songIDs) { songID in
+            let result = await self.rereadTags(songID: songID, expectedSourceID: expectedSourceID)
+            switch result {
+            case .completed: return .completed
+            case .failed: return .failed
+            case .alreadyReading, .unsupported: return .skipped
+            }
+        } progress: { progress($0) }
+    }
+
     /// Immediately reads only the selected file. File-oriented remote sources
     /// reuse the bounded Range parser; local sources read their real file URL.
     /// This deliberately bypasses the whole-library queue so the action cannot
@@ -2169,6 +2195,9 @@ final class MetadataBackfillService {
         songID: String,
         expectedSourceID: String? = nil
     ) async -> SingleSongTagReadResult {
+        guard !Task.isCancelled else {
+            return .failed(reason: String(localized: "reread_song_tags_failure_cancelled"))
+        }
         guard let song = library.song(id: songID),
               expectedSourceID == nil || song.sourceID == expectedSourceID,
               canRereadTags(for: song) else {
