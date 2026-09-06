@@ -2624,6 +2624,11 @@
 "search_result_path_accessibility_format" = "Caminho: %@";
 "search_running" = "Procurando…";
 "search_scope_local_apple_music" = "Local · Apple Music";
+"search_global" = "Busca global";
+"search_current_scope" = "Escopo atual";
+"search_scope_prompt_format" = "Buscar em %@";
+"search_scope_includes_subfolders" = "Inclui subpastas";
+"playlist_export_choose_format" = "Escolher formato de exportação";
 "search_section_apple_music" = "Apple Music";
 "search_section_fuzzy" = "Pinyin / correspondências difusas";
 "search_section_lyrics" = "Resultados de letras";

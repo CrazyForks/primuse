@@ -208,7 +208,8 @@ public enum NowPlayingLyricsMetadataPolicy {
         lyrics: [LyricLine],
         playbackTime: TimeInterval,
         isEnabled: Bool,
-        isLiveStream: Bool
+        isLiveStream: Bool,
+        prefersStableTitle: Bool = false
     ) -> NowPlayingLyricsMetadataPresentation {
         let title = canonicalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let artist = artistName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -236,6 +237,15 @@ public enum NowPlayingLyricsMetadataPolicy {
               ) else { return canonical }
 
         let line = synchronizedLyrics[activeIndex]
+        if prefersStableTitle {
+            // CarPlay throttles title changes within the same content item.
+            // Keep its track identity stable and advance lyrics in the subtitle.
+            return NowPlayingLyricsMetadataPresentation(
+                title: title,
+                artist: line.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                lyricLineID: line.id
+            )
+        }
         let secondary = [title, artist].filter { !$0.isEmpty }.joined(separator: " · ")
         return NowPlayingLyricsMetadataPresentation(
             title: line.text.trimmingCharacters(in: .whitespacesAndNewlines),

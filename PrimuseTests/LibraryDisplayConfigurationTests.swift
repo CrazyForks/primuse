@@ -1679,3 +1679,53 @@ private final class OfflineBoundedDownloadURLProtocol: URLProtocol, @unchecked S
 
     override func stopLoading() {}
 }
+
+@MainActor
+final class LibrarySearchNavigationTests: XCTestCase {
+    func testLeavingParentDoesNotClearTheNewFolder() {
+        let navigation = LibrarySearchNavigation()
+        let parent = UUID()
+        let child = UUID()
+        let childScope = LibrarySearchScope(title: "Disc", songIDs: ["disc-song"], includesSubfolders: true)
+        navigation.register(owner: parent, tab: 1) {
+            LibrarySearchScope(title: "Album", songIDs: ["disc-song", "album-song"])
+        }
+        navigation.register(owner: child, tab: 1) { childScope }
+        navigation.remove(owner: parent)
+        XCTAssertEqual(navigation.scope(for: 1), childScope)
+        navigation.remove(owner: child)
+        XCTAssertNil(navigation.scope(for: 1))
+    }
+
+    func testScopeIsResolvedWhenSearchOpensAndIsolatedByTab() {
+        let navigation = LibrarySearchNavigation()
+        var songs: Set<String> = ["first"]
+        let owner = UUID()
+        navigation.register(owner: owner, tab: 0) {
+            LibrarySearchScope(title: "Playlist", songIDs: songs)
+        }
+        songs.insert("new")
+        let captured = navigation.scope(for: 0)
+        navigation.remove(owner: owner)
+        XCTAssertEqual(captured?.songIDs, ["first", "new"])
+        XCTAssertNil(navigation.scope(for: 0))
+        XCTAssertNil(navigation.scope(for: 1))
+        XCTAssertNil(navigation.scope(for: 3))
+    }
+
+    func testDirectoryOverviewKeepsGlobalSearch() {
+        let navigation = LibrarySearchNavigation()
+        navigation.register(owner: UUID(), tab: 1) { nil }
+        XCTAssertNil(navigation.scope(for: 1))
+    }
+
+    func testReturningToParentRestoresItsScope() {
+        let navigation = LibrarySearchNavigation()
+        let parent = UUID()
+        let child = UUID()
+        navigation.register(owner: parent, tab: 1) { LibrarySearchScope(title: "Parent", songIDs: ["a", "b"]) }
+        navigation.register(owner: child, tab: 1) { LibrarySearchScope(title: "Child", songIDs: ["b"]) }
+        navigation.remove(owner: child)
+        XCTAssertEqual(navigation.scope(for: 1)?.songIDs, ["a", "b"])
+    }
+}

@@ -2430,6 +2430,11 @@
 "ai_recommendation_custom_prompt_placeholder" = "Tercih edilen sanatçıları, türleri, yayın yıllarını veya ne kadar keşfedileceğini açıklayın";
 "yearly_share_footer" = "Primuse tarafından oluşturulmuştur";
 "search_scope_local_apple_music" = "Yerel · Apple Music";
+"search_global" = "Genel Arama";
+"search_current_scope" = "Geçerli Kapsam";
+"search_scope_prompt_format" = "%@ içinde ara";
+"search_scope_includes_subfolders" = "Alt klasörler dahil";
+"playlist_export_choose_format" = "Dışa Aktarma Biçimini Seç";
 "artist_name_settings_intro" = "Orijinal etiketleri veya albüm sanatçılarını değiştirmeden, birleştirilmiş parça sanatçılarını ayırın. Yerel çoklu değerli alanlar orijinal sınırlarını korur.";
 "tag_editor_basic_section" = "Temel";
 "insecure_http_trust_title" = "Güvenli Olmayan HTTP Bağlantısına İzin Verilsin mi?";

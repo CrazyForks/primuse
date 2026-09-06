@@ -6,6 +6,7 @@ import MediaPlayer
 import PrimuseKit
 import SFBAudioEngine
 #if os(iOS)
+import CarPlay
 import UIKit
 import WidgetKit
 #elseif os(macOS)
@@ -2075,6 +2076,11 @@ final class AudioPlayerService {
     #if os(iOS)
     private func observeCarAudioRouteState() {
         guard carPlayConnectObserver == nil else { return }
+        // A restored player may publish metadata before didConnect reaches its
+        // observer. Give CarPlay a stable title in that first snapshot as well.
+        isCarPlaySceneActive = UIApplication.shared.connectedScenes.contains {
+            $0 is CPTemplateApplicationScene && $0.activationState != .unattached
+        }
         let center = NotificationCenter.default
 
         carPlayConnectObserver = center.addObserver(
@@ -2085,6 +2091,7 @@ final class AudioPlayerService {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isCarPlaySceneActive = true
+                self.publishLockScreenLyricsIfNeeded()
                 self.forceAudioOnlyIfNeeded()
             }
         }
@@ -2095,7 +2102,9 @@ final class AudioPlayerService {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.isCarPlaySceneActive = false
+                guard let self else { return }
+                self.isCarPlaySceneActive = false
+                self.publishLockScreenLyricsIfNeeded()
             }
         }
 
@@ -2134,6 +2143,7 @@ final class AudioPlayerService {
             let routeChangeTime = Date()
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.publishLockScreenLyricsIfNeeded()
                 let reason = reasonValue.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
                 let session = AVAudioSession.sharedInstance()
                 let handlingOutputTypes = session.currentRoute.outputs
@@ -11059,7 +11069,8 @@ final class AudioPlayerService {
             lyrics: lyrics,
             playbackTime: currentTime,
             isEnabled: playbackSettings.lockScreenLyricsEnabled,
-            isLiveStream: isLiveRadio
+            isLiveStream: isLiveRadio,
+            prefersStableTitle: shouldForceAudioOnly
         )
     }
 

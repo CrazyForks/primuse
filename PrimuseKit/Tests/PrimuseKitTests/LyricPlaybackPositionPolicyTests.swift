@@ -227,8 +227,51 @@ struct LyricPlaybackPositionPolicyTests {
         #expect(second.lyricLineID == "second")
     }
 
-    @Test("Now Playing metadata keeps the song title before the first lyric")
-    func nowPlayingMetadataWaitsForFirstLyric() {
+    @Test("CarPlay keeps the title stable across lyric changes and seeks")
+    func carPlayLyricsAdvanceInSubtitle() {
+        let lyrics = [
+            LyricLine(id: "first", timestamp: 8, text: "First", isSynchronized: true),
+            LyricLine(id: "second", timestamp: 12, text: "Second", isSynchronized: true),
+        ]
+        let presentations = [3.0, 9, 15, 9].map { time in
+            NowPlayingLyricsMetadataPolicy.presentation(
+                canonicalTitle: "Song",
+                artistName: "Artist",
+                lyrics: lyrics,
+                playbackTime: time,
+                isEnabled: true,
+                isLiveStream: false,
+                prefersStableTitle: true
+            )
+        }
+
+        #expect(presentations.map(\.title) == ["Song", "Song", "Song", "Song"])
+        #expect(presentations.map(\.artist) == ["Artist", "First", "Second", "First"])
+        #expect(presentations.map(\.lyricLineID) == [nil, "first", "second", "first"])
+    }
+
+    @Test("Connecting and disconnecting CarPlay changes layout without changing the lyric")
+    func carPlayConnectionChangesLyricsLayout() {
+        let lyrics = [LyricLine(id: "line", timestamp: 0, text: "Lyric", isSynchronized: true)]
+        let presentations = [false, true, false].map { connected in
+            NowPlayingLyricsMetadataPolicy.presentation(
+                canonicalTitle: "Song",
+                artistName: "Artist",
+                lyrics: lyrics,
+                playbackTime: 10,
+                isEnabled: true,
+                isLiveStream: false,
+                prefersStableTitle: connected
+            )
+        }
+
+        #expect(presentations.map(\.title) == ["Lyric", "Song", "Lyric"])
+        #expect(presentations.map(\.artist) == ["Song · Artist", "Lyric", "Song · Artist"])
+        #expect(presentations.allSatisfy { $0.lyricLineID == "line" })
+    }
+
+    @Test("Now Playing metadata keeps the song title before the first lyric", arguments: [false, true])
+    func nowPlayingMetadataWaitsForFirstLyric(prefersStableTitle: Bool) {
         let lyrics = [
             LyricLine(id: "first", timestamp: 8, text: "First", isSynchronized: true),
         ]
@@ -239,7 +282,8 @@ struct LyricPlaybackPositionPolicyTests {
             lyrics: lyrics,
             playbackTime: 3,
             isEnabled: true,
-            isLiveStream: false
+            isLiveStream: false,
+            prefersStableTitle: prefersStableTitle
         )
 
         #expect(presentation.title == "Song")
@@ -247,8 +291,8 @@ struct LyricPlaybackPositionPolicyTests {
         #expect(presentation.lyricLineID == nil)
     }
 
-    @Test("Disabled, live and plain lyrics preserve canonical Now Playing metadata")
-    func unsupportedNowPlayingLyricsPreserveCanonicalMetadata() {
+    @Test("Disabled, live and plain lyrics preserve canonical Now Playing metadata", arguments: [false, true])
+    func unsupportedNowPlayingLyricsPreserveCanonicalMetadata(prefersStableTitle: Bool) {
         let synchronized = [
             LyricLine(id: "line", timestamp: 0, text: "Lyric", isSynchronized: true),
         ]
@@ -263,7 +307,8 @@ struct LyricPlaybackPositionPolicyTests {
                 lyrics: synchronized,
                 playbackTime: 10,
                 isEnabled: false,
-                isLiveStream: false
+                isLiveStream: false,
+                prefersStableTitle: prefersStableTitle
             ),
             NowPlayingLyricsMetadataPolicy.presentation(
                 canonicalTitle: "Song",
@@ -271,7 +316,8 @@ struct LyricPlaybackPositionPolicyTests {
                 lyrics: synchronized,
                 playbackTime: 10,
                 isEnabled: true,
-                isLiveStream: true
+                isLiveStream: true,
+                prefersStableTitle: prefersStableTitle
             ),
             NowPlayingLyricsMetadataPolicy.presentation(
                 canonicalTitle: "Song",
@@ -279,7 +325,8 @@ struct LyricPlaybackPositionPolicyTests {
                 lyrics: plain,
                 playbackTime: 10,
                 isEnabled: true,
-                isLiveStream: false
+                isLiveStream: false,
+                prefersStableTitle: prefersStableTitle
             ),
         ] {
             #expect(presentation.title == "Song")
@@ -288,15 +335,16 @@ struct LyricPlaybackPositionPolicyTests {
         }
     }
 
-    @Test("Missing lyrics preserve canonical Now Playing metadata")
-    func missingNowPlayingLyricsPreserveCanonicalMetadata() {
+    @Test("Missing lyrics preserve canonical Now Playing metadata", arguments: [false, true])
+    func missingNowPlayingLyricsPreserveCanonicalMetadata(prefersStableTitle: Bool) {
         let presentation = NowPlayingLyricsMetadataPolicy.presentation(
             canonicalTitle: "Song",
             artistName: "Artist",
             lyrics: [],
             playbackTime: 10,
             isEnabled: true,
-            isLiveStream: false
+            isLiveStream: false,
+            prefersStableTitle: prefersStableTitle
         )
 
         #expect(presentation.title == "Song")

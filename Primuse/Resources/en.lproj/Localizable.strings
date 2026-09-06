@@ -2335,6 +2335,11 @@
 "last_modified_label" = "Source Date";
 "audio_quality_label" = "Audio Quality";
 "search_scope_local_apple_music" = "Local · Apple Music";
+"search_global" = "Global Search";
+"search_current_scope" = "Current Scope";
+"search_scope_prompt_format" = "Search in %@";
+"search_scope_includes_subfolders" = "Includes subfolders";
+"playlist_export_choose_format" = "Choose Export Format";
 "search_lyrics_hits_format" = "Lyrics matches · %d";
 "search_top_match" = "Top Match";
 "search_jump_to_lyrics_context" = "Jump to lyrics context";

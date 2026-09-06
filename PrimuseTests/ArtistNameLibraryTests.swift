@@ -556,3 +556,48 @@ final class ArtistNameSettingsStoreTests: XCTestCase {
         XCTAssertEqual(defaults.data(forKey: ArtistNameConfiguration.storageKey), unknownData)
     }
 }
+
+final class LibraryScopedSearchTests: XCTestCase {
+    func testPlaylistScopeExcludesSameTitleOutsidePlaylistAndGlobalRestoresIt() {
+        let songs = [song(id: "inside"), song(id: "outside")]
+        let scope = LibrarySearchScope(title: "Playlist", songIDs: ["inside"])
+        XCTAssertEqual(search(scope.songs(in: songs)), ["inside"])
+        XCTAssertEqual(Set(search(songs)), ["inside", "outside"])
+        XCTAssertTrue(search(LibrarySearchScope(title: "Empty", songIDs: []).songs(in: songs)).isEmpty)
+    }
+
+    func testScopedSearchFindsMatchesBeyondTheGlobalResultLimit() {
+        let songs = (0..<300).map { song(id: String(format: "%03d", $0)) }
+        let scope = LibrarySearchScope(title: "Playlist", songIDs: ["299"])
+        XCTAssertEqual(search(scope.songs(in: songs)), ["299"])
+        XCTAssertEqual(search(songs).count, 120)
+    }
+
+    func testDirectoryScopeIncludesChildrenButNotSiblingOrOtherSource() throws {
+        let songs = [
+            song(id: "album", path: "/Music/Album/track.flac"),
+            song(id: "disc", path: "/Music/Album/Disc/track.flac"),
+            song(id: "sibling", path: "/Music/Album Live/track.flac"),
+            song(id: "other-source", path: "/Music/Album/track.flac", sourceID: "other"),
+        ]
+        let sources = ["source", "other"].map {
+            LibraryFolderSourceDescriptor(sourceID: $0, displayName: $0,
+                                          scanRoots: ["/Music"], pathSemantics: .hierarchical)
+        }
+        let index = LibraryFolderIndexBuilder.build(sources: sources, songs: songs)
+        let folder = try XCTUnwrap(index.nodeID(containingSongID: "album"))
+        let scope = LibrarySearchScope(title: "Album", songIDs: Set(index.songIDs(in: folder, scope: .descendants)),
+                                       includesSubfolders: true)
+        XCTAssertEqual(Set(search(scope.songs(in: songs))), ["album", "disc"])
+        XCTAssertEqual(search(scope.songs(in: songs.filter { $0.id != "disc" })), ["album"])
+    }
+
+    private func search(_ songs: [Song]) -> [String] {
+        LibrarySearchWorker.compute(query: "Track", songs: songs, albums: [],
+                                    cache: LibrarySearchCache(), includeLyrics: false).songResults.map(\.song.id)
+    }
+
+    private func song(id: String, path: String = "/Music/track.flac", sourceID: String = "source") -> Song {
+        Song(id: id, title: "Track", duration: 180, fileFormat: .flac, filePath: path, sourceID: sourceID)
+    }
+}

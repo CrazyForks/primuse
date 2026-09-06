@@ -46,6 +46,12 @@ struct SmartPlaylistDetailView: View {
         return AnyView(
             legacyBody(matched)
                 .minimalNavigationDetail()
+                .librarySearchContext {
+                    LibrarySearchScope(
+                        title: smart?.name ?? String(localized: "tab_playlists"),
+                        songIDs: Set(self.matched.map(\.id))
+                    )
+                }
                 .scraperSourceRequiredAlert(isPresented: $showNoScraperSourceAlert)
         )
         #endif

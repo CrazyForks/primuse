@@ -4398,6 +4398,13 @@ private struct LibraryFolderNodeView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { iosToolbar }
+            .librarySearchContext {
+                LibrarySearchScope(
+                    title: navigationTitle,
+                    songIDs: Set(folderCache.index?.songIDs(in: nodeID, scope: .descendants) ?? []),
+                    includesSubfolders: true
+                )
+            }
             #endif
             .songBatchActions(
                 selection: selection,

@@ -2624,6 +2624,11 @@
 "search_result_path_accessibility_format" = "เส้นทาง: %@";
 "search_running" = "กำลังค้นหา...";
 "search_scope_local_apple_music" = "ท้องถิ่น · Apple Music";
+"search_global" = "ค้นหาทั้งหมด";
+"search_current_scope" = "ขอบเขตปัจจุบัน";
+"search_scope_prompt_format" = "ค้นหาใน %@";
+"search_scope_includes_subfolders" = "รวมโฟลเดอร์ย่อย";
+"playlist_export_choose_format" = "เลือกรูปแบบส่งออก";
 "search_section_apple_music" = "Apple Music";
 "search_section_fuzzy" = "พินอิน/การจับคู่แบบคลุมเครือ";
 "search_section_lyrics" = "เนื้อเพลงตรงกัน";

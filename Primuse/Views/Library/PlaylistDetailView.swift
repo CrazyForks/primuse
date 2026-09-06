@@ -24,6 +24,7 @@ struct PlaylistDetailView: View {
 
     @State private var exportShareItem: ExportShareItem?
     @State private var exportError: String?
+    @State private var showExportFormats = false
     @State private var showReorderSheet = false
     @State private var scrapeFeedback: ScrapeFeedback?
     @State private var showNoScraperSourceAlert = false
@@ -108,7 +109,15 @@ struct PlaylistDetailView: View {
         }
         #if os(iOS)
         .minimalNavigationDetail()
+        .librarySearchContext {
+            LibrarySearchScope(title: currentPlaylist?.name ?? playlist.name, songIDs: Set(songs.map(\.id)))
+        }
         #endif
+        .confirmationDialog("playlist_export_choose_format", isPresented: $showExportFormats, titleVisibility: .visible) {
+            Button { export(format: .m3u8) } label: { Text(verbatim: "M3U8") }
+            Button { export(format: .json) } label: { Text(verbatim: "Primuse JSON") }
+            Button("cancel", role: .cancel) {}
+        }
         .overlay(alignment: .bottom) {
             scrapeFeedbackToast
         }
@@ -330,14 +339,9 @@ struct PlaylistDetailView: View {
                         }
                     }
                     Button {
-                        export(format: .m3u8)
+                        showExportFormats = true
                     } label: {
-                        Label("playlist_export_m3u8", systemImage: "doc.text")
-                    }
-                    Button {
-                        export(format: .json)
-                    } label: {
-                        Label("playlist_export_json", systemImage: "doc.badge.gearshape")
+                        Label("export", systemImage: "square.and.arrow.up")
                     }
                     if canDeletePlaylist(playlist.id) {
                         Divider()
@@ -717,10 +721,9 @@ struct PlaylistDetailView: View {
             ],
             middle,
             [
-                .init(icon: "doc.text", title: String(localized: "playlist_export_m3u8"),
-                      enabled: !songs.isEmpty) { export(format: .m3u8) },
-                .init(icon: "curlybraces", title: String(localized: "playlist_export_json"),
-                      enabled: !songs.isEmpty) { export(format: .json) },
+                .init(icon: "square.and.arrow.up", title: String(localized: "export")) {
+                    showExportFormats = true
+                },
             ],
             canDelete ? [
                 .init(icon: "trash", title: String(localized: "delete_playlist"),

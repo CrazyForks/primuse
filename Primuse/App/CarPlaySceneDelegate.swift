@@ -172,6 +172,9 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             carplayLog.notice("📱 CarPlay scene didConnect — beginning template setup")
+            // CarPlay can launch the app before the phone creates its services.
+            // Install the player's observers before announcing the connection.
+            _ = AppServices.shared.playerService
             NotificationCenter.default.post(name: .primuseCarPlaySceneDidConnect, object: nil)
             self.interfaceController = interfaceController
             interfaceController.delegate = self

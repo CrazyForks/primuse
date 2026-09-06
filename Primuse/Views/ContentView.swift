@@ -472,6 +472,9 @@ struct ContentView: View {
     @AppStorage("primuse.navigation.sidebarItem.v1")
     private var sidebarSelection: SidebarItem = .home
     @State private var searchText = ""
+    @State private var searchNavigation = LibrarySearchNavigation()
+    @State private var searchScope: LibrarySearchScope?
+    @State private var searchContext: LibrarySearchScope?
     @State private var settingsSearch = SettingsSearchState()
     @State private var showNowPlaying = false
     @State private var nowPlayingPresentationID = UUID()
@@ -541,7 +544,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var tabRoot: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: searchAwareTabSelection) {
             Tab(String(localized: "home_title"), systemImage: "house.fill", value: 0) {
                 HomeView(
                     switchToSettingsTab: { selectedTab = 3 },
@@ -549,6 +552,7 @@ struct ContentView: View {
                 )
                     .id("primuse.tab.home")
                     .environment(\.minimalNavigationDetailScope, .home)
+                    .environment(\.librarySearchTab, 0)
                     .toolbar(systemTabBarVisibility, for: .tabBar)
             }
 
@@ -561,11 +565,13 @@ struct ContentView: View {
                     }
                 )
                 .environment(\.minimalNavigationDetailScope, .library)
+                .environment(\.librarySearchTab, 1)
                 .toolbar(systemTabBarVisibility, for: .tabBar)
             }
 
             Tab(value: 2, role: .search) {
-                SearchView(searchText: $searchText, onShowInLibrary: showSongInLibrary)
+                SearchView(searchText: $searchText, scope: $searchScope,
+                           contextualScope: searchContext, onShowInLibrary: showSongInLibrary)
                     .id("primuse.tab.search")
                     .environment(\.minimalNavigationDetailScope, .search)
                     .toolbar(systemTabBarVisibility, for: .tabBar)
@@ -689,8 +695,8 @@ struct ContentView: View {
             let selection = Binding<SidebarItem?>(
                 get: { sidebarSelection },
                 set: { if let v = $0 {
+                    selectTab(v.rawValueTab)
                     sidebarSelection = v
-                    selectedTab = v.rawValueTab
                 } }
             )
             VStack(spacing: 0) {
@@ -721,6 +727,7 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
             padDetail(for: sidebarSelection)
+                .environment(\.librarySearchTab, sidebarSelection.rawValueTab)
         }
     }
 
@@ -763,7 +770,8 @@ struct ContentView: View {
         case .libraryRadio:
             librarySubpane(title: "radio_title") { RadioStationsView() }
         case .search:
-            SearchView(searchText: $searchText, onShowInLibrary: showSongInLibrary)
+            SearchView(searchText: $searchText, scope: $searchScope,
+                           contextualScope: searchContext, onShowInLibrary: showSongInLibrary)
         case .settings:
             SettingsView(scraperSettingsRoute: $scraperSettingsRoute)
         }
@@ -829,6 +837,7 @@ struct ContentView: View {
                     .zIndex(2)
             }
         }
+        .environment(\.librarySearchNavigation, searchNavigation)
         .environment(\.appNavigationMode, navigationMode)
         .songBatchRemovalFeedback()
         .onPreferenceChange(SongBatchSelectionActivePreferenceKey.self) { isActive in
@@ -959,6 +968,20 @@ struct ContentView: View {
         selectMinimalPage(MinimalNavigationPolicy.homePage(visibleSections: visibleLibrarySections))
     }
 
+    private var searchAwareTabSelection: Binding<Int> {
+        Binding(get: { selectedTab }, set: { selectTab($0) })
+    }
+
+    private func selectTab(_ tab: Int) {
+        if tab == 2, selectedTab != 2 {
+            // Capture before switching tabs triggers the detail's onDisappear.
+            let context = searchNavigation.scope(for: selectedTab)
+            searchContext = context
+            searchScope = context
+        }
+        selectedTab = tab
+    }
+
     private func submitMinimalSearch() {
         if selectedTab == 3 {
             settingsSearch.isPresented = false
@@ -977,7 +1000,7 @@ struct ContentView: View {
             minimalLibrarySection = section
             libraryDeepLink = .section(section)
         case .search:
-            selectedTab = 2
+            selectTab(2)
             sidebarSelection = .search
         case .settings:
             selectedTab = 3

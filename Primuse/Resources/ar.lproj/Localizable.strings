@@ -2624,6 +2624,11 @@
 "search_result_path_accessibility_format" = "المسار: %@";
 "search_running" = "البحث…";
 "search_scope_local_apple_music" = "محلي · Apple Music";
+"search_global" = "بحث شامل";
+"search_current_scope" = "النطاق الحالي";
+"search_scope_prompt_format" = "البحث في %@";
+"search_scope_includes_subfolders" = "يشمل المجلدات الفرعية";
+"playlist_export_choose_format" = "اختيار تنسيق التصدير";
 "search_section_apple_music" = "Apple Music";
 "search_section_fuzzy" = "بينيين / مباريات غامضة";
 "search_section_lyrics" = "كلمات الأغاني متطابقة";

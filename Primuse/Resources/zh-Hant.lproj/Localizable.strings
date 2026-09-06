@@ -2494,6 +2494,11 @@
 "last_modified_label" = "來源日期";
 "audio_quality_label" = "音訊規格";
 "search_scope_local_apple_music" = "本機 · Apple Music";
+"search_global" = "全域搜尋";
+"search_current_scope" = "目前範圍";
+"search_scope_prompt_format" = "在%@中搜尋";
+"search_scope_includes_subfolders" = "包含子目錄";
+"playlist_export_choose_format" = "選擇匯出格式";
 "search_lyrics_hits_format" = "歌詞命中 · %d";
 "search_top_match" = "頂部配對";
 "search_jump_to_lyrics_context" = "跳到歌詞上下文";

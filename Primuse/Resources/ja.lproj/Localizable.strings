@@ -2518,6 +2518,11 @@
 "last_modified_label" = "ソースの日付";
 "audio_quality_label" = "音質";
 "search_scope_local_apple_music" = "ローカル · Apple Music";
+"search_global" = "全体を検索";
+"search_current_scope" = "現在の範囲";
+"search_scope_prompt_format" = "%@内を検索";
+"search_scope_includes_subfolders" = "サブフォルダを含む";
+"playlist_export_choose_format" = "書き出し形式を選択";
 "search_lyrics_hits_format" = "歌詞の一致 · %d";
 "search_top_match" = "トップヒット";
 "search_jump_to_lyrics_context" = "歌詞の該当箇所へ移動";

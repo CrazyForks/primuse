@@ -2624,6 +2624,11 @@
 "search_result_path_accessibility_format" = "पथ: %@";
 "search_running" = "खोजा जा रहा है...";
 "search_scope_local_apple_music" = "स्थानीय · Apple Music";
+"search_global" = "वैश्विक खोज";
+"search_current_scope" = "वर्तमान दायरा";
+"search_scope_prompt_format" = "%@ में खोजें";
+"search_scope_includes_subfolders" = "उपफ़ोल्डर शामिल हैं";
+"playlist_export_choose_format" = "निर्यात फ़ॉर्मैट चुनें";
 "search_section_apple_music" = "Apple Music";
 "search_section_fuzzy" = "पिनयिन / फ़ज़ी मैच";
 "search_section_lyrics" = "बोल मेल खाते हैं";

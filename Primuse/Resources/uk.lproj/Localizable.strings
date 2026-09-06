@@ -2430,6 +2430,11 @@
 "ai_recommendation_custom_prompt_placeholder" = "Опишіть улюблених виконавців, жанри, роки випуску або як далеко досліджувати";
 "yearly_share_footer" = "Створено Primuse";
 "search_scope_local_apple_music" = "Місцевий · Apple Music";
+"search_global" = "Глобальний пошук";
+"search_current_scope" = "Поточна область";
+"search_scope_prompt_format" = "Пошук у %@";
+"search_scope_includes_subfolders" = "Включно з вкладеними папками";
+"playlist_export_choose_format" = "Виберіть формат експорту";
 "artist_name_settings_intro" = "Розділіть виконавців об’єднаних треків без зміни оригінальних тегів чи виконавців альбому. Власні багатозначні поля зберігають свої вихідні межі.";
 "tag_editor_basic_section" = "Базовий";
 "insecure_http_trust_title" = "Дозволити незахищене з’єднання HTTP?";

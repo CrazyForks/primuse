@@ -289,6 +289,14 @@ struct HomeFolderBrowser: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .minimalNavigationDetail(isDetail: nodeID != nil)
+        .librarySearchContext {
+            guard let nodeID, let node else { return nil }
+            return LibrarySearchScope(
+                title: HomeDiscoveryText.folderTitle(node),
+                songIDs: Set(model.index?.songIDs(in: nodeID, scope: .descendants) ?? []),
+                includesSubfolders: true
+            )
+        }
         #endif
         .toolbar {
             if let node {

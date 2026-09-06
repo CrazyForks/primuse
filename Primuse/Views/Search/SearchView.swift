@@ -2,6 +2,81 @@ import SwiftUI
 import MusicKit
 import PrimuseKit
 
+struct LibrarySearchScope: Equatable {
+    let title: String
+    let songIDs: Set<String>
+    var includesSubfolders = false
+
+    func songs(in visibleSongs: [PrimuseKit.Song]) -> [PrimuseKit.Song] {
+        visibleSongs.filter { songIDs.contains($0.id) }
+    }
+}
+
+#if os(iOS)
+@MainActor
+final class LibrarySearchNavigation {
+    private struct Entry {
+        let owner: UUID
+        let tab: Int
+        let resolve: @MainActor () -> LibrarySearchScope?
+    }
+
+    private var entries: [Entry] = []
+
+    func register(owner: UUID, tab: Int, resolve: @escaping @MainActor () -> LibrarySearchScope?) {
+        remove(owner: owner)
+        entries.append(Entry(owner: owner, tab: tab, resolve: resolve))
+    }
+
+    func remove(owner: UUID) {
+        entries.removeAll { $0.owner == owner }
+    }
+
+    func scope(for tab: Int) -> LibrarySearchScope? {
+        entries.last { $0.tab == tab }?.resolve()
+    }
+}
+
+private struct LibrarySearchNavigationKey: EnvironmentKey {
+    static let defaultValue: LibrarySearchNavigation? = nil
+}
+
+private struct LibrarySearchTabKey: EnvironmentKey {
+    static let defaultValue = 0
+}
+
+extension EnvironmentValues {
+    var librarySearchNavigation: LibrarySearchNavigation? {
+        get { self[LibrarySearchNavigationKey.self] }
+        set { self[LibrarySearchNavigationKey.self] = newValue }
+    }
+
+    var librarySearchTab: Int {
+        get { self[LibrarySearchTabKey.self] }
+        set { self[LibrarySearchTabKey.self] = newValue }
+    }
+}
+
+private struct LibrarySearchContextModifier: ViewModifier {
+    @Environment(\.librarySearchNavigation) private var navigation
+    @Environment(\.librarySearchTab) private var tab
+    @State private var owner = UUID()
+    let resolve: @MainActor () -> LibrarySearchScope?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { navigation?.register(owner: owner, tab: tab, resolve: resolve) }
+            .onDisappear { navigation?.remove(owner: owner) }
+    }
+}
+
+extension View {
+    func librarySearchContext(_ resolve: @escaping @MainActor () -> LibrarySearchScope?) -> some View {
+        modifier(LibrarySearchContextModifier(resolve: resolve))
+    }
+}
+#endif
+
 enum SearchCatalogPolicy {
     static func albums(
         query: String,
@@ -147,6 +222,8 @@ struct SearchView: View {
     @Environment(\.appNavigationMode) private var appNavigationMode
     #endif
     @Binding var searchText: String
+    @Binding private var scope: LibrarySearchScope?
+    private let contextualScope: LibrarySearchScope?
     let onShowInLibrary: (PrimuseKit.Song) -> Void
     @State private var searchResults: [LibrarySearchResult] = []
     @State private var matchingAlbums: [PrimuseKit.Album] = []
@@ -173,9 +250,13 @@ struct SearchView: View {
 
     init(
         searchText: Binding<String>,
+        scope: Binding<LibrarySearchScope?> = .constant(nil),
+        contextualScope: LibrarySearchScope? = nil,
         onShowInLibrary: @escaping (PrimuseKit.Song) -> Void = { _ in }
     ) {
         self._searchText = searchText
+        self._scope = scope
+        self.contextualScope = contextualScope
         self.onShowInLibrary = onShowInLibrary
     }
 
@@ -211,7 +292,7 @@ struct SearchView: View {
     }
 
     private var appleMusicSearchEnabled: Bool {
-        AppleMusicCatalogSearchAvailabilityPolicy.isEnabled(
+        scope == nil && AppleMusicCatalogSearchAvailabilityPolicy.isEnabled(
             catalogSearchEnabled: appleMusicCatalogSearchEnabled,
             disabledSourceIDs: library.disabledSourceIDs
         )
@@ -250,7 +331,7 @@ struct SearchView: View {
         #else
         let directIDs = kinds.flatMap { kind -> [String] in
             let bucket = searchResults.filter { $0.matchKind == kind }
-            return bucket.prefix(40).map(\.song.id)
+            return bucket.prefix(scope == nil ? 40 : bucket.count).map(\.song.id)
         }
         let semanticIDs = visibleSemanticResults.prefix(40).map(\.song.id)
         return directIDs + semanticIDs
@@ -295,6 +376,16 @@ struct SearchView: View {
         .onReceive(NotificationCenter.default.publisher(for: SearchHistoryStore.didChangeNotification)) { _ in
             loadRecentSearches()
         }
+        .onChange(of: scope) { _, _ in
+            selection.deactivate()
+            searchResults = []
+            matchingAlbums = []
+            semanticResults = []
+            renderedQuery = ""
+            workCoordinator.lyricsCache = LibrarySearchCache()
+            performSearch(query: searchText)
+            performAppleMusicSearch(query: searchText)
+        }
         .onChange(of: searchText) { _, newValue in
             performSearch(query: newValue)
             performAppleMusicSearch(query: newValue)
@@ -327,7 +418,7 @@ struct SearchView: View {
             iosSearchContent
         } else {
             iosSearchContent
-                .searchable(text: $searchText, prompt: Text("search_prompt"))
+                .searchable(text: $searchText, prompt: Text(searchPrompt))
                 .onSubmit(of: .search) { addRecentSearch(searchText) }
         }
     }
@@ -361,6 +452,11 @@ struct SearchView: View {
                 searchResultsView
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let contextualScope {
+                scopeSwitcher(contextualScope)
+            }
+        }
         .navigationTitle(usesMinimalNavigation ? Text("") : Text("search_title"))
         .toolbarTitleDisplayMode(usesMinimalNavigation ? .inline : .inlineLarge)
         #if os(iOS)
@@ -380,6 +476,40 @@ struct SearchView: View {
             }
         }
         #endif
+    }
+
+    private var searchPrompt: String {
+        guard let scope else { return String(localized: "search_prompt") }
+        return String(format: String(localized: "search_scope_prompt_format"), scope.title)
+    }
+
+    private func scopeSwitcher(_ context: LibrarySearchScope) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label(scope?.title ?? String(localized: "search_global"),
+                      systemImage: scope == nil ? "globe" : (context.includesSubfolders ? "folder" : "music.note.list"))
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                if scope?.includesSubfolders == true {
+                    Text("search_scope_includes_subfolders")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            Button {
+                scope = scope == nil ? context : nil
+            } label: {
+                Text(scope == nil ? "search_current_scope" : "search_global")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .fixedSize()
+            .accessibilityIdentifier("search.scope.toggle")
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.bar)
     }
 
     #if os(macOS)
@@ -1266,7 +1396,7 @@ struct SearchView: View {
 
     private var matchingArtists: [PrimuseKit.Artist] {
         let query = renderedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
+        guard scope == nil, !query.isEmpty else { return [] }
         var artists = library.visibleArtists.filter {
             $0.name.localizedCaseInsensitiveContains(query)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -1358,16 +1488,18 @@ struct SearchView: View {
                 HStack {
                     Image(systemName: "music.note.list")
                         .foregroundStyle(.secondary)
-                    Text("\(library.visibleSongs.count) \(String(localized: "tab_songs"))")
-                    Spacer()
-                    Text("\(library.visibleAlbums.count) \(String(localized: "tab_albums"))")
-                    Text("·")
-                    Text("\(library.visibleArtists.count) \(String(localized: "tab_artists"))")
+                    Text("\(scope?.songIDs.count ?? library.visibleSongs.count) \(String(localized: "tab_songs"))")
+                    if scope == nil {
+                        Spacer()
+                        Text("\(library.visibleAlbums.count) \(String(localized: "tab_albums"))")
+                        Text("·")
+                        Text("\(library.visibleArtists.count) \(String(localized: "tab_artists"))")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             } header: {
-                Text("library")
+                Text(scope?.title ?? String(localized: "library"))
             }
         }
     }
@@ -1498,7 +1630,8 @@ struct SearchView: View {
     /// 一组按 matchKind 过滤的歌曲 Section。空组直接 noop, 不显示标题。
     @ViewBuilder
     private func songSection(kind: LibrarySearchMatchKind, titleKey: LocalizedStringKey) -> some View {
-        let bucket = searchResults.filter { $0.matchKind == kind }.prefix(40)
+        let matches = searchResults.filter { $0.matchKind == kind }
+        let bucket = matches.prefix(scope == nil ? 40 : matches.count)
         if !bucket.isEmpty {
             Section {
                 ForEach(Array(bucket)) { result in
@@ -1694,6 +1827,7 @@ struct SearchView: View {
 
     private func performSearch(query: String) {
         workCoordinator.cancelSearch()
+        workCoordinator.generation += 1
         guard !query.isEmpty else {
             searchResults = []
             matchingAlbums = []
@@ -1706,12 +1840,12 @@ struct SearchView: View {
             return
         }
 
-        let songsSnapshot = library.visibleSongs
-        let albumsSnapshot = library.visibleAlbums
+        let scopedSearch = scope != nil
+        let songsSnapshot = scope?.songs(in: library.visibleSongs) ?? library.visibleSongs
+        let albumsSnapshot = scopedSearch ? [] : library.visibleAlbums
         let cacheSnapshot = workCoordinator.lyricsCache
         let metadataRevisionKey = "\(library.visibleSongCollectionRevision):\(library.searchRevision)"
 
-        workCoordinator.generation += 1
         let myGen = workCoordinator.generation
         isSearching = true
 
@@ -1736,12 +1870,19 @@ struct SearchView: View {
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
 
-            let indexed = await LibrarySearchIndex.shared.search(
-                query: query,
-                songs: songsSnapshot,
-                albums: albumsSnapshot,
-                metadataRevisionKey: metadataRevisionKey
-            )
+            // The persistent index limits global matches before membership filtering.
+            // Search the scope directly so matches outside it cannot crowd out its songs.
+            let indexed: LibraryIndexedSearchOutput?
+            if scopedSearch {
+                indexed = nil
+            } else {
+                indexed = await LibrarySearchIndex.shared.search(
+                    query: query,
+                    songs: songsSnapshot,
+                    albums: albumsSnapshot,
+                    metadataRevisionKey: metadataRevisionKey
+                )
+            }
             guard !Task.isCancelled else { return }
 
             let output: LibrarySearchOutput
@@ -1782,7 +1923,8 @@ struct SearchView: View {
                         query: query,
                         songs: songsSnapshot,
                         albums: albumsSnapshot,
-                        cache: cacheSnapshot
+                        cache: cacheSnapshot,
+                        songLimit: scopedSearch ? songsSnapshot.count : 120
                     )
                 }
                 output = await withTaskCancellationHandler {
@@ -1819,7 +1961,7 @@ struct SearchView: View {
         metadataRevisionKey: String,
         generation: Int
     ) {
-        guard intelligence.isSemanticSearchConfigured else {
+        guard scope == nil, intelligence.isSemanticSearchConfigured else {
             semanticResults = []
             intelligenceRenderedQuery = query
             isIntelligenceSearching = false
