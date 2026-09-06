@@ -77,6 +77,26 @@ extension View {
 }
 #endif
 
+struct SearchScopeSwitchButton: View {
+    @Binding var scope: LibrarySearchScope?
+    let context: LibrarySearchScope
+
+    var body: some View {
+        Button {
+            scope = scope == nil ? context : nil
+        } label: {
+            Label(
+                scope == nil ? String(localized: "search_current_scope") : String(localized: "search_global"),
+                systemImage: scope == nil ? (context.includesSubfolders ? "folder" : "music.note.list") : "globe"
+            )
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityValue(Text(scope?.title ?? String(localized: "search_global")))
+        .accessibilityIdentifier("search.scope.toggle")
+    }
+}
+
 enum SearchCatalogPolicy {
     static func albums(
         query: String,
@@ -452,15 +472,18 @@ struct SearchView: View {
                 searchResultsView
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let contextualScope {
-                scopeSwitcher(contextualScope)
-            }
-        }
         .navigationTitle(usesMinimalNavigation ? Text("") : Text("search_title"))
         .toolbarTitleDisplayMode(usesMinimalNavigation ? .inline : .inlineLarge)
         #if os(iOS)
         .minimalNavigationRoot()
+        .toolbar {
+            if !usesMinimalNavigation, let contextualScope {
+                ToolbarItem(placement: .topBarTrailing) {
+                    SearchScopeSwitchButton(scope: $scope, context: contextualScope)
+                        .labelStyle(.titleOnly)
+                }
+            }
+        }
         #endif
         .navigationDestination(for: PrimuseKit.Album.self) { AlbumDetailView(album: $0) }
         .navigationDestination(for: PrimuseKit.Artist.self) { ArtistDetailView(artist: $0) }
@@ -481,35 +504,6 @@ struct SearchView: View {
     private var searchPrompt: String {
         guard let scope else { return String(localized: "search_prompt") }
         return String(format: String(localized: "search_scope_prompt_format"), scope.title)
-    }
-
-    private func scopeSwitcher(_ context: LibrarySearchScope) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label(scope?.title ?? String(localized: "search_global"),
-                      systemImage: scope == nil ? "globe" : (context.includesSubfolders ? "folder" : "music.note.list"))
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                if scope?.includesSubfolders == true {
-                    Text("search_scope_includes_subfolders")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 0)
-            Button {
-                scope = scope == nil ? context : nil
-            } label: {
-                Text(scope == nil ? "search_current_scope" : "search_global")
-                    .font(.subheadline)
-            }
-            .buttonStyle(.bordered)
-            .fixedSize()
-            .accessibilityIdentifier("search.scope.toggle")
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-        .background(.bar)
     }
 
     #if os(macOS)

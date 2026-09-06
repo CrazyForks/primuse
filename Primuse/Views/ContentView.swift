@@ -602,6 +602,8 @@ struct ContentView: View {
                 MinimalTopNavigationBar(
                     searchText: selectedTab == 3 ? $settingsSearch.query : $searchText,
                     settingsSearchPresented: $settingsSearch.isPresented,
+                    searchScope: $searchScope,
+                    searchContext: searchContext,
                     categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
                     libraryPages: MinimalNavigationPolicy.libraryPages(
                         visibleSections: visibleLibrarySections
@@ -1441,6 +1443,8 @@ private struct MinimalNavigationScrollObserver: UIViewRepresentable {
 private struct MinimalTopNavigationBar: View {
     @Binding var searchText: String
     @Binding var settingsSearchPresented: Bool
+    @Binding var searchScope: LibrarySearchScope?
+    let searchContext: LibrarySearchScope?
     @Binding var categoriesCollapsed: Bool
     let libraryPages: [MinimalNavigationPage]
     let selection: MinimalNavigationPage
@@ -1462,6 +1466,16 @@ private struct MinimalTopNavigationBar: View {
                    let selectedLibraryPage {
                     collapsedLibraryButton(selectedLibraryPage)
                         .transition(.scale(scale: 0.86).combined(with: .opacity))
+                }
+
+                if selection == .search, let searchContext {
+                    SearchScopeSwitchButton(scope: $searchScope, context: searchContext)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 16, weight: .semibold))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 44, height: 44)
+                        .background(Color.accentColor.opacity(0.14), in: Circle())
                 }
 
                 actionButton(
@@ -1544,9 +1558,13 @@ private struct MinimalTopNavigationBar: View {
     }
 
     private var searchPrompt: String {
-        selection == .settings
-            ? SettingsStrings.text("Search settings")
-            : String(localized: "search_title")
+        if selection == .settings {
+            return SettingsStrings.text("Search settings")
+        }
+        if selection == .search, let searchScope {
+            return String(format: String(localized: "search_scope_prompt_format"), searchScope.title)
+        }
+        return String(localized: "search_title")
     }
 
     private var searchField: some View {
