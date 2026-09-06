@@ -823,6 +823,166 @@ struct HomeFolderBrowser: View {
 }
 
 #if os(macOS)
+private struct MacFolderDetailHeader<Navigation: View, Tools: View, Playback: View>: View {
+    let title: String
+    let detail: String
+    let isSource: Bool
+    @ViewBuilder let navigation: Navigation
+    @ViewBuilder let tools: Tools
+    @ViewBuilder let playback: Playback
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 8) {
+                navigation
+                Spacer(minLength: 12)
+                tools
+            }
+            .frame(height: 32)
+            HStack(spacing: 14) {
+                Image(systemName: isSource ? "externaldrive.fill" : "folder.fill")
+                    .font(.system(size: 23))
+                    .foregroundStyle(PMColor.brand)
+                    .frame(width: 48, height: 48)
+                    .background(PMColor.brand.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title)
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(PMColor.text)
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(PMColor.textMuted)
+                }
+                .lineLimit(1)
+                Spacer(minLength: 16)
+                playback
+            }
+        }
+        .padding(.horizontal, PMSpace.xxxl)
+        .padding(.top, 10)
+        .padding(.bottom, 20)
+    }
+}
+
+private struct MacFolderChildCard: View {
+    let title: String
+    let detail: String
+    let compact: Bool
+    let onOpen: () -> Void
+    @State private var hovered = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: compact ? 20 : 26))
+                    .foregroundStyle(PMColor.brand)
+                    .frame(width: compact ? 28 : 36)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(PMColor.text)
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(PMColor.textMuted)
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: compact ? 48 : 68)
+            .background(hovered ? PMColor.rowHover : PMColor.card, in: RoundedRectangle(cornerRadius: 9))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9)
+                    .strokeBorder(focused ? PMColor.brand : PMColor.cardBorder.opacity(0.5), lineWidth: focused ? 1 : 0.5)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .focused($focused)
+        .onHover { hovered = $0 }
+        .help(title)
+    }
+}
+
+private struct MacFolderSongColumns {
+    let width: CGFloat
+
+    var artistWidth: CGFloat? { width >= 560 ? max(110, width * 0.19) : nil }
+    var albumWidth: CGFloat? { width >= 780 ? max(140, width * 0.23) : nil }
+}
+
+private struct MacFolderSongLine<Artwork: View, Status: View>: View {
+    let columns: MacFolderSongColumns
+    let number: String
+    let title: String
+    let artist: String
+    let album: String
+    let duration: String
+    var isHeader = false
+    var isCurrent = false
+    @ViewBuilder let artwork: Artwork
+    @ViewBuilder let status: Status
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Group {
+                if isCurrent {
+                    Image(systemName: "play.fill").foregroundStyle(PMColor.brand)
+                } else {
+                    Text(number).monospacedDigit()
+                }
+            }
+            .font(.system(size: 11))
+            .frame(width: 32, alignment: .trailing)
+            artwork.frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: isHeader ? 11 : 12.5, weight: isHeader ? .regular : .medium))
+                    .foregroundStyle(isHeader ? PMColor.textMuted : (isCurrent ? PMColor.brand : PMColor.text))
+                if !isHeader, columns.artistWidth == nil, !artist.isEmpty {
+                    Text(artist).font(.system(size: 11))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let width = columns.artistWidth {
+                Text(artist).frame(width: width, alignment: .leading)
+            }
+            if let width = columns.albumWidth {
+                Text(album).frame(width: width, alignment: .leading)
+            }
+            Text(duration)
+                .monospacedDigit()
+                .frame(width: 48, alignment: .trailing)
+            status.frame(width: 18)
+        }
+        .font(.system(size: isHeader ? 11 : 12))
+        .foregroundStyle(PMColor.textMuted)
+        .lineLimit(1)
+        .padding(.horizontal, 10)
+    }
+}
+
+private struct MacFolderSongColumnsHeader: View {
+    let columns: MacFolderSongColumns
+
+    var body: some View {
+        MacFolderSongLine(
+            columns: columns, number: "#", title: String(localized: "sort_title"),
+            artist: String(localized: "sort_artist"), album: String(localized: "sort_album"),
+            duration: String(localized: "track_duration_short"), isHeader: true
+        ) {
+            Color.clear
+        } status: {
+            Color.clear
+        }
+        .frame(height: 32)
+        .background(PMColor.card.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 private struct MacFolderOverviewLayout<Pinned: View, Sources: View>: View {
     let hasPins: Bool
     @ViewBuilder let pinned: Pinned
@@ -1017,6 +1177,8 @@ private struct MacFolderScrollReset: ViewModifier {
 private struct MacHomeFolderSongRow: View {
     let songID: String
     let orderedSongIDs: [String]
+    let position: Int
+    let columns: MacFolderSongColumns
     let performAction: (Song, SongRowActionRequest.Action) -> Void
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
@@ -1033,39 +1195,23 @@ private struct MacHomeFolderSongRow: View {
                     performAction(song, .unavailable)
                 }
             } label: {
-                HStack(spacing: 10) {
+                MacFolderSongLine(
+                    columns: columns, number: String(position), title: song.title,
+                    artist: library.artistDisplayName(for: song) ?? "", album: song.albumTitle ?? "",
+                    duration: song.duration > 0 ? song.duration.formattedDuration : "—",
+                    isCurrent: isCurrent
+                ) {
                     CachedArtworkView(
                         coverRef: song.coverArtFileName, songID: songID,
-                        size: 36, cornerRadius: 5,
+                        size: 32, cornerRadius: 5,
                         sourceID: song.sourceID, filePath: song.filePath,
                         fileFormat: song.fileFormat
                     )
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(song.title)
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(isCurrent ? PMColor.brand : PMColor.text)
-                        Text([library.artistDisplayName(for: song), song.albumTitle].compactMap { $0 }.joined(separator: " · "))
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(PMColor.textMuted)
-                    }
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if isCurrent {
-                        Image(systemName: "play.fill")
-                            .foregroundStyle(PMColor.brand)
-                            .font(.system(size: 11))
-                    }
-                    if song.duration > 0 {
-                        Text(song.duration.formattedDuration)
-                            .font(.system(size: 11, design: .monospaced))
-                            .monospacedDigit()
-                            .foregroundStyle(PMColor.textMuted)
-                    }
+                } status: {
                     if song.sourceID != AppleMusicLibraryService.systemSourceID {
                         OfflineAudioStatusBadge(snapshot: sourceManager.offlineAudioSnapshotEntry(for: song).snapshot)
                     }
                 }
-                .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .pmRowBackground(selected: isCurrent)
