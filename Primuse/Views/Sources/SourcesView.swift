@@ -245,6 +245,7 @@ struct MetadataBackfillPerformanceButton<Label: View>: View {
         .alert(MetadataReadingText.string("fastWarningTitle"), isPresented: $showingFastConfirmation) {
             Button(MetadataReadingText.string("fastWarningConfirm")) {
                 storedMode = MetadataReadingMode.fast.rawValue
+                AppServices.shared.metadataBackfill.continueInBackgroundForUserAction()
             }
             Button(MetadataReadingText.string("cancel"), role: .cancel) {}
         } message: {

@@ -2884,8 +2884,8 @@ public enum MetadataBackfillExecutionMode: Sendable, Equatable {
     /// active so the scan naturally finishes reading tags without monopolizing
     /// the network or competing with playback.
     case foregroundAfterSourceScan
-    /// A BGProcessing wake processes one throttled snapshot. If songs remain,
-    /// the app schedules another wake instead of monopolizing the current one.
+    /// Runs bounded snapshots until the queue drains or iOS ends execution.
+    /// A granted continued-processing task retains the selected reading speed.
     case background
     case backgroundDuringPlayback
 }
@@ -3069,7 +3069,9 @@ public enum MetadataBackfillExecutionPolicy {
     public static func limits(
         for mode: MetadataBackfillExecutionMode,
         preference: MetadataReadingMode,
-        environment: MetadataReadingEnvironment = .init()
+        environment: MetadataReadingEnvironment = .init(),
+        continuedProcessing: Bool = false,
+        recentProcessingDuration: TimeInterval? = nil
     ) -> MetadataBackfillExecutionLimits {
         let isBackground = mode == .background || mode == .backgroundDuringPlayback
         let offline = environment.offlineSource || mode == .foregroundDeviceLocal
@@ -3086,27 +3088,41 @@ public enum MetadataBackfillExecutionPolicy {
             flush = 10
         }
         if environment.playbackActive {
-            workers = min(workers, offline && environment.device.platform != .television ? 2 : 1)
+            let playbackCeiling = environment.device.platform == .television ? 1
+                : (offline || preference == .fast ? 2 : 1)
+            workers = min(workers, playbackCeiling)
         }
         if environment.lowPowerMode {
             workers = 1
             delay = max(delay, offline ? 0.1 : 0.35)
         }
-        if isBackground {
+        if isBackground && !continuedProcessing {
             workers = 1
             let playing = mode == .backgroundDuringPlayback
             snapshot = playing ? 8 : 24
-            delay = playing ? 1.5 : 0.75
+            delay = max(delay, preference == .fast ? 0 : (playing ? 1.5 : 0.75))
             flush = playing ? 30 : 15
         }
         switch environment.thermalState {
         case .nominal: break
         case .fair:
-            workers = min(workers, 1)
-            delay = max(delay, 0.35)
+            // Full speed still yields capacity at mild warmth. Severe heat
+            // and low-power constraints remain authoritative in every mode.
+            workers = min(workers, preference == .fast ? max(1, ceiling / 2) : 1)
+            if preference != .fast { delay = max(delay, 0.35) }
         case .serious:
             workers = min(workers, 1)
-            delay = max(delay, 1.5)
+            // For cheap, network-bound tags, budget three times the recent
+            // non-network work as rest. Expensive/unknown work keeps the
+            // existing 1.5s cooldown, and critical heat always pauses reads.
+            let cooldown: TimeInterval
+            if preference == .fast, let recentProcessingDuration,
+               recentProcessingDuration.isFinite, recentProcessingDuration >= 0 {
+                cooldown = min(1.5, max(0.1, recentProcessingDuration * 3))
+            } else {
+                cooldown = 1.5
+            }
+            delay = max(delay, cooldown)
         case .critical:
             workers = 0
         }
@@ -3115,7 +3131,7 @@ public enum MetadataBackfillExecutionPolicy {
             snapshotLimit: snapshot,
             interRequestDelay: delay,
             flushInterval: flush,
-            snapshotPassLimit: isBackground ? 1 : nil
+            snapshotPassLimit: nil
         )
     }
 }

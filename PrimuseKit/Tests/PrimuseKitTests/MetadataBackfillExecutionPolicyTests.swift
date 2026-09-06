@@ -37,7 +37,7 @@ struct MetadataBackfillExecutionPolicyTests {
         #expect(terminalIncomplete.isEmpty)
     }
 
-    @Test("Background work is serial, throttled, and bounded per wake")
+    @Test("Background work drains bounded snapshots until its execution time expires")
     func boundedBackgroundLimits() {
         let standard = MetadataBackfillExecutionPolicy.limits(for: .standard)
         let userInitiated = MetadataBackfillExecutionPolicy.limits(for: .userInitiated)
@@ -65,12 +65,29 @@ struct MetadataBackfillExecutionPolicyTests {
         #expect(foreground.interRequestDelay == 0)
         #expect(foreground.snapshotPassLimit == nil)
         #expect(background.workerCount == 1)
-        #expect(background.snapshotPassLimit == 1)
+        #expect(background.snapshotPassLimit == nil)
         #expect(playback.workerCount == 1)
         #expect(playback.snapshotLimit < background.snapshotLimit)
         #expect(playback.interRequestDelay > background.interRequestDelay)
         #expect(playback.flushInterval >= background.flushInterval)
-        #expect(playback.snapshotPassLimit == 1)
+        #expect(playback.snapshotPassLimit == nil)
+    }
+
+    @Test("Background audio and processing do not stop after 8 or 24 songs")
+    func backgroundDrainsMultipleSnapshots() {
+        for mode in [MetadataBackfillExecutionMode.background, .backgroundDuringPlayback] {
+            let limits = MetadataBackfillExecutionPolicy.limits(for: mode, preference: .fast)
+            var remaining = 241
+            var passes = 0
+            while remaining > 0, limits.snapshotPassLimit.map({ passes < $0 }) ?? true {
+                remaining -= min(remaining, limits.snapshotLimit)
+                passes += 1
+            }
+            #expect(remaining == 0)
+            #expect(passes > 1)
+            #expect(limits.workerCount == 1)
+            #expect(limits.interRequestDelay == 0)
+        }
     }
 
     @Test("Foreground source scans continue beyond the first snapshot")
@@ -120,7 +137,7 @@ struct MetadataBackfillExecutionPolicyTests {
         #expect(fastLocal == fast)
         #expect(background.workerCount == 1)
         #expect(background.snapshotLimit == 24)
-        #expect(background.snapshotPassLimit == 1)
+        #expect(background.snapshotPassLimit == nil)
     }
 
     @Test("Foreground sandbox imports continue beyond the first snapshot")

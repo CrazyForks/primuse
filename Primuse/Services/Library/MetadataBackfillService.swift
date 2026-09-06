@@ -2,7 +2,114 @@ import CryptoKit
 import Foundation
 import PrimuseKit
 #if os(iOS)
+import BackgroundTasks
 import UIKit
+#endif
+
+#if os(iOS)
+@MainActor
+private protocol MetadataBackgroundContinuation: AnyObject {
+    var identifier: UUID { get }
+    var isGranted: Bool { get }
+    func advance()
+    func finish(success: Bool)
+}
+
+#if !targetEnvironment(macCatalyst)
+@available(iOS 26.0, *)
+@MainActor
+private final class MetadataContinuedProcessingSession: MetadataBackgroundContinuation {
+    let identifier: UUID
+    private var task: BGContinuedProcessingTask?
+    private var finished = false
+    private var completed: Int64 = 0
+    private var lastProgressPublishedAt = Date.distantPast
+    private let total: Int64
+    private let started: () -> Void
+    private let expired: () -> Void
+    private var taskIdentifier: String { "com.welape.yuanyin.metadata-reading.\(identifier.uuidString)" }
+    var isGranted: Bool { task != nil && !finished }
+
+    init(identifier: UUID, total: Int, started: @escaping () -> Void, expired: @escaping () -> Void) {
+        self.identifier = identifier
+        self.total = Int64(max(1, total))
+        self.started = started
+        self.expired = expired
+    }
+
+    func submit() -> Bool {
+        let registered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: taskIdentifier, using: .main
+        ) { [weak self] task in
+            MainActor.assumeIsolated {
+                guard let self, !self.finished, let task = task as? BGContinuedProcessingTask else {
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                self.task = task
+                task.expirationHandler = { [weak self] in
+                    Task { @MainActor in
+                        guard let self, !self.finished else { return }
+                        self.finish(success: false)
+                        self.expired()
+                    }
+                }
+                self.publishProgress()
+                self.started()
+            }
+        }
+        guard registered else { return false }
+        let request = BGContinuedProcessingTaskRequest(
+            identifier: taskIdentifier,
+            title: String(localized: "backfill_in_progress"),
+            subtitle: "0 / \(total)"
+        )
+        // Rejection falls back to normal execution, never a delayed job that
+        // could revive a source the user has since paused or removed.
+        request.strategy = .fail
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            return true
+        } catch {
+            finished = true
+            plog("📥 Backfill: continued processing unavailable: \(error)")
+            return false
+        }
+    }
+
+    func advance() {
+        guard !finished else { return }
+        completed += 1
+        publishProgress()
+    }
+
+    private func publishProgress() {
+        guard let task else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastProgressPublishedAt) >= 1 else { return }
+        lastProgressPublishedAt = now
+        // New rows can arrive while a source is scanning. Only worker
+        // completion marks the system task finished, never a stale estimate.
+        let currentTotal = max(total, completed + 1)
+        task.progress.totalUnitCount = currentTotal
+        task.progress.completedUnitCount = completed
+        task.updateTitle(String(localized: "backfill_in_progress"), subtitle: "\(completed) / \(currentTotal)")
+    }
+
+    func finish(success: Bool) {
+        guard !finished else { return }
+        finished = true
+        if let task {
+            task.expirationHandler = nil
+            if success { task.progress.completedUnitCount = task.progress.totalUnitCount }
+            task.setTaskCompleted(success: success)
+            self.task = nil
+        } else {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskIdentifier)
+        }
+    }
+}
+#endif
 #endif
 
 enum SingleSongTagReadResult: Sendable, Equatable {
@@ -300,12 +407,15 @@ final class MetadataBackfillService {
     private(set) var readingProgress: [String: (startedAt: Date, completed: Int, lastCompletedAt: Date)] = [:]
     @ObservationIgnored private var readProgressAccumulator: [String: (startedAt: Date, completed: Int, lastCompletedAt: Date)] = [:]
     @ObservationIgnored private var lastReadProgressPublishedAt = Date.distantPast
+    @ObservationIgnored private var recentProcessingDuration: TimeInterval = 0.5
 
     private var executionLimits: MetadataBackfillExecutionLimits {
         let budget = MetadataBackfillExecutionPolicy.limits(
             for: executionMode,
             preference: readingMode,
-            environment: readingEnvironment()
+            environment: readingEnvironment(),
+            continuedProcessing: hasContinuedProcessingTime,
+            recentProcessingDuration: recentProcessingDuration
         )
         // Explicit batches temporarily own the shared budget. In-flight
         // automatic reads drain normally before those slots become available.
@@ -338,6 +448,17 @@ final class MetadataBackfillService {
         for scheduler in batchSchedulers.values { scheduler.configurationChanged() }
     }
 
+    private func recordProcessingDuration(_ duration: TimeInterval) {
+        guard duration.isFinite, duration >= 0 else { return }
+        // React immediately to expensive parsing and recover gradually after
+        // cheap reads; a single easy file cannot erase a heavy recent sample.
+        recentProcessingDuration = max(duration, recentProcessingDuration * 0.8 + duration * 0.2)
+        if readingEnvironment().thermalState == .serious {
+            activeScheduler?.configurationChanged()
+            for scheduler in batchSchedulers.values { scheduler.configurationChanged() }
+        }
+    }
+
     private func recordReadCompletion(sourceID: String) {
         let now = Date()
         var value = readProgressAccumulator[sourceID] ?? (now, 0, now)
@@ -352,8 +473,8 @@ final class MetadataBackfillService {
 
     /// Session-scoped explicit user intent. Scene transitions may suspend the
     /// worker, but returning active resumes this source until its normal queue
-    /// drains or the user taps Pause. Background execution never inherits the
-    /// unbounded foreground profile.
+    /// drains or the user taps Pause. A granted system continuation preserves
+    /// the selected speed while ordinary background windows remain gentler.
     private(set) var userInitiatedSourceID: String?
     /// Automatic foreground intent for the iOS sandbox import source. It
     /// survives an active/inactive transition so a large import resumes from
@@ -389,7 +510,72 @@ final class MetadataBackfillService {
     /// 挂起, 所以这块代码用 `#if os(iOS)` 整体守卫。
     #if os(iOS)
     @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var backgroundAssertionGeneration: UUID?
+    @ObservationIgnored private var continuedProcessingSession: (any MetadataBackgroundContinuation)?
+    @ObservationIgnored private var systemProcessingSessions: Set<UUID> = []
+    @ObservationIgnored private var backgroundExecutionExpired = false
     #endif
+
+    private var hasContinuedProcessingTime: Bool {
+        #if os(iOS)
+        continuedProcessingSession?.isGranted == true
+        #else
+        false
+        #endif
+    }
+
+    /// Only call from a foreground user action, never from automatic upkeep
+    /// or a defaults notification. The system owns progress and cancellation.
+    func continueInBackgroundForUserAction() {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        guard #available(iOS 26.0, *), UIApplication.shared.applicationState == .active,
+              isRunning, continuedProcessingSession == nil else { return }
+        backgroundExecutionExpired = false
+        let identifier = UUID()
+        let session = MetadataContinuedProcessingSession(identifier: identifier,
+            total: remainingCount(forSource: userInitiatedSourceID),
+            started: { [weak self] in
+                self?.endBackgroundTaskIfHeld()
+                self?.readingConfigurationChanged()
+            }, expired: { [weak self] in
+                guard let self, self.continuedProcessingSession?.identifier == identifier else { return }
+                self.automaticForegroundSourceIDs.subtract(self.activeSourceIDs)
+                self.automaticDeviceLocalSourceID = nil
+                self.pauseUserInitiated()
+                self.backgroundExecutionExpired = true
+            })
+        continuedProcessingSession = session
+        if !session.submit() { continuedProcessingSession = nil }
+        #endif
+    }
+
+    #if os(iOS)
+    func beginSystemBackgroundProcessing(identifier: UUID) {
+        systemProcessingSessions.insert(identifier)
+        backgroundExecutionExpired = false
+        endBackgroundTaskIfHeld()
+    }
+
+    func systemBackgroundProcessingExpired(identifier: UUID) {
+        guard systemProcessingSessions.contains(identifier), UIApplication.shared.applicationState != .active,
+              executionMode != .backgroundDuringPlayback,
+              !hasContinuedProcessingTime else { return }
+        backgroundExecutionExpired = true
+        stop()
+    }
+
+    func endSystemBackgroundProcessing(_ identifier: UUID) {
+        systemProcessingSessions.remove(identifier)
+        if isRunning { beginBackgroundTaskIfNeeded() }
+    }
+    #endif
+
+    private func finishContinuedProcessing(success: Bool) {
+        #if os(iOS)
+        continuedProcessingSession?.finish(success: success)
+        continuedProcessingSession = nil
+        #endif
+    }
 
     init(
         library: MusicLibrary,
@@ -1082,6 +1268,9 @@ final class MetadataBackfillService {
     /// into real background playback also releases the short UIKit assertion
     /// so its expiration cannot stop an audio-backed execution window.
     func setExecutionMode(_ mode: MetadataBackfillExecutionMode) {
+        #if os(iOS)
+        if mode != .background && mode != .backgroundDuringPlayback { backgroundExecutionExpired = false }
+        #endif
         guard executionMode != mode else { return }
         executionMode = mode
         readingConfigurationChanged()
@@ -1101,6 +1290,9 @@ final class MetadataBackfillService {
     /// running this is a no-op. A durable clean state returns before touching
     /// the library array. Wi-Fi-only gating remains enforced before dispatch.
     func start() {
+        #if os(iOS)
+        guard !backgroundExecutionExpired || UIApplication.shared.applicationState == .active else { return }
+        #endif
         guard worker == nil else {
             // Worker still in flight — common during initial scan when
             // multiple onChange events fire. Logging was added because
@@ -1109,12 +1301,18 @@ final class MetadataBackfillService {
             plog("📥 Backfill: skip (worker already running, gen=\(workerGeneration))")
             return
         }
-        guard hasPendingWork else { return }
+        guard hasPendingWork else {
+            finishContinuedProcessing(success: true)
+            return
+        }
         refreshRemainingCounts(
             force: queueNeedsRefresh
                 || reconciledQueueGeneration != queueMutationGeneration
         )
-        guard cachedRemainingCount > 0 else { return }
+        guard cachedRemainingCount > 0 else {
+            finishContinuedProcessing(success: true)
+            return
+        }
 
         // Cellular gate. Backfill on a 2200-song cloud library is ~550MB, but
         // the managed iOS import source reads only sandbox files. When both
@@ -1139,6 +1337,7 @@ final class MetadataBackfillService {
             allowedSourceIDs: allowedSourceIDs
         )
         guard !needsBackfill.isEmpty else {
+            finishContinuedProcessing(success: remainingCount(forSource: userInitiatedSourceID) == 0)
             updateWaitingForWiFiState(presentPrompt: networkBlocked)
             // Either every song has metadata OR every bare song is in
             // failedSongIDs. Surface both numbers so a "spinner stuck"
@@ -1186,6 +1385,9 @@ final class MetadataBackfillService {
                 }
                 self.updateWaitingForWiFiState(presentPrompt: true)
                 self.endBackgroundTaskIfHeld()
+                self.finishContinuedProcessing(
+                    success: self.remainingCount(forSource: self.userInitiatedSourceID) == 0
+                )
                 if self.executionMode == .foregroundAfterSourceScan {
                     self.setExecutionMode(.standard)
                 }
@@ -1227,21 +1429,19 @@ final class MetadataBackfillService {
 
     private func beginBackgroundTaskIfNeeded() {
         #if os(iOS)
-        // A foreground backfill may take far longer than the roughly
-        // 30-second UIApplication background window. Start an assertion only
-        // after the scene is actually inactive/background; PrimuseApp stops
-        // the foreground worker during the transition and restarts it once
-        // the background scene has settled.
+        guard !hasContinuedProcessingTime, systemProcessingSessions.isEmpty else { return }
         guard executionMode != .backgroundDuringPlayback else { return }
         guard UIApplication.shared.applicationState != .active else { return }
         guard backgroundTaskID == .invalid else { return }
+        let assertionGeneration = UUID()
+        backgroundAssertionGeneration = assertionGeneration
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "primuse.backfill") { [weak self] in
-            // System wants the time back ── stop worker gracefully, release token.
-            // 之前没这个 expirationHandler, app 切到后台时 backfill 立刻被挂起,
-            // 没机会 flush in-flight batch。现在能多 30 秒优雅收尾。
             Task { @MainActor [weak self] in
-                self?.stop()
-                self?.endBackgroundTaskIfHeld()
+                guard let self, self.backgroundAssertionGeneration == assertionGeneration,
+                      !self.hasContinuedProcessingTime, self.systemProcessingSessions.isEmpty,
+                      UIApplication.shared.applicationState != .active else { return }
+                self.backgroundExecutionExpired = true
+                self.stop()
             }
         }
         plog("📥 Backfill: beginBackgroundTask id=\(backgroundTaskID.rawValue)")
@@ -1252,6 +1452,7 @@ final class MetadataBackfillService {
         #if os(iOS)
         guard backgroundTaskID != .invalid else { return }
         let id = backgroundTaskID
+        backgroundAssertionGeneration = nil
         backgroundTaskID = .invalid
         UIApplication.shared.endBackgroundTask(id)
         plog("📥 Backfill: endBackgroundTask id=\(id.rawValue)")
@@ -1263,7 +1464,8 @@ final class MetadataBackfillService {
     /// `replaceSong` is atomic. Bumping the generation here is what tells
     /// the in-flight worker's MainActor cleanup block to skip — it's no
     /// longer the "current" worker, so it must not touch shared state.
-    func stop() {
+    func stop(preservingContinuation: Bool = false) {
+        if !preservingContinuation { finishContinuedProcessing(success: false) }
         workerGeneration += 1
         if let worker { drainingWorker = worker }
         worker?.cancel()
@@ -1283,8 +1485,7 @@ final class MetadataBackfillService {
     }
 
     /// Starts a source-scoped foreground job only after an explicit user
-    /// action. It is intentionally serial and throttled, but unlike a scan's
-    /// preview pass it keeps taking bounded snapshots until this source's
+    /// action. It keeps taking bounded snapshots until this source's
     /// ordinary eligible queue drains. Terminal per-song failures are recorded
     /// and skipped; only source-wide unavailability parks the remaining rows.
     @discardableResult
@@ -1298,11 +1499,13 @@ final class MetadataBackfillService {
         setExecutionMode(.userInitiated)
         refreshRemainingCounts(force: true)
         guard remainingCount(forSource: sourceID) > 0 else {
+            finishContinuedProcessing(success: true)
             userInitiatedSourceID = nil
             setExecutionMode(.standard)
             return false
         }
         start()
+        continueInBackgroundForUserAction()
         return isRunning || isWaitingForWiFi
     }
 
@@ -1338,6 +1541,7 @@ final class MetadataBackfillService {
         // user-paused session with no eligible rows.
         refreshRemainingCounts(force: true)
         guard remainingCount(forSource: sourceID) > 0 else {
+            finishContinuedProcessing(success: true)
             userInitiatedSourceID = nil
             setExecutionMode(.standard)
             return false
@@ -1348,7 +1552,7 @@ final class MetadataBackfillService {
     }
 
     /// Keep the intent from a completed foreground scan through scene changes.
-    /// Background callbacks still use one bounded snapshot per wake.
+    /// Background callbacks keep draining while execution time is available.
     @discardableResult
     func resumeAutomaticForegroundIfNeeded() -> Bool {
         guard automaticDeviceLocalSourceID != nil || !automaticForegroundSourceIDs.isEmpty else { return false }
@@ -2327,7 +2531,8 @@ final class MetadataBackfillService {
                 let budget = MetadataBackfillExecutionPolicy.limits(
                     for: .userInitiated,
                     preference: readingMode,
-                    environment: readingEnvironment(sourceID: expectedSourceID)
+                    environment: readingEnvironment(sourceID: expectedSourceID),
+                    recentProcessingDuration: recentProcessingDuration
                 )
                 #if os(iOS)
                 if UIApplication.shared.applicationState != .active {
@@ -2686,7 +2891,9 @@ final class MetadataBackfillService {
         var pendingArtistInspectionIDs: Set<String> = []
         var artistInspectionIDsRequiringReplacement: Set<String> = []
         var lastFlushAt = Date()
-        plog("📥 processSnapshot: starting with \(snapshot.count) songs")
+        let environment = readingEnvironment()
+        let limits = executionLimits
+        plog("📥 processSnapshot: starting with \(snapshot.count) songs workers=\(limits.workerCount) delay=\(limits.interRequestDelay) thermal=\(environment.thermalState) speed=\(readingMode.rawValue) continued=\(hasContinuedProcessingTime)")
 
         // 预热阶段: 按 source 分组, 给每个 source 调一次 batch prefetchMetadata
         // (百度网盘会一次拿 100 个 dlink, 其他 connector 默认 noop)。后续每首
@@ -2698,7 +2905,7 @@ final class MetadataBackfillService {
             guard let representative = sourceSongs.first else { continue }
             guard isStillEligible(representative),
                   canDispatchUnderCurrentNetworkPolicy(representative) else { continue }
-            if let connector = try? await sourceManager.connectorForSong(representative) {
+            if let connector = try? await sourceManager.auxiliaryConnector(for: representative) {
                 let paths = sourceSongs.map(\.filePath)
                 await connector.prefetchMetadata(paths: paths)
             }
@@ -2722,11 +2929,16 @@ final class MetadataBackfillService {
                     && isStillEligible(song)
                     && canDispatchUnderCurrentNetworkPolicy(song)
             },
-            priority: executionMode == .backgroundDuringPlayback ? .background : .utility,
+            priority: executionMode == .backgroundDuringPlayback && !hasContinuedProcessingTime ? .background : .utility,
             read: { [self] song in await processOne(song) }
         ) { [self] song, outcome in
                 let result = (song: song, outcome: outcome)
-                if !outcome.cancelled { recordReadCompletion(sourceID: song.sourceID) }
+                if !outcome.cancelled {
+                    recordReadCompletion(sourceID: song.sourceID)
+                    #if os(iOS)
+                    continuedProcessingSession?.advance()
+                    #endif
+                }
                 for other in batchSchedulers.values { other.configurationChanged() }
                 processedTotal += 1
                 // UI progress does not need per-file granularity. Publishing
@@ -3353,23 +3565,31 @@ final class MetadataBackfillService {
         guard remainsReadable else {
             return BackfillOutcome(song: nil, markFailed: false)
         }
-        // Use the SHARED connector (not auxiliary). Backfill is sequential
-        // and benefits massively from accumulated state on the single
-        // BaiduPanSource actor: throttle clock, dlink cache, dir-listing
-        // cache. Auxiliary instances reset all of that per song, which is
-        // what made backfill 10x slower than it needed to be — every song
-        // re-paid the list+filemetas dlink cost AND was prone to 31034
-        // rate-limit storms because the throttle state didn't carry over.
+        // The cached auxiliary connector shares provider login/rate limits,
+        // while SMB ranges use its separate background connection.
+        let readSession = FileMetadataReader.RangeReadSession()
         let rangeReadIntent: MetadataRangeReadIntent = isExplicitReread
             ? .explicitSingleFileCompleteFallback
             : .bulkBounded
+        var rangeElapsed: TimeInterval = 0
+        var rangeCount = 0
+        defer {
+            if !Task.isCancelled {
+                recordProcessingDuration(max(0, Date().timeIntervalSince(started) - rangeElapsed))
+            }
+        }
+        func fetchRange(offset: Int64, length: Int64) async throws -> Data {
+            let rangeStarted = Date()
+            defer {
+                rangeElapsed += Date().timeIntervalSince(rangeStarted)
+                rangeCount += 1
+            }
+            return try await sourceManager.fetchMetadataRange(
+                for: song, offset: offset, length: length, intent: rangeReadIntent
+            )
+        }
         let fetchStarted = Date()
-        let headData = try await sourceManager.fetchMetadataRange(
-            for: song,
-            offset: 0,
-            length: Self.headBytes,
-            intent: rangeReadIntent
-        )
+        let headData = try await fetchRange(offset: 0, length: Self.headBytes)
         let fetchElapsed = Date().timeIntervalSince(fetchStarted)
 
         // Do not turn metadata backfill into a whole-library playback-cache
@@ -3382,7 +3602,7 @@ final class MetadataBackfillService {
         var metadata = await extractMetadata(
             from: headData,
             song: song,
-            cacheKey: song.id
+            readSession: readSession
         )
         let declaredExtension = song.fileFormat.rawValue.lowercased()
         var parserExtension = RemoteMetadataInspectionPolicy.parserFileExtension(
@@ -3399,7 +3619,7 @@ final class MetadataBackfillService {
             let hasTruncatedID3 = (id3ByteCount ?? 0) > headData.count
             let needsDurationExpansion = metadataLooksMissing(metadata)
             let needsArtworkExpansion = Self.needsEmbeddedArtworkBackfill(song)
-                && metadata.coverArtFileName == nil
+                && metadata.coverArtFileName == nil && metadata.coverArtData == nil
             let needsArtistExpansion = needsArtistInspection
                 && metadata.artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
             let expandedByteCount = RemoteMetadataReadPolicy.expandedReadSize(
@@ -3411,17 +3631,12 @@ final class MetadataBackfillService {
             if (needsDurationExpansion || needsArtworkExpansion || needsArtistExpansion),
                expandedByteCount > headData.count {
                 do {
-                    let expandedHead = try await sourceManager.fetchMetadataRange(
-                        for: song,
-                        offset: 0,
-                        length: Int64(expandedByteCount),
-                        intent: rangeReadIntent
-                    )
+                    let expandedHead = try await fetchRange(offset: 0, length: Int64(expandedByteCount))
                     metadataInputData = expandedHead
                     metadata = await extractMetadata(
                         from: expandedHead,
                         song: song,
-                        cacheKey: song.id
+                        readSession: readSession
                     )
                     if needsArtistExpansion,
                        metadata.artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
@@ -3438,7 +3653,7 @@ final class MetadataBackfillService {
             // full 4 MB ceiling.
             let needsFullTagInspection = !titleCheckedIDs.contains(song.id)
             var needsArtworkExpansion = Self.needsEmbeddedArtworkBackfill(song)
-                && metadata.coverArtFileName == nil
+                && metadata.coverArtFileName == nil && metadata.coverArtData == nil
             var needsArtistExpansion = needsArtistInspection
                 && metadata.artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
             while needsFullTagInspection || needsArtworkExpansion || needsArtistExpansion,
@@ -3446,12 +3661,7 @@ final class MetadataBackfillService {
                     fileSize: song.fileSize,
                     currentData: metadataInputData
                   ) {
-                let expandedHead = try await sourceManager.fetchMetadataRange(
-                    for: song,
-                    offset: 0,
-                    length: Int64(expandedByteCount),
-                    intent: rangeReadIntent
-                )
+                let expandedHead = try await fetchRange(offset: 0, length: Int64(expandedByteCount))
                 guard expandedHead.count > metadataInputData.count else {
                     throw SourceError.connectionFailed("FLAC metadata range did not expand")
                 }
@@ -3459,10 +3669,10 @@ final class MetadataBackfillService {
                 metadata = await extractMetadata(
                     from: expandedHead,
                     song: song,
-                    cacheKey: song.id
+                    readSession: readSession
                 )
                 needsArtworkExpansion = Self.needsEmbeddedArtworkBackfill(song)
-                    && metadata.coverArtFileName == nil
+                    && metadata.coverArtFileName == nil && metadata.coverArtData == nil
                 needsArtistExpansion = needsArtistInspection
                     && metadata.artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
             }
@@ -3476,12 +3686,7 @@ final class MetadataBackfillService {
                 currentData: metadataInputData,
                 fileExtension: parserExtension
             ) {
-                let expandedHead = try await sourceManager.fetchMetadataRange(
-                    for: song,
-                    offset: 0,
-                    length: Int64(expandedByteCount),
-                    intent: rangeReadIntent
-                )
+                let expandedHead = try await fetchRange(offset: 0, length: Int64(expandedByteCount))
                 guard expandedHead.count > metadataInputData.count else {
                     throw SourceError.connectionFailed("container metadata range did not expand")
                 }
@@ -3489,7 +3694,7 @@ final class MetadataBackfillService {
                 metadata = await extractMetadata(
                     from: expandedHead,
                     song: song,
-                    cacheKey: song.id
+                    readSession: readSession
                 )
             }
             if needsArtistInspection { artistInspectionCompleted = true }
@@ -3509,12 +3714,12 @@ final class MetadataBackfillService {
             && (tailStrategy == .isoBaseMedia || tailStrategy == .mp3ID3)
         let needsSecondaryArtworkRange = tailStrategy == .isoBaseMedia
             && Self.needsEmbeddedArtworkBackfill(song)
-            && metadata.coverArtFileName == nil
+            && metadata.coverArtFileName == nil && metadata.coverArtData == nil
         let needsSecondaryTagRange = tailStrategy != .none
             && (!titleCheckedIDs.contains(song.id)
                 || needsArtistInspection
                 || (Self.needsEmbeddedArtworkBackfill(song)
-                    && metadata.coverArtFileName == nil))
+                    && metadata.coverArtFileName == nil && metadata.coverArtData == nil))
         var suffixMetadataUnavailable = false
         if metadataLooksMissing(metadata)
             || needsSecondaryArtistRange
@@ -3525,23 +3730,18 @@ final class MetadataBackfillService {
                     var readContainerTail = false
                     for tailSize in RemoteMetadataReadPolicy.containerTailReadSizes(fileSize: song.fileSize) {
                         do {
-                            let tailData = try await sourceManager.fetchMetadataRange(
-                                for: song,
-                                offset: -Int64(tailSize),
-                                length: Int64(tailSize),
-                                intent: rangeReadIntent
-                            )
+                            let tailData = try await fetchRange(offset: -Int64(tailSize), length: Int64(tailSize))
                             guard !tailData.isEmpty else { continue }
                             readContainerTail = true
                             metadata = await extractMetadata(
                                 from: metadataInputData,
                                 containerTailData: tailData,
                                 song: song,
-                                cacheKey: song.id
+                                readSession: readSession
                             )
                             let foundArtist = metadata.artist?
                                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                            let foundArtwork = metadata.coverArtFileName != nil
+                            let foundArtwork = metadata.coverArtFileName != nil || metadata.coverArtData != nil
                             if !metadataLooksMissing(metadata)
                                 && (!needsSecondaryArtistRange || foundArtist)
                                 && (!needsSecondaryArtworkRange || foundArtwork) {
@@ -3558,17 +3758,12 @@ final class MetadataBackfillService {
                     }
                 } else if tailStrategy == .mp3ID3 {
                     do {
-                        let tailData = try await sourceManager.fetchMetadataRange(
-                            for: song,
-                            offset: -Self.fallbackTailBytes,
-                            length: Self.fallbackTailBytes,
-                            intent: rangeReadIntent
-                        )
+                        let tailData = try await fetchRange(offset: -Self.fallbackTailBytes, length: Self.fallbackTailBytes)
                         metadata = await extractMetadata(
                             from: metadataInputData,
                             id3TailData: tailData,
                             song: song,
-                            cacheKey: song.id
+                            readSession: readSession
                         )
                         if needsSecondaryArtistRange { artistInspectionCompleted = true }
                     } catch MetadataRangeReadError.suffixRangeUnsupported {
@@ -3577,40 +3772,25 @@ final class MetadataBackfillService {
                         if needsSecondaryArtistRange { throw error }
                     }
                 } else if tailStrategy == .apeV2 {
-                    var tailData = try await sourceManager.fetchMetadataRange(
-                        for: song,
-                        offset: -Self.fallbackTailBytes,
-                        length: Self.fallbackTailBytes,
-                        intent: rangeReadIntent
-                    )
+                    var tailData = try await fetchRange(offset: -Self.fallbackTailBytes, length: Self.fallbackTailBytes)
                     if let expanded = EmbeddedTagMetadataParser.expandedTailReadSize(
                         fileSize: song.fileSize,
                         currentData: tailData,
                         fileExtension: parserExtension
                     ), expanded > tailData.count {
-                        tailData = try await sourceManager.fetchMetadataRange(
-                            for: song,
-                            offset: -Int64(expanded),
-                            length: Int64(expanded),
-                            intent: rangeReadIntent
-                        )
+                        tailData = try await fetchRange(offset: -Int64(expanded), length: Int64(expanded))
                     }
                     metadata = await extractMetadata(
                         from: metadataInputData,
                         id3TailData: tailData,
                         song: song,
-                        cacheKey: song.id
+                        readSession: readSession
                     )
                     if needsArtistInspection { artistInspectionCompleted = true }
                 } else if tailStrategy == .dsfOffset,
                           let offset = EmbeddedTagMetadataParser.dsfMetadataOffset(in: metadataInputData),
                           offset < song.fileSize {
-                    let header = try await sourceManager.fetchMetadataRange(
-                        for: song,
-                        offset: offset,
-                        length: 10,
-                        intent: rangeReadIntent
-                    )
+                    let header = try await fetchRange(offset: offset, length: 10)
                     let declared = EmbeddedTagMetadataParser.id3TagByteCount(in: header) ?? header.count
                     let available = max(0, song.fileSize - offset)
                     let byteCount = min(
@@ -3619,12 +3799,7 @@ final class MetadataBackfillService {
                     )
                     let tagData: Data
                     if byteCount > Int64(header.count) {
-                        tagData = try await sourceManager.fetchMetadataRange(
-                            for: song,
-                            offset: offset,
-                            length: byteCount,
-                            intent: rangeReadIntent
-                        )
+                        tagData = try await fetchRange(offset: offset, length: byteCount)
                     } else {
                         tagData = header
                     }
@@ -3632,47 +3807,32 @@ final class MetadataBackfillService {
                         from: metadataInputData,
                         id3TailData: tagData,
                         song: song,
-                        cacheKey: song.id
+                        readSession: readSession
                     )
                     if needsArtistInspection { artistInspectionCompleted = true }
                 } else if tailStrategy == .containerID3 {
-                    let tailData = try await sourceManager.fetchMetadataRange(
-                        for: song,
-                        offset: -Self.fallbackTailBytes,
-                        length: Self.fallbackTailBytes,
-                        intent: rangeReadIntent
-                    )
+                    let tailData = try await fetchRange(offset: -Self.fallbackTailBytes, length: Self.fallbackTailBytes)
                     metadata = await extractMetadata(
                         from: metadataInputData,
                         id3TailData: tailData,
                         song: song,
-                        cacheKey: song.id
+                        readSession: readSession
                     )
                     if needsArtistInspection { artistInspectionCompleted = true }
                 } else if tailStrategy == .genericEOF {
-                    var tailData = try await sourceManager.fetchMetadataRange(
-                        for: song,
-                        offset: -Self.fallbackTailBytes,
-                        length: Self.fallbackTailBytes,
-                        intent: rangeReadIntent
-                    )
+                    var tailData = try await fetchRange(offset: -Self.fallbackTailBytes, length: Self.fallbackTailBytes)
                     if let expanded = EmbeddedTagMetadataParser.expandedTailReadSize(
                         fileSize: song.fileSize,
                         currentData: tailData,
                         fileExtension: parserExtension
                     ), expanded > tailData.count {
-                        tailData = try await sourceManager.fetchMetadataRange(
-                            for: song,
-                            offset: -Int64(expanded),
-                            length: Int64(expanded),
-                            intent: rangeReadIntent
-                        )
+                        tailData = try await fetchRange(offset: -Int64(expanded), length: Int64(expanded))
                     }
                     metadata = await extractMetadata(
                         from: metadataInputData,
                         id3TailData: tailData,
                         song: song,
-                        cacheKey: song.id
+                        readSession: readSession
                     )
                     if needsArtistInspection { artistInspectionCompleted = true }
                 }
@@ -3769,6 +3929,9 @@ final class MetadataBackfillService {
             plog(String(format: "📥 Backfill: '%@' recovered DTS duration %.1fs from bounded metadata and file size", song.title, estimated))
         }
 
+        try Task.checkCancellation()
+        metadata = await metadataService.storingEmbeddedAssets(in: metadata, cacheKey: song.id)
+
         // Duration can fail independently from the ID3 text frames. Preserve
         // any title/artist/album/cover we did recover, then mark the row failed
         // only to stop repeated network reads. Older code returned nil here,
@@ -3794,7 +3957,7 @@ final class MetadataBackfillService {
                     artistInspected: artistInspectionCompleted,
                     artworkGivenUp: suffixMetadataUnavailable
                         && Self.needsEmbeddedArtworkBackfill(song)
-                        && metadata.coverArtFileName == nil
+                        && metadata.coverArtFileName == nil && metadata.coverArtData == nil
                 )
             }
             if song.isStreamDescriptor || song.fileFormat.requiresFFmpeg {
@@ -3811,7 +3974,7 @@ final class MetadataBackfillService {
                     artistInspected: artistInspectionCompleted,
                     artworkGivenUp: suffixMetadataUnavailable
                         && Self.needsEmbeddedArtworkBackfill(song)
-                        && metadata.coverArtFileName == nil
+                        && metadata.coverArtFileName == nil && metadata.coverArtData == nil
                 )
             }
             plog("⚠️ Backfill: '\(song.title)' bytes were read but details parsing failed")
@@ -3873,7 +4036,7 @@ final class MetadataBackfillService {
         // duration=0 in the log means mergeSong didn't actually
         // capture a usable duration despite metadataLooksMissing
         // returning false → bug in the parser or the gate.
-        plog(String(format: "📥 Backfill: '%@' done in %.2fs (fetch %.2fs) duration=%.1fs", song.title, totalElapsed, fetchElapsed, merged.duration))
+        plog(String(format: "📥 Backfill: '%@' done in %.2fs (fetch %.2fs, ranges %d in %.2fs) format=%@ duration=%.1fs", song.title, totalElapsed, fetchElapsed, rangeCount, rangeElapsed, parserExtension, merged.duration))
         if artworkStillMissing {
             plog("📥 Backfill: '\(song.title)' has no parseable embedded artwork; skipping future artwork-only retries")
         }
@@ -3890,16 +4053,14 @@ final class MetadataBackfillService {
         )
     }
 
-    /// Parse the bounded Range bytes directly from memory. Backfill keeps its
-    /// established three-worker cap, while FileMetadataReader serializes the
-    /// small AVFoundation range responses; the caller-owned Data is released
-    /// at this per-song boundary instead of being copied into a temp file.
+    /// Keep parsing state local to this song; store assets only after all
+    /// required ranges have contributed their tags.
     private func extractMetadata(
         from data: Data,
         containerTailData: Data? = nil,
         id3TailData: Data? = nil,
         song: Song,
-        cacheKey: String
+        readSession: FileMetadataReader.RangeReadSession
     ) async -> MetadataService.SongMetadata {
         let ext = song.fileFormat.rawValue
         let pathTitle = MediaMetadataTextRepair.fileNameTitle(from: song.filePath)
@@ -3912,8 +4073,8 @@ final class MetadataBackfillService {
             containerTailData: containerTailData,
             id3TailData: id3TailData,
             fileExtension: ext,
-            cacheKey: cacheKey,
-            fallbackTitle: fallbackTitle
+            fallbackTitle: fallbackTitle,
+            readSession: readSession
         )
     }
 
@@ -4178,6 +4339,8 @@ final class MetadataBackfillService {
             scopedSourceID = userInitiatedSourceID
         case .foregroundDeviceLocal:
             scopedSourceID = automaticDeviceLocalSourceID
+        case .background, .backgroundDuringPlayback:
+            scopedSourceID = userInitiatedSourceID
         default:
             scopedSourceID = nil
         }

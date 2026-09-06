@@ -213,18 +213,22 @@ actor MetadataService {
         id3TailData: Data? = nil,
         fileExtension: String,
         cacheKey: String? = nil,
-        fallbackTitle: String
+        fallbackTitle: String,
+        readSession: FileMetadataReader.RangeReadSession? = nil
     ) async -> SongMetadata {
         let signature = AudioFileSignaturePolicy.inspect(data)
         let parserFileExtension = RemoteMetadataInspectionPolicy.parserFileExtension(
             declaredFileExtension: fileExtension,
             signature: signature
         )
-        var embedded = await FileMetadataReader.read(
-            from: data,
-            fileExtension: parserFileExtension,
-            id3TailData: id3TailData
-        )
+        var embedded: FileMetadataReader.Metadata
+        if let readSession {
+            embedded = await readSession.read(from: data, fileExtension: parserFileExtension,
+                                              id3TailData: id3TailData)
+        } else {
+            embedded = await FileMetadataReader.read(from: data, fileExtension: parserFileExtension,
+                                                     id3TailData: id3TailData)
+        }
         if let containerTailData,
            let tailMetadata = await FileMetadataReader.readISOBaseMediaMetadata(
             head: data,
@@ -275,12 +279,18 @@ actor MetadataService {
         }
 
         if let cacheKey {
-            if let coverArtData = result.coverArtData {
-                result.coverArtFileName = await assetStore.storeCover(coverArtData, for: cacheKey)
-            }
-            if let lyrics = result.lyrics {
-                result.lyricsFileName = await assetStore.storeLyrics(lyrics, for: cacheKey)
-            }
+            result = await storingEmbeddedAssets(in: result, cacheKey: cacheKey)
+        }
+        return result
+    }
+
+    func storingEmbeddedAssets(in metadata: SongMetadata, cacheKey: String) async -> SongMetadata {
+        var result = metadata
+        if result.coverArtFileName == nil, let coverArtData = result.coverArtData {
+            result.coverArtFileName = await assetStore.storeCover(coverArtData, for: cacheKey)
+        }
+        if result.lyricsFileName == nil, let lyrics = result.lyrics {
+            result.lyricsFileName = await assetStore.storeLyrics(lyrics, for: cacheKey)
         }
         return result
     }

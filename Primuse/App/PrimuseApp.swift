@@ -93,21 +93,25 @@ private enum BackgroundScanResumeTask {
 
     private static func handle(_ task: BGTask) {
         let completion = BackgroundTaskCompletion(task)
+        let processingSession = UUID()
         task.expirationHandler = {
-            completion.complete(success: false)
+            guard completion.complete(success: false) else { return }
             Task { @MainActor in
                 let services = AppServices.shared
                 services.scanService.cancelAllActiveScans()
                 services.scraperService.cancelPreservingCheckpoint()
-                services.metadataBackfill.stop()
+                services.metadataBackfill.systemBackgroundProcessingExpired(identifier: processingSession)
             }
         }
 
         Task { @MainActor in
+            guard !completion.isCompleted else { return }
             let services = AppServices.shared
             let scanService = services.scanService
             let backfill = services.metadataBackfill
             let scraper = services.scraperService
+            backfill.beginSystemBackgroundProcessing(identifier: processingSession)
+            defer { backfill.endSystemBackgroundProcessing(processingSession) }
 
             // Background audio is user-facing foreground work. Keep directory
             // scans, scraping and indexing postponed, but let metadata tags
@@ -131,9 +135,8 @@ private enum BackgroundScanResumeTask {
 
             backfill.setExecutionMode(.background)
 
-            // Resume any interrupted scans, then run one bounded backfill
-            // snapshot. If work remains, the scheduling call below requests
-            // another BGProcessing wake instead of keeping this task busy.
+            // Drain bounded snapshots for as long as this system task owns
+            // execution time. Expiration cancels work and preserves the queue.
             services.musicLibrary.resumePendingIdentityResolution()
             services.resumePendingLocalImportScanIfNeeded()
             if scanService.hasResumableScanWork {
@@ -152,6 +155,7 @@ private enum BackgroundScanResumeTask {
                 scraperService: services.scraperService
             )
             await scanService.waitForActiveScansToComplete()
+            guard !completion.isCompleted else { return }
 
             if scraper.hasPendingBackgroundContinuation {
                 scraper.resumePendingScrape(
@@ -159,6 +163,7 @@ private enum BackgroundScanResumeTask {
                     allowBackgroundExecution: true
                 )
                 await scraper.waitUntilScrapeIdle()
+                guard !completion.isCompleted else { return }
             }
 
             if backfill.hasPendingWork {
@@ -189,12 +194,23 @@ private final class BackgroundTaskCompletion: @unchecked Sendable {
         self.task = task
     }
 
-    func complete(success: Bool) {
+    var isCompleted: Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !didComplete else { return }
+        return didComplete
+    }
+
+    @discardableResult
+    func complete(success: Bool) -> Bool {
+        lock.lock()
+        guard !didComplete else {
+            lock.unlock()
+            return false
+        }
         didComplete = true
+        lock.unlock()
         task.setTaskCompleted(success: success)
+        return true
     }
 }
 #else
@@ -1395,7 +1411,7 @@ struct PrimuseApp: App {
                         scraperService.pauseForSceneTransition()
                         scanService.pauseFolderTopologyRebuildScheduling()
                         scanService.cancelAllActiveScans()
-                        metadataBackfill.stop()
+                        metadataBackfill.stop(preservingContinuation: true)
                         playerService.handleAppWillResignActive()
                         #else
                         // Window focus changes map to inactive on macOS and are
@@ -1508,7 +1524,7 @@ struct PrimuseApp: App {
                         BackgroundLibraryMaintenanceCoordinator.shared.cancel()
                         AppServices.shared.spotlightIndex.suspendSynchronization()
                         AppServices.shared.lyricsTextBackfill.stop()
-                        metadataBackfill.stop()
+                        metadataBackfill.stop(preservingContinuation: true)
                         if !metadataBackfill.resumeUserInitiatedIfNeeded(),
                            !metadataBackfill.resumeAutomaticForegroundIfNeeded() {
                             metadataBackfill.setExecutionMode(.standard)

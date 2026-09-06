@@ -111,8 +111,13 @@ struct MetadataReadSchedulerTests {
                 for: .userInitiated, preference: preference,
                 environment: .init(thermalState: .fair)
             )
-            #expect(warm.workerCount == 1)
-            #expect(warm.interRequestDelay >= 0.35)
+            if preference == .fast {
+                #expect(warm.workerCount == 2)
+                #expect(warm.interRequestDelay == 0)
+            } else {
+                #expect(warm.workerCount == 1)
+                #expect(warm.interRequestDelay >= 0.35)
+            }
         }
     }
 
@@ -133,7 +138,7 @@ struct MetadataReadSchedulerTests {
                 for: .userInitiated, preference: preference,
                 environment: .init(playbackActive: true)
             )
-            #expect(playback.workerCount == 1)
+            #expect(playback.workerCount == (preference == .fast ? 2 : 1))
             let lowPower = MetadataBackfillExecutionPolicy.limits(
                 for: .userInitiated, preference: preference,
                 environment: .init(lowPowerMode: true)
@@ -141,7 +146,64 @@ struct MetadataReadSchedulerTests {
             #expect(lowPower.workerCount == 1)
             #expect(lowPower.interRequestDelay > 0)
             let background = MetadataBackfillExecutionPolicy.limits(for: .background, preference: preference)
-            #expect(background.snapshotLimit == 24 && background.snapshotPassLimit == 1)
+            #expect(background.snapshotLimit == 24 && background.snapshotPassLimit == nil)
+        }
+    }
+
+    @Test func fullSpeedThermalCooldownScalesWithMeasuredWorkWithoutRemovingProtection() {
+        for cost in [0.0, 0.01, 0.1, 0.3, 0.5, 2.0, .nan, .infinity, -1.0] {
+            let limits = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: .fast,
+                environment: .init(thermalState: .serious), recentProcessingDuration: cost
+            )
+            #expect(limits.workerCount == 1)
+            #expect(limits.interRequestDelay >= 0.1)
+            if cost.isFinite && cost >= 0 && cost <= 0.5 {
+                #expect(cost / (cost + limits.interRequestDelay) <= 0.25)
+            } else {
+                #expect(limits.interRequestDelay == 1.5)
+            }
+            let critical = MetadataBackfillExecutionPolicy.limits(
+                for: .userInitiated, preference: .fast,
+                environment: .init(thermalState: .critical), recentProcessingDuration: cost
+            )
+            #expect(critical.workerCount == 0)
+        }
+        let lowPower = MetadataBackfillExecutionPolicy.limits(
+            for: .background, preference: .fast,
+            environment: .init(thermalState: .serious, lowPowerMode: true),
+            continuedProcessing: true, recentProcessingDuration: 0.01
+        )
+        #expect(lowPower.workerCount == 1)
+        #expect(lowPower.interRequestDelay >= 0.35)
+        let automatic = MetadataBackfillExecutionPolicy.limits(
+            for: .standard, preference: .automatic,
+            environment: .init(thermalState: .serious), recentProcessingDuration: 0.01
+        )
+        #expect(automatic.interRequestDelay == 1.5)
+    }
+
+    @Test func continuedProcessingKeepsSelectedSpeedAndAllDeviceProtections() {
+        for platform in [MetadataReadingDeviceProfile.Platform.mobile, .desktop, .television] {
+            for thermal in [MetadataReadingThermalState.nominal, .fair, .serious, .critical] {
+                for lowPower in [false, true] {
+                    for playing in [false, true] {
+                        let environment = MetadataReadingEnvironment(
+                            thermalState: thermal, lowPowerMode: lowPower, playbackActive: playing,
+                            device: .init(platform: platform, activeProcessorCount: 6,
+                                          physicalMemory: 8 * 1_024 * 1_024 * 1_024)
+                        )
+                        let foreground = MetadataBackfillExecutionPolicy.limits(
+                            for: .userInitiated, preference: .fast, environment: environment
+                        )
+                        let background = MetadataBackfillExecutionPolicy.limits(
+                            for: playing ? .backgroundDuringPlayback : .background,
+                            preference: .fast, environment: environment, continuedProcessing: true
+                        )
+                        #expect(background == foreground)
+                    }
+                }
+            }
         }
     }
 

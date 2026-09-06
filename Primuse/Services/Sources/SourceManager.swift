@@ -8424,7 +8424,7 @@ final class SourceManager {
         length: Int64,
         intent: MetadataRangeReadIntent = .bulkBounded
     ) async throws -> Data {
-        let connector = try await connectorForSong(song)
+        let connector = try await auxiliaryConnector(for: song)
         guard song.isStreamDescriptor else {
             return try await connector.fetchMetadataRange(
                 path: song.filePath,

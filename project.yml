@@ -182,6 +182,7 @@ targets:
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - com.welape.yuanyin.scan-resume
+          - com.welape.yuanyin.metadata-reading.*
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

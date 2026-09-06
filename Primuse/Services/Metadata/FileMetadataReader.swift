@@ -300,35 +300,58 @@ enum FileMetadataReader {
         id3TailData: Data? = nil
     ) async -> Metadata {
         guard !data.isEmpty else { return Metadata() }
+        let metadata = await readAssetMetadata(from: data, fileExtension: fileExtension)
+        return applyingRangeFallbacks(to: metadata, data: data,
+                                      fileExtension: fileExtension, id3TailData: id3TailData)
+    }
 
+    /// Scoped to one song so a suffix probe can reuse AVFoundation's prefix
+    /// result without retaining bytes across songs or hiding changed content.
+    actor RangeReadSession {
+        private var cachedData: Data?
+        private var cachedExtension: String?
+        private var cachedMetadata: Metadata?
+
+        func read(from data: Data, fileExtension: String, id3TailData: Data? = nil) async -> Metadata {
+            guard !data.isEmpty else { return Metadata() }
+            let metadata: Metadata
+            if cachedData == data, cachedExtension == fileExtension, let cachedMetadata {
+                metadata = cachedMetadata
+            } else {
+                metadata = await readAssetMetadata(from: data, fileExtension: fileExtension)
+                cachedData = data
+                cachedExtension = fileExtension
+                cachedMetadata = metadata
+            }
+            return applyingRangeFallbacks(to: metadata, data: data,
+                                          fileExtension: fileExtension, id3TailData: id3TailData)
+        }
+    }
+
+    private static func readAssetMetadata(from data: Data, fileExtension: String) async -> Metadata {
+        guard !data.isEmpty, !Task.isCancelled else { return Metadata() }
         let loader = InMemoryAudioAssetLoader(
             data: data,
             contentType: AudioFormat.from(fileExtension: fileExtension)?.avPlayerContentType
         )
         let asset = loader.makeAsset(fileExtension: fileExtension)
-        var metadata = await read(from: asset)
+        let metadata = await read(from: asset)
+        // AVAssetResourceLoader does not retain its delegate.
+        withExtendedLifetime(loader) {}
+        return metadata
+    }
 
-        applyISOBaseMediaLyricsFallback(
-            to: &metadata,
-            data: data,
-            fileExtension: fileExtension
-        )
+    private static func applyingRangeFallbacks(
+        to base: Metadata, data: Data, fileExtension: String, id3TailData: Data?
+    ) -> Metadata {
+        var metadata = base
+        applyISOBaseMediaLyricsFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyID3Fallback(to: &metadata, data: data, tailData: id3TailData)
         applyFLACFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyWAVEFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyMPEGFrameFallback(to: &metadata, data: data, fileExtension: fileExtension)
-        applyContainerTagFallback(
-            to: &metadata,
-            headData: data,
-            tailData: id3TailData,
-            fileExtension: fileExtension
-        )
-
-        // AVAssetResourceLoader's delegate is not retained strongly by the
-        // resource loader. Keep the in-memory provider alive through every
-        // asynchronous AVFoundation load above, then release it immediately
-        // at the per-song boundary.
-        withExtendedLifetime(loader) {}
+        applyContainerTagFallback(to: &metadata, headData: data, tailData: id3TailData,
+                                  fileExtension: fileExtension)
         return metadata
     }
 

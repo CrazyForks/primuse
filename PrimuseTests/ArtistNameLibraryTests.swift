@@ -39,6 +39,45 @@ final class FileAlbumArtistLibraryTests: XCTestCase {
         }
     }
 
+    func testRangeSessionReusesPrefixWithoutLosingTailOrExpandedTags() async {
+        let session = FileMetadataReader.RangeReadSession()
+        let head = tagFixture(format: "mp3", key: "TPE2", singer: "Head Artist")
+        let tail = tagFixture(format: "mp3", key: "TPE2", singer: "Tail Artist")
+        _ = await session.read(from: head, fileExtension: "mp3")
+        let combined = await session.read(from: head, fileExtension: "mp3", id3TailData: tail)
+        let reference = await FileMetadataReader.read(from: head, fileExtension: "mp3", id3TailData: tail)
+        XCTAssertEqual(combined.title, reference.title)
+        XCTAssertEqual(combined.artist, "Head Artist")
+        XCTAssertEqual(combined.artist, reference.artist)
+        XCTAssertEqual(combined.albumArtist, reference.albumArtist)
+        XCTAssertEqual(combined.albumTitle, reference.albumTitle)
+        XCTAssertEqual(combined.sourceArtistNames, reference.sourceArtistNames)
+        XCTAssertEqual(combined.lyricsText, reference.lyricsText)
+
+        let expanded = tagFixture(format: "mp3", key: "TPE2", singer: "Expanded Artist")
+        let changed = await session.read(from: expanded, fileExtension: "mp3")
+        XCTAssertEqual(changed.artist, "Expanded Artist")
+        let changedFormat = await session.read(
+            from: tagFixture(format: "flac", key: "ALBUMARTIST", singer: "FLAC Artist"),
+            fileExtension: "flac"
+        )
+        XCTAssertEqual(changedFormat.artist, "FLAC Artist")
+        XCTAssertEqual(changedFormat.albumArtist, "Various Artists")
+    }
+
+    func testRangeSessionTailFillsMissingTagsWithoutLeakingIntoNextRead() async {
+        let session = FileMetadataReader.RangeReadSession()
+        let head = Data(repeating: 0, count: 64)
+        let initial = await session.read(from: head, fileExtension: "mp3")
+        XCTAssertNil(initial.artist)
+        let tail = tagFixture(format: "mp3", key: "TPE2", singer: "Tail Artist")
+        let combined = await session.read(from: head, fileExtension: "mp3", id3TailData: tail)
+        XCTAssertEqual(combined.artist, "Tail Artist")
+        XCTAssertEqual(combined.albumArtist, "Various Artists")
+        let withoutTail = await session.read(from: head, fileExtension: "mp3")
+        XCTAssertNil(withoutTail.artist)
+    }
+
     func testStandardMP3TagAlbumArtistKeepsAllValues() async throws {
         let data = tagFixture(
             format: "mp3", key: "TPE2", singer: "Singer",
