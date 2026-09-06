@@ -4,6 +4,50 @@ import Testing
 
 @Suite("Adaptive metadata reading")
 struct MetadataReadSchedulerTests {
+    @Test @MainActor func fullSpeedRecoversAfterEnergySavingWithoutRestartingQueue() async throws {
+        let scheduler = MetadataReadScheduler<Int, Int>()
+        let environment = MetadataReadingEnvironment(device: .init(
+            platform: .mobile, activeProcessorCount: 6, physicalMemory: 8 * 1_024 * 1_024 * 1_024
+        ))
+        var mode = MetadataReadingMode.fast
+        var started: [Int] = []
+        var completed: [Int] = []
+        var gates: [Int: CheckedContinuation<Int, Never>] = [:]
+        let task = Task {
+            await scheduler.run(
+                items: Array(0..<8),
+                limits: { MetadataBackfillExecutionPolicy.limits(
+                    for: .userInitiated, preference: mode, environment: environment
+                ) },
+                read: { item in
+                    started.append(item)
+                    return await withCheckedContinuation { gates[item] = $0 }
+                },
+                completed: { item, _ in completed.append(item) }
+            )
+        }
+        defer {
+            task.cancel()
+            for (item, gate) in gates { gate.resume(returning: item) }
+        }
+        try await waitUntil { started.count == 4 }
+        mode = .energySaving
+        scheduler.configurationChanged()
+        for item in [0, 1, 2] { gates.removeValue(forKey: item)?.resume(returning: item) }
+        try await waitUntil { completed.count == 3 }
+        #expect(started.sorted() == [0, 1, 2, 3])
+        gates.removeValue(forKey: 3)?.resume(returning: 3)
+        try await waitUntil { started.count == 5 }
+        #expect(scheduler.inFlightCount == 1)
+        mode = .fast
+        scheduler.configurationChanged()
+        try await waitUntil { started.count == 8 }
+        #expect(scheduler.inFlightCount == 4)
+        for item in [4, 5, 6, 7] { gates.removeValue(forKey: item)?.resume(returning: item) }
+        #expect(await task.value == false)
+        #expect(completed.sorted() == Array(0..<8))
+    }
+
     @Test @MainActor func failedFileDoesNotStopLaterReads() async {
         enum FileFailure: Error { case unreadable }
         let scheduler = MetadataReadScheduler<Int, Result<Int, FileFailure>>()

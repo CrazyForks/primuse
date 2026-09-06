@@ -271,7 +271,7 @@ struct MetadataReadingStatusView: View {
     var body: some View {
         if backfill.activeSourceIDs.contains(sourceID)
             || backfill.batchRereadingSourceIDs.contains(sourceID) {
-            TimelineView(.periodic(from: .now, by: 5)) { context in
+            TimelineView(.periodic(from: .now, by: 5)) { _ in
                 let constraint = backfill.readingConstraint(forSource: sourceID)
                 let status = MetadataReadingText.string(
                     constraint == .none ? backfill.readingMode.rawValue : constraint.rawValue
@@ -279,14 +279,11 @@ struct MetadataReadingStatusView: View {
                 HStack(spacing: 5) {
                     Text(status)
                     if constraint != .cooling,
-                       let sample = backfill.readingProgress[sourceID],
-                       sample.completed >= 2,
-                       context.date.timeIntervalSince(sample.startedAt) >= 2,
-                       context.date.timeIntervalSince(sample.lastCompletedAt) < 15 {
+                       let rate = backfill.readingProgress[sourceID]?.songsPerMinute(at: .now) {
                         Text("·")
                         Text(String(
                             format: MetadataReadingText.string("rate"),
-                            Double(sample.completed) * 60 / context.date.timeIntervalSince(sample.startedAt)
+                            rate
                         ))
                         .monospacedDigit()
                     }

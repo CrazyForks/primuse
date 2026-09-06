@@ -4,6 +4,65 @@ import Testing
 
 @Suite("Metadata backfill presentation")
 struct MetadataBackfillPresentationTests {
+    @Test("Reading rate waits for a useful sample and hides stale measurements")
+    func readingRateWarmupAndStaleness() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var rate = MetadataReadingRate(startedAt: start)
+        #expect(rate.songsPerMinute(at: start) == nil)
+        rate.recordCompletion(at: start.addingTimeInterval(1))
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(1)) == nil)
+        rate.recordCompletion(at: start.addingTimeInterval(2))
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(2)) == 60)
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(17)) == nil)
+    }
+
+    @Test("Recent throughput replaces a long period of slower reads")
+    func readingRateUsesRecentCompletions() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var rate = MetadataReadingRate(startedAt: start)
+        for index in 1...600 {
+            rate.recordCompletion(at: start.addingTimeInterval(Double(index) * 1.2))
+        }
+        #expect(abs((rate.songsPerMinute(at: start.addingTimeInterval(720)) ?? 0) - 50) < 0.001)
+        for index in 1...60 {
+            rate.recordCompletion(at: start.addingTimeInterval(720 + Double(index) * 0.5))
+        }
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(750)) == 120)
+    }
+
+    @Test("A new mode measures only its new work, including dense local completions")
+    func readingRateRestartsForNewMode() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var rate = MetadataReadingRate(startedAt: start)
+        for index in 1...10 {
+            rate.recordCompletion(at: start.addingTimeInterval(Double(index) * 1.2))
+        }
+        let switchedAt = start.addingTimeInterval(12)
+        rate = MetadataReadingRate(startedAt: switchedAt)
+        #expect(rate.songsPerMinute(at: switchedAt) == nil)
+        for index in 1...20_000 {
+            rate.recordCompletion(at: switchedAt.addingTimeInterval(Double(index) / 1_000))
+        }
+        #expect(abs((rate.songsPerMinute(at: switchedAt.addingTimeInterval(20)) ?? 0) - 60_000) < 0.001)
+    }
+
+    @Test("Long pauses and backward clock changes do not pollute resumed throughput")
+    func readingRateRecoversAfterPauseOrClockChange() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var rate = MetadataReadingRate(startedAt: start)
+        rate.recordCompletion(at: start.addingTimeInterval(1))
+        rate.recordCompletion(at: start.addingTimeInterval(2))
+        rate.recordCompletion(at: start.addingTimeInterval(100))
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(100)) == nil)
+        rate.recordCompletion(at: start.addingTimeInterval(103))
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(103)) == 40)
+        #expect(rate.songsPerMinute(at: start) == nil)
+        rate.recordCompletion(at: start)
+        #expect(rate.songsPerMinute(at: start) == nil)
+        rate.recordCompletion(at: start.addingTimeInterval(3))
+        #expect(rate.songsPerMinute(at: start.addingTimeInterval(3)) == 40)
+    }
+
     @Test("One song resolves to exactly one visible state")
     func stateResolutionIsMutuallyExclusive() {
         #expect(resolve() == .pendingInspection)

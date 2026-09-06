@@ -408,8 +408,8 @@ final class MetadataBackfillService {
     @ObservationIgnored private var playbackIsActive: () -> Bool
     private(set) var readingMode: MetadataReadingMode = .automatic
     private(set) var readingConfigurationRevision = 0
-    private(set) var readingProgress: [String: (startedAt: Date, completed: Int, lastCompletedAt: Date)] = [:]
-    @ObservationIgnored private var readProgressAccumulator: [String: (startedAt: Date, completed: Int, lastCompletedAt: Date)] = [:]
+    private(set) var readingProgress: [String: MetadataReadingRate] = [:]
+    @ObservationIgnored private var readProgressAccumulator: [String: MetadataReadingRate] = [:]
     @ObservationIgnored private var lastReadProgressPublishedAt = Date.distantPast
     @ObservationIgnored private var recentProcessingDuration: TimeInterval = 0.5
 
@@ -443,10 +443,20 @@ final class MetadataBackfillService {
     }
 
     func readingConfigurationChanged() {
-        readingMode = MetadataReadingMode.resolve(
+        let mode = MetadataReadingMode.resolve(
             storedValue: UserDefaults.standard.string(forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey),
             legacyFastEnabled: UserDefaults.standard.bool(forKey: MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
         )
+        if mode != readingMode {
+            readingMode = mode
+            let now = Date()
+            for sourceID in Array(readProgressAccumulator.keys) {
+                readProgressAccumulator[sourceID] = MetadataReadingRate(startedAt: now)
+            }
+            readingProgress.removeAll()
+            lastReadProgressPublishedAt = .distantPast
+            plog("Backfill: reading preference -> \(mode.rawValue)")
+        }
         readingConfigurationRevision += 1
         activeScheduler?.configurationChanged()
         for scheduler in batchSchedulers.values { scheduler.configurationChanged() }
@@ -465,10 +475,8 @@ final class MetadataBackfillService {
 
     private func recordReadCompletion(sourceID: String) {
         let now = Date()
-        var value = readProgressAccumulator[sourceID] ?? (now, 0, now)
-        value.completed += 1
-        value.lastCompletedAt = now
-        readProgressAccumulator[sourceID] = value
+        readProgressAccumulator[sourceID, default: MetadataReadingRate(startedAt: now)]
+            .recordCompletion(at: now)
         if now.timeIntervalSince(lastReadProgressPublishedAt) >= 2 {
             readingProgress = readProgressAccumulator
             lastReadProgressPublishedAt = now
@@ -2527,7 +2535,9 @@ final class MetadataBackfillService {
             for other in batchSchedulers.values { other.configurationChanged() }
         }
         let now = Date()
-        readProgressAccumulator[expectedSourceID] = (now, 0, now)
+        readProgressAccumulator[expectedSourceID] = MetadataReadingRate(startedAt: now)
+        readingProgress[expectedSourceID] = nil
+        var lastProcessed = 0
         return await MetadataTagRereadBatch.run(
             songIDs: songIDs,
             scheduler: scheduler,
@@ -2559,9 +2569,10 @@ final class MetadataBackfillService {
             case .alreadyReading, .unsupported: return .skipped
             }
         } progress: { [self] value in
-            if value.processed > (readProgressAccumulator[expectedSourceID]?.completed ?? 0) {
+            if value.processed > lastProcessed {
                 recordReadCompletion(sourceID: expectedSourceID)
             }
+            lastProcessed = value.processed
             progress(value)
             for other in batchSchedulers.values { other.configurationChanged() }
         }
@@ -2923,7 +2934,7 @@ final class MetadataBackfillService {
         }
         let startedAt = Date()
         for sourceID in activeSourceIDs where readProgressAccumulator[sourceID] == nil {
-            readProgressAccumulator[sourceID] = (startedAt, 0, startedAt)
+            readProgressAccumulator[sourceID] = MetadataReadingRate(startedAt: startedAt)
         }
         await scheduler.run(
             items: snapshot,

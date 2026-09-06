@@ -1,5 +1,50 @@
 import Foundation
 
+public struct MetadataReadingRate: Sendable {
+    private struct Checkpoint: Sendable {
+        let date: Date
+        let completed: Int
+    }
+
+    private static let window: TimeInterval = 15
+    private var checkpoints: [Checkpoint]
+    private var completed = 0
+    private var lastCompletedAt: Date?
+
+    public init(startedAt: Date) {
+        checkpoints = [Checkpoint(date: startedAt, completed: 0)]
+    }
+
+    public mutating func recordCompletion(at now: Date) {
+        let previous = lastCompletedAt ?? checkpoints[0].date
+        if now < previous || now.timeIntervalSince(previous) >= Self.window {
+            self = Self(startedAt: now)
+        }
+        completed += 1
+        lastCompletedAt = now
+        // One cumulative checkpoint per second bounds storage even for fast
+        // local files; retaining the boundary gives an exact count and duration.
+        if now.timeIntervalSince(checkpoints[checkpoints.count - 1].date) >= 1 {
+            checkpoints.append(Checkpoint(date: now, completed: completed))
+        }
+        let cutoff = now.addingTimeInterval(-Self.window)
+        while checkpoints.count > 1, checkpoints[1].date <= cutoff {
+            checkpoints.removeFirst()
+        }
+    }
+
+    public func songsPerMinute(at now: Date) -> Double? {
+        guard let lastCompletedAt, now >= lastCompletedAt,
+              now.timeIntervalSince(lastCompletedAt) < Self.window else { return nil }
+        let cutoff = now.addingTimeInterval(-Self.window)
+        let baseline = checkpoints.last { $0.date <= cutoff } ?? checkpoints[0]
+        let elapsed = now.timeIntervalSince(baseline.date)
+        let count = completed - baseline.completed
+        guard elapsed >= 2, count >= 2 else { return nil }
+        return Double(count) * 60 / elapsed
+    }
+}
+
 public struct MetadataTagRereadProgress: Sendable, Equatable {
     public let total: Int
     public var completed = 0
