@@ -1116,6 +1116,7 @@ private final class State: @unchecked Sendable {
             // 时, SFB read 跨 256KB 边界后 cache miss → chunk align 回到 0
             // → 重新拉整个 1MB (重复拉前 256KB), 浪费带宽和时间。
             // 推 fetchStart 到 cache 末尾后, 只拉缺失的 [256KB..1MB]。
+            let fetchDeadline = DispatchTime.now() + .seconds(30)
             let chunkSize = CloudPlaybackSource.chunkSize
             let chunkAlign = (offset / chunkSize) * chunkSize
             let chunkEnd = min(chunkAlign + chunkSize, totalLength)
@@ -1133,19 +1134,27 @@ private final class State: @unchecked Sendable {
             }()
             let want = chunkEnd - chunkStart
 
-            // Foreground decode must never wait long behind background
-            // prefetch. Give an already-running prefetch a tiny chance to
-            // finish, then issue the user-facing fetch anyway. On slow WAN
-            // links this avoids "next track spins while prefetch owns the
-            // connection pool" behavior.
+            // Join a running prefetch instead of duplicating its bytes after
+            // an ordinary network round trip. Awaiting it from a user-priority
+            // task also escalates its Swift work; the shared read still has
+            // the same deadline and cancellation boundary as a direct fetch.
             lock.lock()
             let prefetchActive = prefetchInFlight.contains(chunkStart)
+            let prefetchTask = prefetchTasks[chunkStart]
             lock.unlock()
             if prefetchActive {
                 let waitStart = Date()
-                let waitDeadline = waitStart.addingTimeInterval(0.15)
-                while Date() < waitDeadline {
-                    Thread.sleep(forTimeInterval: 0.03)
+                let priorityWaiter = Task(priority: .userInitiated) {
+                    await prefetchTask?.value
+                }
+                defer { priorityWaiter.cancel() }
+                while true {
+                    guard !isClosed(), CloudPlaybackSource.isCurrentStreamEpoch(
+                        sourceID: sourceID, epoch: streamEpoch
+                    ) else {
+                        errorOut?.pointee = NSError(domain: NSPOSIXErrorDomain, code: Int(ECANCELED))
+                        return nil
+                    }
                     if let cached = readFromCacheIfAvailable(offset: offset, endOffset: endOffset) {
                         let elapsed = Date().timeIntervalSince(waitStart)
                         lock.lock()
@@ -1157,6 +1166,7 @@ private final class State: @unchecked Sendable {
                             plog(String(format: "⏳ Cloud stream '%@' waited %.0fms for prefetch chunkStart=%lld (then served from cache)",
                                         label, elapsed * 1000, chunkStart))
                         }
+                        prefetchIfNeeded(startOffset: offset + Int64(cached.count))
                         return cached
                     }
                     lock.lock()
@@ -1177,11 +1187,13 @@ private final class State: @unchecked Sendable {
                                     label, chunkStart, elapsed * 1000))
                         break
                     }
-                }
-                if Date() >= waitDeadline {
-                    let elapsed = Date().timeIntervalSince(waitStart)
-                    plog(String(format: "⏩ Cloud stream '%@' foreground fetch bypassing slow prefetch chunkStart=%lld after %.0fms",
-                                label, chunkStart, elapsed * 1000))
+                    if DispatchTime.now() >= fetchDeadline {
+                        prefetchTask?.cancel()
+                        markFetchDisabled()
+                        errorOut?.pointee = NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT))
+                        return nil
+                    }
+                    Thread.sleep(forTimeInterval: 0.03)
                 }
             }
 
@@ -1233,7 +1245,7 @@ private final class State: @unchecked Sendable {
                 )
                 return nil
             }
-            let timeoutResult = semaphore.wait(timeout: .now() + .seconds(30))
+            let timeoutResult = semaphore.wait(timeout: fetchDeadline)
             releaseForegroundFetch(id: fetchID)
             let elapsed = Date().timeIntervalSince(startedAt)
             if timeoutResult == .timedOut {
@@ -1667,8 +1679,12 @@ private final class State: @unchecked Sendable {
         } else if persistOnComplete,
                   activeURL == partialURL,
                   allowsTrailingFill,
+                  prefetchAhead == 0,
                   !trailingFillScheduled,
                   cachedRanges.first?.lowerBound == 0 {
+            // Streaming prefetch already owns future chunks. Let those writes
+            // complete the cache; finalization can fill any remaining footer.
+            // A live bulk fill would overlap the outstanding chunk requests.
             // 「就差一小段就能 rename」的常见模式:
             // 1) 单段 [0, X), X 接近 totalLength — 用户播完歌但 SFB 没读
             //    最末尾几 KB (e.g., mp3 ID3v1 trailing); 缺 [X, totalLength)

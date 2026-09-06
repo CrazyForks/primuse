@@ -5,6 +5,105 @@ import XCTest
 @testable import Primuse
 
 final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
+    func testForegroundJoinsSlowPrefetchWithoutOverlappingTrailingFill() async throws {
+        let sourceID = "cloud-shared-prefetch-\(UUID().uuidString)"
+        let directory = try makeTemporaryDirectory()
+        let cacheURL = directory.appendingPathComponent("song.bin")
+        let payload = Data(repeating: 0x35, count: Int(CloudPlaybackSource.chunkSize) * 3)
+        let gate = BlockingFetchGate()
+        let connector = FixtureRangeConnector(sourceID: sourceID, payload: payload, trailingGate: gate)
+        defer {
+            CloudPlaybackSource.cancelSessions(sourceID: sourceID)
+            Task { await gate.release() }
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let input = try makeInputSource(
+            sourceID: sourceID, cacheURL: cacheURL, payload: payload,
+            connector: connector, allowsTrailingFill: true, prefetchAhead: 2
+        )
+        XCTAssertTrue(Self.read(input, byteCount: 4096).success)
+        let started = await Self.waitUntilAsync(timeout: 2) {
+            await connector.backgroundFetchCount() == 2
+        }
+        XCTAssertTrue(started)
+        let finished = expectation(description: "foreground received shared bytes")
+        let result = LockedReadResult()
+        let box = InputSourceBox(input)
+        DispatchQueue.global(qos: .userInitiated).async {
+            result.store(Self.read(box.input, byteCount: 4096, offset: Int(CloudPlaybackSource.chunkSize)))
+            finished.fulfill()
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        let pendingRequests = await connector.requests()
+        XCTAssertEqual(pendingRequests.count, 3, "A waiting read must reuse the two outstanding chunks")
+        await gate.release()
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertTrue(result.value.success, result.value.error ?? "shared read failed")
+        XCTAssertEqual(result.value.data, Data(repeating: 0x35, count: 4096))
+        let promoted = await waitUntil(timeout: 2) { FileManager.default.fileExists(atPath: cacheURL.path) }
+        XCTAssertTrue(promoted)
+        XCTAssertEqual(try Data(contentsOf: cacheURL), payload)
+        let requests = await connector.requests()
+        XCTAssertEqual(requests.map(\.offset).sorted(), [0, CloudPlaybackSource.chunkSize, 2 * CloudPlaybackSource.chunkSize])
+        XCTAssertEqual(requests.reduce(Int64(0)) { $0 + $1.length }, Int64(payload.count))
+    }
+
+    func testCancellingSessionReleasesReaderWaitingForPrefetch() async throws {
+        let sourceID = "cloud-shared-cancel-\(UUID().uuidString)"
+        let directory = try makeTemporaryDirectory()
+        let cacheURL = directory.appendingPathComponent("song.bin")
+        let payload = Data(repeating: 0x49, count: Int(CloudPlaybackSource.chunkSize) * 2)
+        let gate = BlockingFetchGate()
+        let connector = FixtureRangeConnector(sourceID: sourceID, payload: payload, trailingGate: gate)
+        defer {
+            CloudPlaybackSource.cancelSessions(sourceID: sourceID)
+            Task { await gate.release() }
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let input = try makeInputSource(
+            sourceID: sourceID, cacheURL: cacheURL, payload: payload,
+            connector: connector, allowsTrailingFill: false, prefetchAhead: 1
+        )
+        XCTAssertTrue(Self.read(input, byteCount: 4096).success)
+        let started = await Self.waitUntilAsync(timeout: 2) { await gate.hasStarted() }
+        XCTAssertTrue(started)
+        let finished = expectation(description: "cancelled shared reader returned")
+        let result = LockedReadResult()
+        let box = InputSourceBox(input)
+        DispatchQueue.global(qos: .userInitiated).async {
+            result.store(Self.read(box.input, byteCount: 4096, offset: Int(CloudPlaybackSource.chunkSize)))
+            finished.fulfill()
+        }
+        try await Task.sleep(for: .milliseconds(350))
+        CloudPlaybackSource.cancelSessions(sourceID: sourceID)
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertFalse(result.value.success)
+        await gate.release()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
+    func testFailedPrefetchFallsBackToForegroundRead() async throws {
+        let sourceID = "cloud-shared-failure-\(UUID().uuidString)"
+        let directory = try makeTemporaryDirectory()
+        let cacheURL = directory.appendingPathComponent("song.bin")
+        let payload = Data(repeating: 0x62, count: Int(CloudPlaybackSource.chunkSize) * 2)
+        let connector = FixtureRangeConnector(sourceID: sourceID, payload: payload, failsBackgroundFetch: true)
+        defer {
+            CloudPlaybackSource.cancelSessions(sourceID: sourceID)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let input = try makeInputSource(
+            sourceID: sourceID, cacheURL: cacheURL, payload: payload,
+            connector: connector, allowsTrailingFill: false, prefetchAhead: 1
+        )
+        XCTAssertTrue(Self.read(input, byteCount: 4096).success)
+        let attempted = await Self.waitUntilAsync(timeout: 2) { await connector.backgroundFetchCount() == 1 }
+        XCTAssertTrue(attempted)
+        let result = Self.read(input, byteCount: 4096, offset: Int(CloudPlaybackSource.chunkSize))
+        XCTAssertTrue(result.success, result.error ?? "foreground fallback failed")
+        XCTAssertEqual(result.data, Data(repeating: 0x62, count: 4096))
+    }
+
     @MainActor
     func testFailedUserSeekKeepsRequestedPositionInsteadOfRestartingSong() async throws {
         let directory = try makeTemporaryDirectory()
@@ -365,7 +464,8 @@ final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
         cacheURL: URL,
         payload: Data,
         connector: FixtureRangeConnector,
-        allowsTrailingFill: Bool
+        allowsTrailingFill: Bool,
+        prefetchAhead: Int = 0
     ) throws -> CloudInputSourceObjC {
         let song = Song(
             id: UUID().uuidString,
@@ -382,7 +482,7 @@ final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
             cacheURL: cacheURL,
             streamEpoch: ticket,
             persistOnComplete: true,
-            prefetchAhead: 0,
+            prefetchAhead: prefetchAhead,
             allowsTrailingFill: allowsTrailingFill
         )
         return try XCTUnwrap(source as? CloudInputSourceObjC)
@@ -426,10 +526,12 @@ final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
 
     private static func read(
         _ input: CloudInputSourceObjC,
-        byteCount: Int
+        byteCount: Int,
+        offset: Int? = nil
     ) -> ReadResult {
         do {
             try input.open()
+            if let offset { try input.seek(toOffset: offset) }
             var buffer = [UInt8](repeating: 0, count: byteCount)
             let bytesRead = try buffer.withUnsafeMutableBytes { bytes in
                 try input.read(bytes.baseAddress!, length: byteCount)
@@ -437,7 +539,8 @@ final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
             return ReadResult(
                 success: true,
                 bytesRead: bytesRead,
-                error: nil
+                error: nil,
+                data: Data(buffer.prefix(bytesRead))
             )
         } catch {
             return ReadResult(
@@ -477,6 +580,7 @@ private struct ReadResult: Sendable {
     let success: Bool
     let bytesRead: Int
     let error: String?
+    var data: Data = Data()
 }
 
 private final class LockedReadResult: @unchecked Sendable {
@@ -530,8 +634,10 @@ private actor BlockingFetchGate {
 
 private actor FetchRequestRecorder {
     private var backgroundCount = 0
+    private var recordedRequests: [FixtureRangeRequest] = []
 
-    func record(priority: RangeFetchPriority) {
+    func record(offset: Int64, length: Int64, priority: RangeFetchPriority) {
+        recordedRequests.append(FixtureRangeRequest(offset: offset, length: length))
         if case .background = priority {
             backgroundCount += 1
         }
@@ -540,22 +646,32 @@ private actor FetchRequestRecorder {
     func backgroundFetchCount() -> Int {
         backgroundCount
     }
+
+    func requests() -> [FixtureRangeRequest] { recordedRequests }
+}
+
+private struct FixtureRangeRequest: Sendable {
+    let offset: Int64
+    let length: Int64
 }
 
 private final class FixtureRangeConnector: MusicSourceConnector, @unchecked Sendable {
     let sourceID: String
     private let payload: Data
     private let trailingGate: BlockingFetchGate?
+    private let failsBackgroundFetch: Bool
     private let recorder = FetchRequestRecorder()
 
     init(
         sourceID: String,
         payload: Data,
-        trailingGate: BlockingFetchGate? = nil
+        trailingGate: BlockingFetchGate? = nil,
+        failsBackgroundFetch: Bool = false
     ) {
         self.sourceID = sourceID
         self.payload = payload
         self.trailingGate = trailingGate
+        self.failsBackgroundFetch = failsBackgroundFetch
     }
 
     func connect() async throws {}
@@ -587,10 +703,11 @@ private final class FixtureRangeConnector: MusicSourceConnector, @unchecked Send
         length: Int64,
         priority: RangeFetchPriority
     ) async throws -> Data {
-        await recorder.record(priority: priority)
+        await recorder.record(offset: offset, length: length, priority: priority)
         if case .background = priority, let trailingGate {
             await trailingGate.waitAtGate()
         }
+        if case .background = priority, failsBackgroundFetch { throw URLError(.networkConnectionLost) }
         guard offset >= 0,
               length > 0,
               offset < Int64(payload.count),
@@ -604,4 +721,6 @@ private final class FixtureRangeConnector: MusicSourceConnector, @unchecked Send
     func backgroundFetchCount() async -> Int {
         await recorder.backgroundFetchCount()
     }
+
+    func requests() async -> [FixtureRangeRequest] { await recorder.requests() }
 }

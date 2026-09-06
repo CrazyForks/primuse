@@ -1,6 +1,7 @@
 import Foundation
 import PrimuseKit
 import XCTest
+import UIKit
 @testable import Primuse
 
 @MainActor
@@ -74,6 +75,68 @@ final class MusicLibraryLikedMutationTests: XCTestCase {
 
 @MainActor
 final class MusicLibraryMetadataReplacementTests: XCTestCase {
+    func testDeferredMaintenancePreservesMetadataUntilEnvironmentAllowsRebuild() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimuseDeferredMaintenance-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var allowsMaintenance = false
+        let library = MusicLibrary(
+            storageDirectory: directory,
+            deferredMaintenanceAllowed: { allowsMaintenance }
+        )
+        var song = makeSong(id: "deferred", path: "/music/deferred.mp3")
+        song.albumTitle = "Original"
+        library.addSongs([song], affectedSourceIDs: [song.sourceID])
+        await library.waitForPendingIndex()
+        let revision = library.spotlightIndexRevision
+
+        for album in ["Intermediate", "Latest"] {
+            song.albumTitle = album
+            song.duration = 193
+            await library.replaceSongsPreparedOffMain([song], maintenance: .deferred)
+            library.flushDeferredLibraryMaintenance()
+        }
+        XCTAssertEqual(library.song(id: song.id)?.albumTitle, "Latest")
+        XCTAssertEqual(library.unobservedVisibleSong(id: song.id)?.duration, 193)
+        XCTAssertEqual(library.albums.map(\.title), ["Original"])
+        XCTAssertEqual(library.spotlightIndexRevision, revision)
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("Deferred grouping must not defer song persistence")
+        }
+        let restored = MusicLibrary(storageDirectory: directory)
+        XCTAssertEqual(restored.song(id: song.id)?.albumTitle, "Latest")
+
+        allowsMaintenance = true
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        for _ in 0..<100 where library.spotlightIndexRevision == revision {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(library.spotlightIndexRevision, revision + 1)
+        await library.waitForPendingIndex()
+        XCTAssertEqual(library.albums.map(\.title), ["Latest"])
+        XCTAssertEqual(library.spotlightIndexRevision, revision + 1)
+        library.flushDeferredLibraryMaintenance()
+        XCTAssertEqual(library.spotlightIndexRevision, revision + 1)
+    }
+
+    func testExplicitIndexBarrierCompletesWhileAutomaticMaintenanceIsDeferred() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimuseMaintenanceBarrier-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = MusicLibrary(storageDirectory: directory, deferredMaintenanceAllowed: { false })
+        var song = makeSong(id: "barrier", path: "/music/barrier.mp3")
+        song.albumTitle = "Before"
+        library.addSongs([song], affectedSourceIDs: [song.sourceID])
+        await library.waitForPendingIndex()
+        song.albumTitle = "After"
+        await library.replaceSongsPreparedOffMain([song], maintenance: .deferred)
+        await library.waitForPendingIndex()
+        XCTAssertEqual(library.albums.map(\.title), ["After"])
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("The index barrier must preserve song persistence")
+        }
+    }
+
     func testPreparedMetadataReplacementPatchesStableLibraryCaches() async throws {
         let storageDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PrimuseMetadataReplacementTests-\(UUID().uuidString)", isDirectory: true)

@@ -2,6 +2,9 @@ import Foundation
 import PrimuseKit
 import CryptoKit
 import GRDB
+#if os(iOS)
+import UIKit
+#endif
 
 struct PlaylistBrowseArtworkAccumulator {
     private struct RankedCandidate {
@@ -3209,10 +3212,19 @@ final class MusicLibrary {
         storageDirectory: URL? = nil,
         artistNameConfiguration: ArtistNameConfiguration? = nil,
         preferExternalSnapshot: Bool = false,
+        deferredMaintenanceAllowed: (@MainActor () -> Bool)? = nil,
         songStoreSnapshotWriter: @escaping @Sendable (IncrementalSongStore, [Song], String?) throws -> Int64 = {
             try $0.replaceAll(with: $1, snapshotImportID: $2)
         }
     ) {
+        self.deferredMaintenanceAllowed = deferredMaintenanceAllowed ?? {
+            #if os(iOS)
+            UIApplication.shared.applicationState == .active
+                && ProcessInfo.processInfo.thermalState == .nominal
+            #else
+            true
+            #endif
+        }
         self.artistNameConfiguration = (
             artistNameConfiguration
                 ?? ArtistNameConfiguration.load(from: .standard)
@@ -3257,6 +3269,16 @@ final class MusicLibrary {
 
         self.songStoreSnapshotWriter = songStoreSnapshotWriter
         loadSnapshot(preferExternalSnapshot: preferExternalSnapshot)
+
+        #if os(iOS)
+        for name in [UIApplication.didBecomeActiveNotification, ProcessInfo.thermalStateDidChangeNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.flushDeferredLibraryMaintenance()
+                }
+            }
+        }
+        #endif
 
         NotificationCenter.default.addObserver(
             forName: .primuseArtistNameConfigurationDidChange,
@@ -6325,6 +6347,7 @@ final class MusicLibrary {
     private var deferredLibraryMaintenancePending = false
     private var deferredDerivedIndexMaintenancePending = false
     private var deferredLibraryMaintenanceTask: Task<Void, Never>?
+    @ObservationIgnored private let deferredMaintenanceAllowed: @MainActor () -> Bool
     /// Collapse mutations published in the same run-loop burst before starting
     /// a full-library grouping/sort. More importantly, cancellation can happen
     /// while the task is still sleeping instead of after expensive work began.
@@ -6348,6 +6371,7 @@ final class MusicLibrary {
             deferredLibraryMaintenancePending = true
             deferredDerivedIndexMaintenancePending =
                 deferredDerivedIndexMaintenancePending || rebuildDerivedCollections
+            guard deferredMaintenanceAllowed() else { return }
             guard deferredLibraryMaintenanceTask == nil else { return }
             deferredLibraryMaintenanceTask = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -6366,13 +6390,14 @@ final class MusicLibrary {
         }
     }
 
-    /// Metadata backfill calls this at every bounded snapshot exit. It keeps
-    /// album/artist/source caches and Spotlight fresh without one global pass
-    /// per small persistence batch.
-    func flushDeferredLibraryMaintenance() {
+    /// Backfill persists song changes independently. Keep its global grouping
+    /// and Spotlight work pending while iOS is backgrounded or thermally busy;
+    /// activation and thermal recovery coalesce those changes into one rebuild.
+    func flushDeferredLibraryMaintenance(force: Bool = false) {
         deferredLibraryMaintenanceTask?.cancel()
         deferredLibraryMaintenanceTask = nil
         guard deferredLibraryMaintenancePending else { return }
+        guard force || deferredMaintenanceAllowed() else { return }
         deferredLibraryMaintenancePending = false
         let shouldRebuildDerivedCollections = deferredDerivedIndexMaintenancePending
         deferredDerivedIndexMaintenancePending = false
@@ -6499,7 +6524,7 @@ final class MusicLibrary {
     /// A scan must not publish completion while its visible catalogue still
     /// represents the preceding generation.
     func waitForPendingIndex() async {
-        flushDeferredLibraryMaintenance()
+        flushDeferredLibraryMaintenance(force: true)
         while let task = rebuildIndexTask {
             await task.value
         }
