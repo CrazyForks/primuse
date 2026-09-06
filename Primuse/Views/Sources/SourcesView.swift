@@ -236,13 +236,11 @@ struct MetadataBackfillPerformanceButton<Label: View>: View {
                         .tag(option)
                 }
             }
-            Text(MetadataReadingText.string("help"))
         } label: {
             label(mode)
         }
         .accessibilityLabel(MetadataReadingText.string("title"))
         .accessibilityValue(MetadataReadingText.string(mode.rawValue))
-        .accessibilityHint(MetadataReadingText.string("help"))
         .accessibilityIdentifier("sources.metadataBackfillPerformance")
         .alert(MetadataReadingText.string("fastWarningTitle"), isPresented: $showingFastConfirmation) {
             Button(MetadataReadingText.string("fastWarningConfirm")) {

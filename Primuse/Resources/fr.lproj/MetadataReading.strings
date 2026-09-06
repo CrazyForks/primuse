@@ -2,7 +2,6 @@
 "automatic" = "Automatique";
 "fast" = "Pleine vitesse";
 "energySaving" = "Économiser l’énergie";
-"help" = "S’adapte aux cœurs, à la mémoire, à la lecture et à la température. Le changement de mode est immédiat ; les protections restent actives à pleine vitesse.";
 "playback" = "Priorité à la lecture audio";
 "lowPower" = "Mode économie d’énergie";
 "thermal" = "Ralentissement pour refroidir l’appareil";
@@ -11,5 +10,5 @@
 "rate" = "%.1f titres/min";
 "fastWarningTitle" = "Activer la pleine vitesse ?";
 "fastWarningMessage" = "Termine la lecture des tags plus vite, mais peut augmenter la chaleur, la consommation et les saccades. La lecture ralentit toujours si l’appareil chauffe, si le mode économie d’énergie est activé ou pendant la lecture de musique, et se met en pause si nécessaire. Vous pouvez changer de mode à tout moment.";
-"fastWarningConfirm" = "Activer la pleine vitesse";
+"fastWarningConfirm" = "Lancer";
 "cancel" = "Annuler";

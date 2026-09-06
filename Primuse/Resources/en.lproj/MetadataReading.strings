@@ -2,7 +2,6 @@
 "automatic" = "Automatic";
 "fast" = "Full Speed";
 "energySaving" = "Save energy";
-"help" = "Adapts to device cores, memory, playback and temperature. Mode changes apply immediately; full speed keeps protections enabled.";
 "playback" = "Protecting playback";
 "lowPower" = "Low Power Mode";
 "thermal" = "Slowed down to cool the device";
@@ -11,5 +10,5 @@
 "rate" = "%.1f tracks/min";
 "fastWarningTitle" = "Enable full-speed reading?";
 "fastWarningMessage" = "Finish reading tags sooner. This may increase heat, battery use, and interface stuttering. Reading still slows down when the device is warm, Low Power Mode is on, or music is playing, and pauses if needed. You can switch modes at any time.";
-"fastWarningConfirm" = "Enable Full Speed";
+"fastWarningConfirm" = "Run";
 "cancel" = "Cancel";
