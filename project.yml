@@ -548,10 +548,15 @@ targets:
       - path: Primuse/Services/Cloud/CloudKitSyncService.swift
       - path: Primuse/Services/Radio/RadioStationsStore.swift
       - path: Primuse/Services/Metadata/ScraperSettingsStore.swift
-      - path: Primuse/Services/Metadata/Scrapers/ScraperConfigStore.swift
-      - path: Primuse/Services/Metadata/Scrapers/ScraperConfig.swift
-      - path: Primuse/Services/Metadata/Scrapers/ScraperSourceConfig.swift
-      - path: Primuse/Services/Metadata/Scrapers/ScraperTypes.swift
+      - path: Primuse/Services/Metadata/Scrapers
+      - path: Primuse/Services/Metadata/ArtworkFetchService.swift
+      - path: Primuse/Services/Metadata/TagMetadataWritebackTypes.swift
+      - path: Primuse/Services/Sources/MusicSourceProtocol.swift
+      - path: Primuse/Services/Sources/SourceErrors.swift
+      - path: Primuse/Services/Sources/SubsonicSource.swift
+      - path: Primuse/Services/Sources/MediaServerSource.swift
+      - path: Primuse/Services/Sources/TrustedHTTPTransport.swift
+      - path: Primuse/Services/Sources/SSLTrustStore.swift
       - path: Primuse/Services/Scrobble/ScrobbleService.swift
       - path: Primuse/Services/Scrobble/ScrobbleSettings.swift
       - path: Primuse/Services/Scrobble/ScrobbleProvider.swift

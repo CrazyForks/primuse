@@ -709,3 +709,11 @@
 
 "ext.tv.remote.transportButton" = "再生 / 一時停止ボタン";
 "ext.tv.remote.transportShortcuts" = "1回押す：再生 / 一時停止\n2回押す：次の曲\n長押し：左右で再生位置を調整";
+
+"tv_complete_artist_artwork" = "アーティスト画像を補完";
+
+"batch_scrape_artwork_progress_format" = "アートワークを取得中 %d / %d";
+
+"batch_scrape_artwork_counts_format" = "取得済み %d · 未取得 %d";
+
+"tv_artist_artwork_source_hint" = "アーティスト名で有効なソースを検索します。未設定の場合は iTunes を使用します。";

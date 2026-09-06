@@ -3255,7 +3255,7 @@ final class SourceManager {
     /// 不走"按已知大小做 HTTP Range"那条路, 改用 AVAssetReader 渐进解码,
     /// 且不做按 fileSize 校验的持久缓存。Subsonic WMA 转码流会带上。
     /// nonisolated: SubsonicSource(独立 actor)与下面的 nonisolated 静态方法都要读它。
-    nonisolated static let transcodedStreamQueryKey = "primuse_transcoded"
+    nonisolated static let transcodedStreamQueryKey = SourceStreamQuery.transcoded
 
     /// `url` 是否是服务端转码流(带 transcoded 标记)。
     nonisolated static func isTranscodedStreamURL(_ url: URL) -> Bool {

@@ -656,3 +656,11 @@
 
 "ext.tv.remote.transportButton" = "Botón reproducir / pausar";
 "ext.tv.remote.transportShortcuts" = "Presionar: reproducir / pausar\nDoble pulsación: pista siguiente\nMantener: adelantar / retroceder con izquierda / derecha";
+
+"tv_complete_artist_artwork" = "Completar imágenes de artistas";
+
+"batch_scrape_artwork_progress_format" = "Obteniendo portadas %d / %d";
+
+"batch_scrape_artwork_counts_format" = "Disponible %d · No recuperado %d";
+
+"tv_artist_artwork_source_hint" = "Busca imágenes por nombre de artista con las fuentes activadas o, si no hay ninguna, con iTunes.";

@@ -79,10 +79,6 @@ struct TVHomeView: View {
             candidateAlbumSongCount: candidateAlbumSongs.count
         )
     }
-    private var heroLikeSong: TVSong? { heroSong ?? candidateAlbumSongs.first }
-    private var heroIsLiked: Bool {
-        heroLikeSong.map { store.isLiked($0.id) } ?? false
-    }
     private var heroHeading: String {
         hero.artist.isEmpty ? hero.title : "\(hero.artist) · \(hero.title)"
     }
@@ -285,16 +281,6 @@ struct TVHomeView: View {
                                  action: { playHero(shuffle: false) })
                     TVPillButton(title: PMString("ext.tv.home.shuffle"), systemImage: "shuffle",
                                  action: { playHero(shuffle: true) })
-                    if heroLikeSong != nil {
-                        TVPillButton(
-                            title: PMString(
-                                heroIsLiked ? "ext.tv.options.loved" : "ext.tv.home.love"
-                            ),
-                            systemImage: heroIsLiked ? "heart.fill" : "heart",
-                            isSelected: heroIsLiked,
-                            action: toggleHeroLiked
-                        )
-                    }
                 }
                 .padding(.top, 32)
             }
@@ -366,11 +352,6 @@ struct TVHomeView: View {
             didStart = false
         }
         if didStart { openPlayer() }
-    }
-
-    private func toggleHeroLiked() {
-        guard let heroLikeSong else { return }
-        store.toggleLiked(heroLikeSong.id)
     }
 }
 #endif

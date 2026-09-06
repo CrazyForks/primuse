@@ -656,3 +656,11 @@
 
 "ext.tv.remote.transportButton" = "Кнопка відтворення / паузи";
 "ext.tv.remote.transportShortcuts" = "Натискання: відтворення / пауза\nПодвійне натискання: наступний трек\nУтримання: перемотування ліворуч / праворуч";
+
+"tv_complete_artist_artwork" = "Доповнити зображення виконавців";
+
+"batch_scrape_artwork_progress_format" = "Отримання ілюстрації %d / %d";
+
+"batch_scrape_artwork_counts_format" = "Доступно %d · Не отримано %d";
+
+"tv_artist_artwork_source_hint" = "Пошук за ім’ям виконавця в активних джерелах або в iTunes, якщо джерела не налаштовано.";

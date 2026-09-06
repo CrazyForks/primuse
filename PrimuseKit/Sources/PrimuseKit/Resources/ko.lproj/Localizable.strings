@@ -709,3 +709,11 @@
 
 "ext.tv.remote.transportButton" = "재생 / 일시 정지 버튼";
 "ext.tv.remote.transportShortcuts" = "한 번 누르기: 재생 / 일시 정지\n두 번 누르기: 다음 곡\n길게 누르기: 좌우로 재생 위치 조절";
+
+"tv_complete_artist_artwork" = "아티스트 이미지 채우기";
+
+"batch_scrape_artwork_progress_format" = "아트워크 가져오는 중 %d / %d";
+
+"batch_scrape_artwork_counts_format" = "사용 가능 %d · 가져오지 못함 %d";
+
+"tv_artist_artwork_source_hint" = "활성화된 소스에서 아티스트 이름으로 이미지를 검색합니다. 설정된 소스가 없으면 iTunes를 사용합니다.";

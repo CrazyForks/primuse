@@ -1,9 +1,7 @@
 import Foundation
 import PrimuseKit
-#if os(iOS)
-#if os(iOS)
+#if canImport(UIKit)
 import UIKit
-#endif
 #else
 import AppKit
 #endif
@@ -57,27 +55,32 @@ actor ArtworkFetchService {
     // MARK: - Artist Image
 
     /// Fetch artist image: check cache → search online → store
-    func fetchArtistImage(artistName: String, artistID: String) async -> Data? {
+    func fetchArtistImage(
+        artistName: String,
+        artistID: String,
+        allowBuiltInFallback: Bool = false
+    ) async -> Data? {
         // 1. Check disk cache
         if let cached = await assetStore.cachedArtistImage(forArtistID: artistID) {
             return cached
         }
 
         // 2. Deduplicate in-flight requests
-        if let existing = inFlightArtist[artistID] {
+        let requestID = "\(artistID)|\(allowBuiltInFallback)"
+        if let existing = inFlightArtist[requestID] {
             return await existing.value
         }
 
         let task = Task<Data?, Never> {
-            let data = await searchArtistImageOnline(artistName: artistName)
+            let data = await searchArtistImageOnline(artistName: artistName, allowBuiltInFallback: allowBuiltInFallback)
             if let data {
                 _ = await assetStore.storeArtistImage(data, forArtistID: artistID)
             }
             return data
         }
-        inFlightArtist[artistID] = task
+        inFlightArtist[requestID] = task
         let result = await task.value
-        inFlightArtist[artistID] = nil
+        inFlightArtist[requestID] = nil
         return result
     }
 
@@ -116,10 +119,20 @@ actor ArtworkFetchService {
         return nil
     }
 
-    private func searchArtistImageOnline(artistName: String) async -> Data? {
-        // Search via enabled scrapers, use cover from best match as artist image
-        let settings = ScraperSettings.load()
-        for config in settings.enabledSources where config.type.supportsCover {
+    nonisolated static func artistLookupSources(
+        settings: ScraperSettings,
+        allowBuiltInFallback: Bool
+    ) -> [ScraperSourceConfig] {
+        let sources = settings.enabledSources.filter { $0.type.supportsCover }
+        guard sources.isEmpty, allowBuiltInFallback else { return sources }
+        // A manual lookup can opt in for this request without enabling any
+        // source for automatic scraping or changing synchronized settings.
+        return [.init(id: "manual-artist-itunes", type: .itunes, isEnabled: true, priority: 0)]
+    }
+
+    private func searchArtistImageOnline(artistName: String, allowBuiltInFallback: Bool) async -> Data? {
+        let sources = Self.artistLookupSources(settings: ScraperSettings.load(), allowBuiltInFallback: allowBuiltInFallback)
+        for config in sources {
             guard !isBackedOff(config.id) else { continue }
             do {
                 let scraper = scraper(for: config)
@@ -246,7 +259,7 @@ actor ArtworkFetchService {
     }
 
     private func compressJPEG(_ data: Data) -> Data? {
-        #if os(iOS)
+        #if canImport(UIKit)
         guard let image = UIImage(data: data),
               let compressed = image.jpegData(compressionQuality: 0.85) else {
             return data

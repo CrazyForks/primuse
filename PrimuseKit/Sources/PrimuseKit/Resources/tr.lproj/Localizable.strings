@@ -656,3 +656,11 @@
 
 "ext.tv.remote.transportButton" = "Oynat / Duraklat düğmesi";
 "ext.tv.remote.transportShortcuts" = "Basın: oynat / duraklat\nİki kez basın: sonraki parça\nBasılı tutun: sol / sağ ile sarın";
+
+"tv_complete_artist_artwork" = "Sanatçı görsellerini tamamla";
+
+"batch_scrape_artwork_progress_format" = "%d / %d resmi getiriliyor";
+
+"batch_scrape_artwork_counts_format" = "Mevcut %d · Getirilmedi %d";
+
+"tv_artist_artwork_source_hint" = "Sanatçı adına göre etkin kaynaklarda arayın; kaynak yoksa iTunes kullanılır.";

@@ -706,3 +706,11 @@
 
 "ext.tv.remote.transportButton" = "播放 / 暫停鍵";
 "ext.tv.remote.transportShortcuts" = "單擊：播放 / 暫停\n雙擊：下一首\n長按：調整進度（左 / 右）";
+
+"tv_complete_artist_artwork" = "補全藝人圖片";
+
+"batch_scrape_artwork_progress_format" = "正在取得封面圖片 %d / %d";
+
+"batch_scrape_artwork_counts_format" = "已取得 %d · 未取得 %d";
+
+"tv_artist_artwork_source_hint" = "依藝人名稱在線上尋找圖片，使用已啟用的刮削來源；未設定時使用 iTunes。";

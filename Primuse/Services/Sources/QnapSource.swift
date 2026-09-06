@@ -370,36 +370,3 @@ actor QnapSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
         }
     }
 }
-
-/// 共享判定: NAS download 端点在会话失效时常回 HTTP 200 + JSON / HTML 登录页。
-/// 把这种 body 切片当 chunk 会损坏 .partial 缓存, 所以先嗅探内容类型。
-func httpMediaResponseLooksLikeErrorBody(_ http: HTTPURLResponse, data: Data) -> Bool {
-    let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-    if contentType.contains("application/json")
-        || contentType.contains("text/html")
-        || contentType.hasPrefix("text/") {
-        return true
-    }
-    // A middle Range starts inside encoded audio; '<' and '{' are ordinary
-    // sample bytes there, not document signatures. Range validity is checked
-    // by the caller before any bytes are cached.
-    if http.statusCode == 206,
-       let range = http.value(forHTTPHeaderField: "Content-Range"),
-       range.range(of: #"^bytes\s+[1-9][0-9]*-[0-9]+/[0-9]+$"#,
-                   options: [.regularExpression, .caseInsensitive]) != nil {
-        return false
-    }
-    // Inspect an actual text prefix instead of a single byte, even when the
-    // server labels its login page as application/octet-stream or audio/*.
-    let bytes = data.prefix(512)
-    // The inspection window can end inside a UTF-8 scalar in a login page.
-    let maximumTrim = data.count > bytes.count ? 3 : 0
-    guard let prefix = (0...maximumTrim).lazy.compactMap({
-              String(data: bytes.dropLast($0), encoding: .utf8)
-          }).first,
-          !prefix.unicodeScalars.contains(where: {
-              $0.value < 0x20 && $0 != "\n" && $0 != "\r" && $0 != "\t"
-          }) else { return false }
-    let text = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return text.hasPrefix("{") || text.hasPrefix("[") || text.hasPrefix("<")
-}

@@ -103,6 +103,7 @@ struct PrimuseTVApp: App {
     var body: some Scene {
         WindowGroup {
             TVRoot()
+                .transportTrustAlerts()
                 .environment(store)
                 .environment(themeState)
                 .environment(appearanceState)

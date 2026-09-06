@@ -321,6 +321,12 @@ final class TVSourceScanner {
     var phase: Phase = .idle
     var indexed: Int = 0
     var currentFile: String = ""
+    private let metadataInspections: TVMetadataInspectionStore
+
+    init(metadataInspections: TVMetadataInspectionStore = .shared) {
+        self.metadataInspections = metadataInspections
+    }
+
     private static let maximumScanDepth = 64
     private static let fnMusicPageSize = 50
     private static let daoLiYuPageSize = 100
@@ -974,7 +980,15 @@ final class TVSourceScanner {
                         if TVScanPipelinePolicy.canReuseMetadata(
                             existing: item.existing,
                             candidate: item.candidate
-                        ) {
+                        ), let existing = item.existing,
+                           await metadataInspections.isCurrent(existing, sidecars: item.sidecars) {
+                            var reused = item.song
+                            reused.coverArtFileName = existing.coverArtFileName
+                            reused.lyricsFileName = existing.lyricsFileName
+                            group.addTask {
+                                (position, TVMetadataEnrichmentResult(song: reused, status: .enriched,
+                                                                     errorDescription: nil, inspectionComplete: true))
+                            }
                             continue
                         }
                         group.addTask {
@@ -994,6 +1008,9 @@ final class TVSourceScanner {
                 for (position, result) in results {
                     switch result.status {
                     case .enriched:
+                        await metadataInspections.record(
+                            result.song, sidecars: items[position].sidecars, complete: result.inspectionComplete
+                        )
                         items[position].song = result.song
                         songsByID[result.song.id] = result.song
                         pendingMetadataBatch.append(result.song)

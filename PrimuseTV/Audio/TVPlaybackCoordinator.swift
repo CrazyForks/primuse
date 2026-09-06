@@ -81,6 +81,8 @@ private actor TVDecodedFileWriter {
 enum TVLyricsLoadingStrategy: Equatable, Sendable {
     case fnMusicService
     case subsonicServer
+    case daoLiYuService
+    case mediaServer
     case sourceFile
 }
 
@@ -88,6 +90,8 @@ enum TVLyricsLoadingPolicy {
     static func strategy(for sourceType: MusicSourceType) -> TVLyricsLoadingStrategy {
         if sourceType == .fnMusic { return .fnMusicService }
         if sourceType.isSubsonicFamily { return .subsonicServer }
+        if sourceType == .daoliyu { return .daoLiYuService }
+        if [.jellyfin, .emby, .plex].contains(sourceType) { return .mediaServer }
         return .sourceFile
     }
 }
@@ -105,7 +109,6 @@ final class TVPlaybackCoordinator {
     private var playbackMetadataTaskToken: UUID?
     private var playbackMetadataSelectionIdentity: PlaybackMetadataIdentity?
     private var playbackMetadataFailureCounts: [PlaybackMetadataIdentity: Int] = [:]
-    private var playbackMetadataCompletedIdentities: Set<PlaybackMetadataIdentity> = []
 
     private struct PlaybackMetadataIdentity: Hashable, Sendable {
         let songID: String
@@ -113,6 +116,7 @@ final class TVPlaybackCoordinator {
         let filePath: String
         let revision: String?
         let fileSize: Int64
+        let lastModified: Date?
 
         init(_ song: Song) {
             songID = song.id
@@ -120,6 +124,7 @@ final class TVPlaybackCoordinator {
             filePath = song.filePath
             revision = song.revision
             fileSize = song.fileSize
+            lastModified = song.lastModified
         }
     }
 
@@ -669,22 +674,10 @@ final class TVPlaybackCoordinator {
             playbackMetadataFailureCounts.removeAll(keepingCapacity: true)
         }
         let failureCount = playbackMetadataFailureCounts[identity] ?? 0
-        guard PlaybackMetadataBackfillPolicy.shouldStart(
-            sourceType: source.type,
-            hasMissingMetadata: PlaybackMetadataBackfillPolicy.hasMissingCoreMetadata(
-                title: song.title,
-                artistName: song.artistName,
-                albumTitle: song.albumTitle,
-                duration: song.duration
-            ),
-            isCueTrack: song.isCueTrack,
-            isStreamDescriptor: song.isStreamDescriptor,
-            isAlreadyReading: playbackMetadataTaskIdentity == identity,
-            completedForCurrentFile: playbackMetadataCompletedIdentities.contains(identity),
-            failedAttemptCount: failureCount
-        ) else {
-            return
-        }
+        guard TVPlaybackMetadataPolicy.supports(source.type),
+              !song.isCueTrack, !song.isStreamDescriptor,
+              playbackMetadataTaskIdentity != identity,
+              failureCount < 3 else { return }
 
         let token = UUID()
         playbackMetadataTaskIdentity = identity
@@ -717,10 +710,13 @@ final class TVPlaybackCoordinator {
             }
         }
 
+        if await TVMetadataInspectionStore.shared.isCurrent(song) { return }
+
         while !Task.isCancelled {
             guard let store,
                   playbackMetadataTaskToken == token,
                   isCurrent(requestID, store: store),
+                  store.source(id: source.id) == source,
                   store.library.song(id: identity.songID).map(PlaybackMetadataIdentity.init)
                     == identity else {
                 return
@@ -737,6 +733,7 @@ final class TVPlaybackCoordinator {
             guard !Task.isCancelled,
                   playbackMetadataTaskToken == token,
                   isCurrent(requestID, store: store),
+                  store.source(id: source.id) == source,
                   let live = store.library.song(id: identity.songID),
                   PlaybackMetadataIdentity(live) == identity else {
                 return
@@ -749,17 +746,13 @@ final class TVPlaybackCoordinator {
                     in: result.song
                 )
                 playbackMetadataFailureCounts[identity] = nil
-                playbackMetadataCompletedIdentities.insert(identity)
                 applyPlaybackMetadata(updated, requestID: requestID, store: store)
-                if store.lyrics.isEmpty,
-                   let cached = await MetadataAssetStore.shared.cachedLyrics(
+                await TVMetadataInspectionStore.shared.record(updated, complete: result.inspectionComplete)
+                if let cached = await MetadataAssetStore.shared.cachedLyrics(
                     forSongID: updated.id
-                   ), !cached.isEmpty,
+                ), !cached.isEmpty,
                    isCurrent(requestID, store: store) {
-                    store.applyLyrics(
-                        Self.toTVLyrics(cached, duration: updated.duration),
-                        forSongID: updated.id
-                    )
+                    store.applyLyrics(Self.toTVLyrics(cached, duration: updated.duration), forSongID: updated.id)
                 }
                 return
             case .cancelled:
@@ -771,7 +764,7 @@ final class TVPlaybackCoordinator {
                     afterFailedAttempt: failureCount
                 ) else {
                     plog(
-                        "TV WebDAV playback metadata read stopped after "
+                        "TV playback metadata read stopped after "
                             + "\(failureCount) attempts for '\(song.title)'"
                     )
                     return
@@ -1209,6 +1202,20 @@ final class TVPlaybackCoordinator {
                     plog("🎬 TV Feiniu Music lyrics fetch failed '\(song.title)': \(error)")
                 }
                 return
+            case .daoLiYuService, .mediaServer:
+                let result = await TVSourceAssetReader.shared.lyrics(
+                    path: song.filePath, source: source, credential: credential
+                )
+                guard self.isCurrent(requestID, store: store) else { return }
+                if case .content(let text) = result {
+                    do {
+                        try await self.cacheAndApplyServerLyrics(
+                            text, song: song, requestID: requestID, store: store,
+                            logSource: source.type.displayName
+                        )
+                    } catch { return }
+                }
+                return
             case .subsonicServer:
                 let result = await self.readSubsonicServerLyrics(
                     for: song.filePath,
@@ -1403,7 +1410,7 @@ final class TVPlaybackCoordinator {
                                 endTiming: $0.endTiming
                             )
                         },
-                        translation: "",
+                        translation: line.manualTranslation?.text ?? "",
                         writingDirection: LyricWritingDirectionPolicy.resolvePresentationDirection(
                             for: line,
                             documentFallback: documentWritingDirection

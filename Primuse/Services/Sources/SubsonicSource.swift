@@ -744,7 +744,7 @@ actor SubsonicSource: RefreshingMetadataSongConnector, ServerScrobblingConnector
                     URLQueryItem(name: "id", value: songID),
                     URLQueryItem(name: "format", value: "mp3"),
                     URLQueryItem(name: "maxBitRate", value: String(Self.transcodeBitRate)),
-                    URLQueryItem(name: SourceManager.transcodedStreamQueryKey, value: "1")
+                    URLQueryItem(name: SourceStreamQuery.transcoded, value: "1")
                 ]
             )
         }

@@ -173,12 +173,9 @@ private struct TVPlaylistArtworkView: View {
                 }
             case .selectedSong(let songID):
                 if let song = store.library.song(id: songID) {
-                    let client = store.fnMusicClient(for: song.sourceID)
-                    if let data = await TVArtworkLoader.shared.songCover(
+                    if let data = await store.songArtworkData(
                         songID: song.id,
-                        coverRef: song.coverArtFileName,
-                        fnMusicSourceID: song.sourceID,
-                        fnMusicClient: client
+                        coverRef: song.coverArtFileName
                     ), let selectedImage = await Self.decodeImage(data) {
                         guard !Task.isCancelled, loadIdentity == identity else { return }
                         image = selectedImage
@@ -202,15 +199,9 @@ private struct TVPlaylistArtworkView: View {
             let resolved: PlaylistArtworkResolution<UIImage>? = await PlaylistArtworkResolver
                 .resolve(plan: corePlan) { candidate -> UIImage? in
                 guard let songID = candidate.songID else { return nil }
-                let sourceID = playlist.artworkCandidates
-                    .first(where: { $0.id == candidate.id })?
-                    .sourceID
-                let client = sourceID.flatMap { store.fnMusicClient(for: $0) }
-                guard let data = await TVArtworkLoader.shared.songCover(
+                guard let data = await store.songArtworkData(
                     songID: songID,
-                    coverRef: candidate.artworkReference,
-                    fnMusicSourceID: sourceID,
-                    fnMusicClient: client
+                    coverRef: candidate.artworkReference
                 ) else { return nil }
                 return await Self.decodeImage(data)
             }

@@ -109,6 +109,116 @@ enum FileMetadataReader {
         }
     }
 
+    /// Builds the lyric document once, then attaches every authored embedded
+    /// translation without placing it in the machine-translation cache. A
+    /// dedicated translation field is preferred over language-qualified
+    /// alternates; bilingual LRC detected in the original body remains the
+    /// fallback for rows that the dedicated field does not cover.
+    static func parsedEmbeddedLyrics(
+        from embedded: FileMetadataReader.Metadata
+    ) -> [LyricLine]? {
+        guard let originalText = embedded.lyricsText else { return nil }
+        var lines = LyricsContentParser.parseText(originalText)
+        guard !lines.isEmpty else { return nil }
+
+        let sourceLanguageCode = embedded.lyricsLanguageCode
+            ?? embedded.languageTaggedLyrics.first(where: {
+                $0.value == originalText
+            })?.key
+        if let sourceLanguageCode,
+           LyricTranslationGroupingPolicy.declaredLanguageCode(
+               in: lines.first?.metadataLines ?? []
+           ) == nil {
+            var metadataLines = lines[0].metadataLines ?? []
+            metadataLines.append("[la:\(sourceLanguageCode)]")
+            lines[0].metadataLines = metadataLines
+        }
+
+        struct TranslationDocument {
+            let text: String
+            let languageCode: String?
+            let makePreferred: Bool
+        }
+        var translationDocuments: [TranslationDocument] = []
+        var seenDocuments: Set<String> = []
+
+        func appendTranslation(
+            _ text: String?,
+            languageCode: String?,
+            makePreferred: Bool
+        ) {
+            guard let text else { return }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed != originalText else { return }
+            let normalizedLanguage = languageCode?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? ""
+            let identity = normalizedLanguage + "\u{0}" + trimmed
+            guard seenDocuments.insert(identity).inserted else { return }
+            translationDocuments.append(
+                TranslationDocument(
+                    text: trimmed,
+                    languageCode: languageCode,
+                    makePreferred: makePreferred
+                )
+            )
+        }
+
+        let explicitTranslationLanguage = embedded.translatedLyricsLanguageCode
+            ?? embedded.languageTaggedTranslations.first(where: {
+                $0.value == embedded.translatedLyricsText
+            })?.key
+        appendTranslation(
+            embedded.translatedLyricsText,
+            languageCode: explicitTranslationLanguage,
+            makePreferred: true
+        )
+        let taggedTranslations = embedded.languageTaggedTranslations.sorted(by: {
+            $0.key < $1.key
+        })
+        let prefersOnlyTaggedTranslation = embedded.translatedLyricsText == nil
+            && taggedTranslations.count == 1
+        for (languageCode, text) in taggedTranslations {
+            appendTranslation(
+                text,
+                languageCode: languageCode,
+                makePreferred: prefersOnlyTaggedTranslation
+            )
+        }
+        let taggedLyricAlternates = embedded.languageTaggedLyrics
+            .sorted(by: { $0.key < $1.key })
+            .filter { entry in
+                entry.key.caseInsensitiveCompare(sourceLanguageCode ?? "") != .orderedSame
+            }
+        for (languageCode, text) in taggedLyricAlternates {
+            appendTranslation(
+                text,
+                languageCode: languageCode,
+                // An alternate language-tagged original (notably a second
+                // unmarked ID3 USLT) may be a duet or romanization rather than
+                // a translation. Retain it for exact target-language lookup,
+                // but never make it the editor/presentation default.
+                makePreferred: false
+            )
+        }
+
+        for document in translationDocuments {
+            let translatedLines = LyricsContentParser.parseText(
+                document.text,
+                options: .literal
+            )
+            guard !translatedLines.isEmpty else { continue }
+            lines = LyricManualTranslationPolicy.merging(
+                originalLines: lines,
+                translatedLines: translatedLines,
+                translationLanguageCode: document.languageCode,
+                source: .embeddedField,
+                makePreferred: document.makePreferred
+            )
+        }
+        return lines
+    }
+
     /// Reads metadata from an audio file using AVFoundation.
     static func read(from url: URL) async -> Metadata {
         let asset = AVURLAsset(url: url)

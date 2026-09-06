@@ -55,6 +55,8 @@ struct TVLibraryView: View {
     @FocusState private var focusedFilter: Filter?
     @State private var selectedArtist: TVArtist?
     @State private var opensPlayerAfterArtistDismissal = false
+    @State private var artistArtworkTask: Task<Void, Never>?
+    @State private var artistArtworkProgress = ""
 
     private let cols = 4
     private let gap: CGFloat = 28
@@ -68,8 +70,26 @@ struct TVLibraryView: View {
                 filterStrip
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 30) {
-                        Text(title).tvFont(.pageTitle).foregroundStyle(TVColor.text)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack {
+                            Text(title).tvFont(.pageTitle).foregroundStyle(TVColor.text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if filter == .artists {
+                                TVPillButton(
+                                    title: artistArtworkTask == nil
+                                        ? PMString("tv_complete_artist_artwork") : PMString("ext.tv.sources.cancel"),
+                                    systemImage: artistArtworkTask == nil ? "person.crop.circle.badge.plus" : "xmark",
+                                    action: refreshArtistArtwork
+                                )
+                                .accessibilityIdentifier("tv.library.artists.completeArtwork")
+                            }
+                        }
+                        if filter == .artists {
+                            Text(PMString("tv_artist_artwork_source_hint"))
+                                .tvFont(.caption).foregroundStyle(TVColor.textMuted)
+                        }
+                        if filter == .artists, !artistArtworkProgress.isEmpty {
+                            Text(artistArtworkProgress).tvFont(.caption).foregroundStyle(TVColor.textMuted)
+                        }
                         grid(cell: cell)
                     }
                     .padding(.horizontal, 14)
@@ -86,6 +106,7 @@ struct TVLibraryView: View {
         .background(TVColor.bg)
         .onExitCommand(perform: onReturnToTabs)
         .onChange(of: focusRequest) { focusedFilter = filter }
+        .onChange(of: filter) { artistArtworkTask?.cancel(); artistArtworkTask = nil }
         .onAppear(perform: normalizeRecommendationIntentSelectionIfNeeded)
         .onChange(of: selectedRecommendationIntentID) { _, _ in
             normalizeRecommendationIntentSelectionIfNeeded()
@@ -124,9 +145,39 @@ struct TVLibraryView: View {
             onModalActivityChanged(artist != nil)
         }
         .onDisappear {
+            artistArtworkTask?.cancel()
+            artistArtworkTask = nil
             if selectedArtist != nil {
                 onModalActivityChanged(false)
             }
+        }
+    }
+
+    private func refreshArtistArtwork() {
+        if let task = artistArtworkTask { task.cancel(); artistArtworkTask = nil; return }
+        let candidates = store.artists.filter { artist in
+            let presentation = store.library.artworkPresentation(for: .init(kind: .artist, id: artist.id))
+            return presentation.resolution == .automatic
+                && store.library.visibleArtist(id: artist.id)?.thumbnailPath?.isEmpty != false
+        }
+        artistArtworkTask = Task { @MainActor in
+            var available = 0
+            var missing = 0
+            for (index, artist) in candidates.enumerated() {
+                guard !Task.isCancelled else { return }
+                artistArtworkProgress = PMString("batch_scrape_artwork_progress_format", index + 1, candidates.count)
+                let data = await ArtworkFetchService.shared.fetchArtistImage(
+                    artistName: artist.name, artistID: artist.id, allowBuiltInFallback: true
+                )
+                guard !Task.isCancelled else { return }
+                if data != nil {
+                    available += 1
+                    NotificationCenter.default.post(name: .primuseArtworkDidCache, object: nil,
+                                                    userInfo: ["artistID": artist.id])
+                } else { missing += 1 }
+            }
+            artistArtworkProgress = PMString("batch_scrape_artwork_counts_format", available, missing)
+            artistArtworkTask = nil
         }
     }
 

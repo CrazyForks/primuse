@@ -36,7 +36,7 @@ struct TVArtistArtworkView: View {
             image = decoded
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
-            if note.userInfo?["all"] as? Bool == true {
+            if note.userInfo?["all"] as? Bool == true || note.userInfo?["artistID"] as? String == artist.id {
                 cacheRevision &+= 1
             } else if case .uploaded(let contentID) = resolution,
                       (note.userInfo?["tokens"] as? [String])?.contains(contentID) == true {
@@ -56,9 +56,8 @@ struct TVArtistArtworkView: View {
             if let data = MetadataAssetStore.shared.customArtworkData(contentID: contentID) { return data }
         case .selectedSong(let songID):
             if let song = store.library.song(id: songID),
-               let data = await TVArtworkLoader.shared.songCover(
-                songID: song.id, coverRef: song.coverArtFileName,
-                fnMusicSourceID: song.sourceID, fnMusicClient: store.fnMusicClient(for: song.sourceID)
+               let data = await store.songArtworkData(
+                songID: song.id, coverRef: song.coverArtFileName
                ) { return data }
         case .automatic: break
         }
@@ -92,6 +91,11 @@ enum TVArtistArtworkReader {
     private static let maximumBytes = 8 * 1024 * 1024
 
     static func read(reference: String, source: MusicSource?, credential: SourceCredential?) async -> Data? {
+        if let source, TVSourceAssetReader.supports(source.type) {
+            return await TVSourceAssetReader.shared.artworkData(
+                reference: reference, source: source, credential: credential, maximumBytes: maximumBytes
+            )
+        }
         do {
             try Task.checkCancellation()
             let data: Data

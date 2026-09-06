@@ -13,6 +13,7 @@ struct TVMetadataEnrichmentResult: Sendable {
     let song: Song
     let status: TVMetadataEnrichmentStatus
     let errorDescription: String?
+    var inspectionComplete = false
 }
 
 private enum TVMetadataError: Error {
@@ -117,6 +118,9 @@ actor TVMetadataReaderPool {
     }
 
     private let source: MusicSource
+    private let audit = TVMetadataReadAudit()
+    var readFailureCount: Int { get async { await audit.failures } }
+    func markIncomplete() async { await audit.failed() }
     private let credential: SourceCredential?
     private let session: URLSession
     private var readers: [String: any ByteRangeReader] = [:]
@@ -135,6 +139,11 @@ actor TVMetadataReaderPool {
         configuration.timeoutIntervalForResource = 20
         configuration.httpMaximumConnectionsPerHost = 2
         session = URLSession(configuration: configuration)
+    }
+
+    func localURL(path: String) -> URL? {
+        guard source.type == .local else { return nil }
+        return try? TVLocalTransferSource.url(for: path)
     }
 
     func reader(path: String, size: Int64) async throws -> any ByteRangeReader {
@@ -180,8 +189,9 @@ actor TVMetadataReaderPool {
             Task { await reader.close() }
             throw CancellationError()
         }
-        readers[path] = reader
-        return reader
+        let audited = TVAuditedMetadataReader(reader: reader, audit: audit)
+        readers[path] = audited
+        return audited
     }
 
     func read(
@@ -269,6 +279,7 @@ enum TVMetadataEnricher {
             await withCheckedContinuation { continuation in
                 let worker = Task {
                     do {
+                        let failuresBefore = await readerPool.readFailureCount
                         let enriched = try await enrichCore(
                             song: song,
                             sidecars: sidecars,
@@ -277,7 +288,8 @@ enum TVMetadataEnricher {
                         await race.finish(TVMetadataEnrichmentResult(
                             song: enriched,
                             status: .enriched,
-                            errorDescription: nil
+                            errorDescription: nil,
+                            inspectionComplete: await readerPool.readFailureCount == failuresBefore
                         ))
                     } catch is CancellationError {
                         await race.finish(TVMetadataEnrichmentResult(
@@ -364,15 +376,28 @@ enum TVMetadataEnricher {
             )
         }
 
-        let ext = song.fileFormat.rawValue.lowercased()
+        if let url = await readerPool.localURL(path: song.filePath) {
+            guard try await reader.contentLength() > 0 else { throw TVMetadataError.emptyHeader }
+            let metadata = await FileMetadataReader.read(from: url)
+            try Task.checkCancellation()
+            return try await attachAssets(
+                song: applying(metadata, to: song, duration: metadata.duration ?? 0),
+                embeddedLyrics: FileMetadataReader.parsedEmbeddedLyrics(from: metadata),
+                embeddedCover: metadata.coverArtData, sidecars: sidecars, readerPool: readerPool
+            )
+        }
+
         var head = try await reader.read(offset: 0, length: headBytes)
         try Task.checkCancellation()
         guard !head.isEmpty else { throw TVMetadataError.emptyHeader }
+        let ext = RemoteMetadataInspectionPolicy.parserFileExtension(
+            declaredFileExtension: song.fileFormat.rawValue,
+            signature: AudioFileSignaturePolicy.inspect(head)
+        )
         var metadata = await readMetadata(head, ext: ext)
         try Task.checkCancellation()
 
-        if metadata.coverArtData == nil,
-           let declared = FileMetadataReader.id3TagByteCount(in: head),
+        if let declared = FileMetadataReader.id3TagByteCount(in: head),
            declared > head.count {
             let expanded = RemoteMetadataReadPolicy.expandedReadSize(
                 fileSize: song.fileSize,
@@ -391,7 +416,7 @@ enum TVMetadataEnricher {
         }
         try Task.checkCancellation()
 
-        if ext == "flac", metadata.coverArtData == nil {
+        if ext == "flac" {
             while let expanded = RemoteMetadataReadPolicy.expandedFLACReadSize(
                 fileSize: song.fileSize,
                 currentData: head
@@ -403,7 +428,6 @@ enum TVMetadataEnricher {
                 try Task.checkCancellation()
                 head = larger
                 metadata = await readMetadata(head, ext: ext)
-                if metadata.coverArtData != nil { break }
             }
         }
         try Task.checkCancellation()
@@ -528,19 +552,44 @@ enum TVMetadataEnricher {
         }
         try Task.checkCancellation()
 
+        var duration = metadata.duration ?? 0
+        if ext == "mp3" {
+            duration = RemoteMetadataReadPolicy.correctedMP3Duration(
+                parsed: duration,
+                fileSize: song.fileSize,
+                bitRateKbps: metadata.bitRate,
+                providedByteCount: head.count,
+                leadingMetadataByteCount:
+                    FileMetadataReader.id3TagByteCount(in: head) ?? 0
+            )
+        }
+        let output = applying(metadata, to: song, duration: duration)
+        try Task.checkCancellation()
+        return try await attachAssets(
+            song: output,
+            embeddedLyrics: FileMetadataReader.parsedEmbeddedLyrics(from: metadata),
+            embeddedCover: metadata.coverArtData,
+            sidecars: sidecars,
+            readerPool: readerPool
+        )
+    }
+
+    static func applying(_ metadata: FileMetadataReader.Metadata, to song: Song, duration: Double) -> Song {
         var output = song
         // CUE identity fields come from the sheet. Container tags are often
         // album-level and must not overwrite every virtual track's title.
         if !song.isCueTrack {
-            if let title = metadata.title?.trimmedNonEmpty { output.title = title }
+            if let title = MediaMetadataTextRepair.preferred(
+                embedded: metadata.title,
+                fromFileName: MediaMetadataTextRepair.fileNameTitle(from: song.filePath)
+            ) { output.title = title }
             if let album = metadata.albumTitle?.trimmedNonEmpty { output.albumTitle = album }
             if let artist = metadata.artist?.trimmedNonEmpty {
                 output.artistName = artist
                 output.sourceArtistNames = metadata.sourceArtistNames
             }
             output.albumArtistName = AlbumGroupingPolicy.resolvedAlbumArtistName(
-                albumArtistName: metadata.albumArtist?.trimmedNonEmpty
-                    ?? output.albumArtistName,
+                albumArtistName: metadata.albumArtist?.trimmedNonEmpty,
                 trackArtistName: output.artistName
             )
             output.trackNumber = metadata.trackNumber ?? output.trackNumber
@@ -560,31 +609,13 @@ enum TVMetadataEnricher {
         output.replayGainAlbumPeak = metadata.replayGainAlbumPeak
             ?? output.replayGainAlbumPeak
 
-        var duration = metadata.duration ?? 0
-        if ext == "mp3" {
-            duration = RemoteMetadataReadPolicy.correctedMP3Duration(
-                parsed: duration,
-                fileSize: song.fileSize,
-                bitRateKbps: metadata.bitRate,
-                providedByteCount: head.count,
-                leadingMetadataByteCount:
-                    FileMetadataReader.id3TagByteCount(in: head) ?? 0
-            )
-        }
         if !song.isCueTrack, duration > 0 { output.duration = duration }
         MusicLibrary.fillDerivedIDs(&output)
         output = SongUserMetadataPolicy.preservingUserEdits(
             from: song,
             in: output
         )
-        try Task.checkCancellation()
-        return try await attachAssets(
-            song: output,
-            embeddedLyrics: metadata.lyricsText,
-            embeddedCover: metadata.coverArtData,
-            sidecars: sidecars,
-            readerPool: readerPool
-        )
+        return output
     }
 
     private static func enrichSTRM(
@@ -633,7 +664,7 @@ enum TVMetadataEnricher {
 
     private static func attachAssets(
         song: Song,
-        embeddedLyrics: String?,
+        embeddedLyrics: [LyricLine]?,
         embeddedCover: Data?,
         sidecars: SidecarDirectoryIndex<TVDirEntry>,
         readerPool: TVMetadataReaderPool
@@ -687,16 +718,15 @@ enum TVMetadataEnricher {
                 }
                 try Task.checkCancellation()
                 await store.cacheCover(coverData, forSongID: output.id)
-                output.coverArtFileName = store.expectedCoverFileName(
-                    for: output.id
-                )
+                if await store.cachedCoverData(forSongID: output.id) != nil {
+                    output.coverArtFileName = store.expectedCoverFileName(for: output.id)
+                } else {
+                    await readerPool.markIncomplete()
+                }
             }
         }
 
-        var lyricLines: [LyricLine] = []
-        if let embeddedLyrics, !embeddedLyrics.isEmpty {
-            lyricLines = LyricsContentParser.parse(embeddedLyrics)
-        }
+        var lyricLines = embeddedLyrics ?? []
         let cachedLyricsName = MetadataAssetStore.shared
             .expectedLyricsFileName(for: output.id)
         let hintedLyrics = output.lyricsFileName.flatMap { reference in
@@ -724,11 +754,16 @@ enum TVMetadataEnricher {
         }
         try Task.checkCancellation()
         if !lyricLines.isEmpty {
-            _ = await MetadataAssetStore.shared.cacheLyrics(
-                lyricLines,
-                forSongID: output.id,
-                force: false
+            let wrote = await MetadataAssetStore.shared.cacheLyrics(
+                lyricLines, forSongID: output.id, force: false
             )
+            if !wrote {
+                guard let preserved = await MetadataAssetStore.shared.cachedLyrics(forSongID: output.id), !preserved.isEmpty else {
+                    await readerPool.markIncomplete()
+                    return output
+                }
+                lyricLines = preserved
+            }
             output.lyricsFileName = MetadataAssetStore.shared
                 .expectedLyricsFileName(for: output.id)
             output.lyricsText = lyricLines.map(\.text)

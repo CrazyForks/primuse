@@ -709,3 +709,11 @@
 
 "ext.tv.remote.transportButton" = "Bouton lecture / pause";
 "ext.tv.remote.transportShortcuts" = "Appui : lecture / pause\nDouble appui : titre suivant\nAppui long : avancer / reculer avec gauche / droite";
+
+"tv_complete_artist_artwork" = "Compléter les images des artistes";
+
+"batch_scrape_artwork_progress_format" = "Récupération des illustrations : %d / %d";
+
+"batch_scrape_artwork_counts_format" = "Disponibles %d · Non récupérées %d";
+
+"tv_artist_artwork_source_hint" = "Rechercher par nom d’artiste avec les sources activées, ou iTunes si aucune n’est configurée.";

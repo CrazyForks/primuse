@@ -709,3 +709,11 @@
 
 "ext.tv.remote.transportButton" = "Wiedergabe-/Pausetaste";
 "ext.tv.remote.transportShortcuts" = "Drücken: Wiedergabe / Pause\nDoppeldruck: nächster Titel\nHalten: mit links / rechts spulen";
+
+"tv_complete_artist_artwork" = "Künstlerbilder ergänzen";
+
+"batch_scrape_artwork_progress_format" = "Cover werden abgerufen: %d / %d";
+
+"batch_scrape_artwork_counts_format" = "Verfügbar %d · Nicht abgerufen %d";
+
+"tv_artist_artwork_source_hint" = "Online nach Künstlernamen suchen: mit aktivierten Quellen oder sonst mit iTunes.";

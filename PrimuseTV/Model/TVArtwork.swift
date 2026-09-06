@@ -448,7 +448,9 @@ actor TVArtworkLoader {
         coverRef: String?,
         fnMusicSourceID: String? = nil,
         fnMusicClient: FnMusicServiceClient? = nil,
-        animationCacheKey: String? = nil
+        animationCacheKey: String? = nil,
+        source: MusicSource? = nil,
+        credential: SourceCredential? = nil
     ) async -> Data? {
         guard !Task.isCancelled, !songID.isEmpty else { return nil }
         let ref = coverRef?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -520,6 +522,23 @@ actor TVArtworkLoader {
             ) else { return nil }
             try? displayData.write(to: diskURL(fnMusicRequestKey), options: .atomic)
             return displayData
+        }
+
+        if let source, TVSourceAssetReader.supports(source.type) {
+            let key = "server-cover:\(songID)|\(ref)|\(TVSourceAssetReader.cacheIdentity(source: source, credential: credential))"
+            if isTemporarilyNegative(key) { return nil }
+            let result = await deduplicatedFetch(key: key) {
+                await TVSourceAssetReader.shared.artworkData(
+                    reference: ref, source: source, credential: credential,
+                    maximumBytes: Self.maximumRemoteArtworkBytes
+                )
+            }
+            guard !Task.isCancelled else { return nil }
+            guard let result else { markTemporarilyNegative(key); return nil }
+            negativeUntil.removeValue(forKey: key)
+            guard let prepared = await preparedSongArtwork(result, songID: songID, animationCacheKey: animationCacheKey) else { return nil }
+            await MetadataAssetStore.shared.cacheCover(prepared, forSongID: songID)
+            return prepared
         }
 
         guard let url = URL(string: ref),
@@ -1363,12 +1382,9 @@ struct TVArtworkView: View {
                     }
                 case .selectedSong(let selectedSongID):
                     if let selectedSong = store.library.song(id: selectedSongID) {
-                        let client = store.fnMusicClient(for: selectedSong.sourceID)
-                        if let data = await TVArtworkLoader.shared.songCover(
+                        if let data = await store.songArtworkData(
                             songID: selectedSong.id,
                             coverRef: selectedSong.coverArtFileName,
-                            fnMusicSourceID: selectedSong.sourceID,
-                            fnMusicClient: client,
                             animationCacheKey: songAnimationDiskKey(for: selectedSong)
                         ), await accept(
                             data,
@@ -1408,14 +1424,10 @@ struct TVArtworkView: View {
             }
             if let songID, !songID.isEmpty {
                 // ② 再查歌曲自身缓存/安全远程引用，避免准确散曲封面被模糊专辑搜索覆盖。
-                let fnMusicSourceID = store.library.song(id: songID)?.sourceID
-                let fnMusicClient = fnMusicSourceID.flatMap(store.fnMusicClient(for:))
                 let songAnimationKey = songSourceAnimationDiskKey
-                if let data = await TVArtworkLoader.shared.songCover(
+                if let data = await store.songArtworkData(
                     songID: songID,
                     coverRef: coverRef,
-                    fnMusicSourceID: fnMusicSourceID,
-                    fnMusicClient: fnMusicClient,
                     animationCacheKey: songAnimationKey
                 ), await accept(
                     data,
