@@ -15,7 +15,7 @@ actor TVSourceAssetReader {
     private var connectors: [String: CachedConnector] = [:]
 
     nonisolated static func supports(_ type: MusicSourceType) -> Bool {
-        type.isSubsonicFamily || [.jellyfin, .emby, .plex].contains(type)
+        type.isSubsonicFamily || [.jellyfin, .emby, .plex, .songloft].contains(type)
     }
 
     func artworkData(reference: String, source: MusicSource, credential: SourceCredential?, maximumBytes: Int) async -> Data? {
@@ -80,6 +80,11 @@ actor TVSourceAssetReader {
                 host: source.host ?? "", port: source.port, useSsl: source.useSsl,
                 basePath: source.basePath, username: credential?.username ?? source.username ?? "",
                 password: credential?.password ?? credential?.token ?? "",
+                alternateTLSValidationHostname: source.alternateTLSValidationHostname)
+        } else if source.type == .songloft {
+            value = SongloftSource(sourceID: source.id, host: source.host ?? "",
+                port: source.port, useSSL: source.useSsl, basePath: source.basePath,
+                username: credential?.username ?? source.username ?? "", password: credential?.password ?? "",
                 alternateTLSValidationHostname: source.alternateTLSValidationHostname)
         } else {
             let kind: MediaServerSource.Kind

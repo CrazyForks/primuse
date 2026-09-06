@@ -725,3 +725,9 @@
 "tv_metadata_server_hint" = "서버 카탈로그 및 메타데이터 새로 고침";
 "tv_metadata_source_unavailable" = "소스를 먼저 활성화하거나 iPhone 또는 Mac에서 다시 스캔한 후 동기화하세요.";
 "tv_metadata_reread_issues" = "%d곡을 완전히 읽지 못했습니다. 기존 정보는 유지됩니다. 다시 시도할 수 있습니다.";
+
+"error.songloft.missingCredential" = "Songloft 계정과 비밀번호가 필요합니다.";
+"error.songloft.invalidURL" = "Songloft 서버 주소가 올바르지 않습니다.";
+"error.songloft.authenticationFailed" = "Songloft 로그인에 실패했습니다. 계정과 비밀번호를 확인하세요.";
+"error.songloft.invalidResponse" = "Songloft에서 불완전하거나 잘못된 데이터를 반환했습니다. 기존 보관함은 유지됩니다.";
+"error.songloft.http" = "Songloft에서 HTTP %@을(를) 반환했습니다.";

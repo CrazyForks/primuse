@@ -146,6 +146,20 @@ actor TVDaoLiYuLister: TVDirectoryLister {
     }
 }
 
+actor TVSongloftLister: TVDirectoryLister {
+    private let client: SongloftServiceClient
+
+    init(client: SongloftServiceClient) {
+        self.client = client
+    }
+
+    func list(_ path: String) async throws -> [TVDirEntry] {
+        guard path == "/" else { return [] }
+        _ = try await client.validateConnection()
+        return []
+    }
+}
+
 /// Dropbox / OneDrive 直接通过 PrimuseKit 的 OAuth resolver 浏览目录。
 /// lister 与播放共用同一 resolver，因此 401 触发的 token 刷新只发生一次，
 /// 刷新结果也会走 TVStore 配置的持久化回调写回钥匙串和 CloudKit。
@@ -400,6 +414,8 @@ final class TVSourceScanner {
             return TVFnMusicLister(client: fnMusicClient(source: source, credential: credential))
         case .daoliyu:
             return TVDaoLiYuLister(client: DaoLiYuServiceClient(source: source, credential: credential))
+        case .songloft:
+            return TVSongloftLister(client: SongloftServiceClient(source: source, credential: credential))
         default: return nil
         }
     }
@@ -434,7 +450,7 @@ final class TVSourceScanner {
         indexed = 0
         currentFile = ""
         metadataIssueCount = 0
-        if source.type == .fnMusic || source.type == .daoliyu {
+        if source.type == .fnMusic || source.type == .daoliyu || source.type == .songloft {
             return await scanServerCatalog(
                 source: source,
                 credential: credential,
@@ -543,6 +559,10 @@ final class TVSourceScanner {
                         credential: credential,
                         onSong: accept
                     )
+                }
+            } else if source.type == .songloft {
+                _ = try await withRoutedSource(source) { routedSource in
+                    try await self.scanSongloft(source: routedSource, credential: credential, onSong: accept)
                 }
             } else {
                 _ = try await withRoutedSource(source) { routedSource in
@@ -1191,6 +1211,19 @@ final class TVSourceScanner {
         }
     }
 
+    func validateSongloftConnection(
+        source: MusicSource,
+        credential: SourceCredential?
+    ) async throws -> Int {
+        guard source.type == .songloft else { throw TVScanError.unsupported }
+        return try await withRoutedSource(source) { routedSource in
+            try await SongloftServiceClient(
+                source: routedSource,
+                credential: credential
+            ).validateConnection()
+        }
+    }
+
     private func withRoutedSource<T: Sendable>(
         _ source: MusicSource,
         operation: (MusicSource) async throws -> T
@@ -1304,6 +1337,23 @@ final class TVSourceScanner {
             page += 1
         }
 
+        return songs
+    }
+
+    private func scanSongloft(
+        source: MusicSource,
+        credential: SourceCredential?,
+        onSong: (Song) async throws -> Void
+    ) async throws -> [Song] {
+        let client = SongloftServiceClient(source: source, credential: credential)
+        var songs: [Song] = []
+        for try await track in await client.catalog() {
+            try Task.checkCancellation()
+            guard !track.isRadio, track.isVideo != true else { continue }
+            guard let song = track.makeSong(sourceID: source.id) else { throw SongloftServiceError.invalidResponse }
+            songs.append(song)
+            try await onSong(song)
+        }
         return songs
     }
 

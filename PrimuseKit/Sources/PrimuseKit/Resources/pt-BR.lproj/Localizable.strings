@@ -672,3 +672,9 @@
 "tv_metadata_server_hint" = "Atualizar o catálogo e os metadados do servidor";
 "tv_metadata_source_unavailable" = "Ative esta fonte ou verifique-a novamente no iPhone ou Mac e sincronize.";
 "tv_metadata_reread_issues" = "Não foi possível ler completamente %d músicas. As informações existentes foram preservadas; você pode tentar novamente.";
+
+"error.songloft.missingCredential" = "Songloft requires an account and password.";
+"error.songloft.invalidURL" = "The Songloft server address is invalid.";
+"error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
+"error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
+"error.songloft.http" = "Songloft returned HTTP %@.";

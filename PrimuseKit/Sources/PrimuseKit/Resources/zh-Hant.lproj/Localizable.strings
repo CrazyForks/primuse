@@ -722,3 +722,9 @@
 "tv_metadata_server_hint" = "重新整理伺服器曲庫和中繼資料";
 "tv_metadata_source_unavailable" = "請先啟用此來源，或在 iPhone / Mac 重新掃描後同步。";
 "tv_metadata_reread_issues" = "%d 首未能完整讀取，已保留現有資訊，可再次重試。";
+
+"error.songloft.missingCredential" = "Songloft 需要帳號和密碼。";
+"error.songloft.invalidURL" = "Songloft 伺服器位址無效。";
+"error.songloft.authenticationFailed" = "Songloft 登入失敗，請檢查帳號和密碼。";
+"error.songloft.invalidResponse" = "Songloft 傳回不完整或無效的資料，既有曲庫保持不變。";
+"error.songloft.http" = "Songloft 服務傳回 HTTP %@。";

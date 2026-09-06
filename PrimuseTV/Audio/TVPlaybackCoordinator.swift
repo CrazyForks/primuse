@@ -82,6 +82,7 @@ enum TVLyricsLoadingStrategy: Equatable, Sendable {
     case fnMusicService
     case subsonicServer
     case daoLiYuService
+    case songloftService
     case mediaServer
     case sourceFile
 }
@@ -91,6 +92,7 @@ enum TVLyricsLoadingPolicy {
         if sourceType == .fnMusic { return .fnMusicService }
         if sourceType.isSubsonicFamily { return .subsonicServer }
         if sourceType == .daoliyu { return .daoLiYuService }
+        if sourceType == .songloft { return .songloftService }
         if [.jellyfin, .emby, .plex].contains(sourceType) { return .mediaServer }
         return .sourceFile
     }
@@ -1202,7 +1204,7 @@ final class TVPlaybackCoordinator {
                     plog("🎬 TV Feiniu Music lyrics fetch failed '\(song.title)': \(error)")
                 }
                 return
-            case .daoLiYuService, .mediaServer:
+            case .daoLiYuService, .songloftService, .mediaServer:
                 let result = await TVSourceAssetReader.shared.lyrics(
                     path: song.filePath, source: source, credential: credential
                 )

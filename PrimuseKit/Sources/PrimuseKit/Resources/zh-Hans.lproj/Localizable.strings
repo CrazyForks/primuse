@@ -722,3 +722,9 @@
 "tv_metadata_server_hint" = "刷新服务端曲库和元数据";
 "tv_metadata_source_unavailable" = "请先启用此来源，或在 iPhone / Mac 重新扫描后同步。";
 "tv_metadata_reread_issues" = "%d 首未能完整读取，已保留现有信息，可再次重试。";
+
+"error.songloft.missingCredential" = "Songloft 需要账号和密码。";
+"error.songloft.invalidURL" = "Songloft 服务器地址无效。";
+"error.songloft.authenticationFailed" = "Songloft 登录失败，请检查账号和密码。";
+"error.songloft.invalidResponse" = "Songloft 返回了不完整或无效的数据，已有曲库保持不变。";
+"error.songloft.http" = "Songloft 服务返回 HTTP %@。";

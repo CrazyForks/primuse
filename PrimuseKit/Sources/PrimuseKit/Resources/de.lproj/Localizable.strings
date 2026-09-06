@@ -725,3 +725,9 @@
 "tv_metadata_server_hint" = "Serverkatalog und Metadaten aktualisieren";
 "tv_metadata_source_unavailable" = "Quelle zuerst aktivieren oder auf iPhone bzw. Mac neu scannen und synchronisieren.";
 "tv_metadata_reread_issues" = "%d Titel konnten nicht vollständig gelesen werden. Vorhandene Informationen bleiben erhalten; erneut versuchen möglich.";
+
+"error.songloft.missingCredential" = "Songloft benötigt ein Konto und ein Passwort.";
+"error.songloft.invalidURL" = "Die Songloft-Serveradresse ist ungültig.";
+"error.songloft.authenticationFailed" = "Anmeldung bei Songloft fehlgeschlagen. Prüfe Konto und Passwort.";
+"error.songloft.invalidResponse" = "Songloft hat unvollständige oder ungültige Daten zurückgegeben. Die vorhandene Mediathek wurde beibehalten.";
+"error.songloft.http" = "Songloft hat HTTP %@ zurückgegeben.";

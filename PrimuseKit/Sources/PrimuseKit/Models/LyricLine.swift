@@ -967,6 +967,7 @@ public enum LyricsContentParser {
         _ content: String,
         options: LyricsParsingOptions = .automatic
     ) -> [LyricLine] {
+        if let lines = SourceLyricsDocument.decode(content) { return lines }
         if TTMLLyricsParser.looksLikeTTML(content) {
             return TTMLLyricsParser.parse(content)
         }
@@ -1100,6 +1101,7 @@ public enum LyricsContentParser {
         _ text: String,
         options: LyricsParsingOptions = .automatic
     ) -> [LyricLine] {
+        if let lines = SourceLyricsDocument.decode(text) { return lines }
         if TTMLLyricsParser.looksLikeTTML(text) {
             // Malformed XML must not fall through and surface its tags as
             // unsynchronized lyric lines.

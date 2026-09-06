@@ -236,7 +236,7 @@ final class TVLyricsLoadingPolicyTests: XCTestCase {
 @MainActor
 final class TVSourceLocalLibraryPolicyTests: XCTestCase {
     func testOnlySelfScanningSourcesAreAddableOnAppleTV() {
-        XCTAssertEqual(TVStore.addableTypes, [.fnMusic, .daoliyu, .smb])
+        XCTAssertEqual(TVStore.addableTypes, [.fnMusic, .daoliyu, .songloft, .smb])
         for type in TVStore.addableTypes {
             XCTAssertTrue(TVStore.canBuildLibraryOnTV(type), type.rawValue)
             XCTAssertEqual(TVSourceLocalLibraryPolicy.capability(for: type), .directScan)

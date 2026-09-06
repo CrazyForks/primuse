@@ -672,3 +672,9 @@
 "tv_metadata_server_hint" = "सर्वर की लाइब्रेरी और मेटाडेटा रीफ़्रेश करें";
 "tv_metadata_source_unavailable" = "पहले यह स्रोत चालू करें या iPhone अथवा Mac पर दोबारा स्कैन करके सिंक करें।";
 "tv_metadata_reread_issues" = "%d गाने पूरी तरह नहीं पढ़े जा सके। मौजूदा जानकारी सुरक्षित है; आप फिर कोशिश कर सकते हैं।";
+
+"error.songloft.missingCredential" = "Songloft requires an account and password.";
+"error.songloft.invalidURL" = "The Songloft server address is invalid.";
+"error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
+"error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
+"error.songloft.http" = "Songloft returned HTTP %@.";

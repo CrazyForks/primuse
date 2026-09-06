@@ -809,6 +809,7 @@ struct TVMetadataMaintenanceView: View {
         let canRead = source.canScan && source.status != .disabled
         let isServer = source.type == MusicSourceType.fnMusic.rawValue
             || source.type == MusicSourceType.daoliyu.rawValue
+            || source.type == MusicSourceType.songloft.rawValue
         return TVFocusButton(radius: 16, scale: 1.0, lift: 0, action: {
             selectedSource = store.source(id: source.id)
         }) { focused in

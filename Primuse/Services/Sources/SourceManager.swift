@@ -147,6 +147,14 @@ enum AutomaticOfflineFailureClassifier {
                 return .sourceUnavailable
             }
         }
+        if let error = error as? SongloftServiceError {
+            switch error {
+            case .missingCredential, .authenticationFailed: return .authentication
+            case .badServerResponse(403): return .sourceAccessDenied
+            case .badServerResponse(429): return .rateLimited
+            default: return .sourceUnavailable
+            }
+        }
         if let sourceError = error as? SourceError {
             switch sourceError {
             case .authenticationFailed, .credentialUnavailable:
@@ -1281,6 +1289,12 @@ private actor SourceConnectionRouter {
     private static func canFailOver(after error: Error) -> Bool {
         if OperationCancellationPolicy.isCancellation(error) { return false }
         if error is SourceConnectionTerminalError { return false }
+        if let error = error as? SongloftServiceError {
+            switch error {
+            case .missingCredential, .authenticationFailed, .badServerResponse(403): return false
+            default: return true
+            }
+        }
         if let sourceError = error as? SourceError {
             switch sourceError {
             case .authenticationFailed, .credentialUnavailable:
@@ -1800,6 +1814,84 @@ private struct RoutedDaoLiYuConnector: RoutedConnectorProxy, RefreshingMetadataS
             }
             return await provider.readServerLyrics(for: path)
         }) ?? .unavailable
+    }
+
+}
+
+private struct RoutedSongloftConnector: RoutedConnectorProxy, RefreshingMetadataSongConnector,
+    ServerLyricsConnector, ServerPlaylistConnector, ServerFavoriteConnector,
+    ServerScrobblingConnector, ServerRadioConnector, ServerRadioStreamResolvingConnector {
+    let sourceID: String
+    let routing: SourceConnectionRouter
+    let routedSupportsSidecarWriting: Bool
+    let routedPreferredDeleteBatchSize: Int
+
+    func scanSongs(from path: String) async throws -> AsyncThrowingStream<ConnectorScannedSong, Error> {
+        let routed = try await routing.withReadAndRoute { connector in
+            guard let scanner = connector as? any SongScanningConnector else {
+                throw SourceError.connectionFailed("Song scanner unavailable")
+            }
+            return try await scanner.scanSongs(from: path)
+        }
+        return observingDeferredReadErrors(in: routed.value, routeIndex: routed.routeIndex)
+    }
+
+    func fetchServerLyrics(for path: String) async -> String? {
+        try? await routing.withRead { connector in
+            guard let provider = connector as? any ServerLyricsConnector else { return nil }
+            return await provider.fetchServerLyrics(for: path)
+        }
+    }
+
+    func readServerLyrics(for path: String) async -> ServerLyricsReadResult {
+        (try? await routing.withRead { connector in
+            guard let provider = connector as? any ServerLyricsConnector else {
+                return .unavailable
+            }
+            return await provider.readServerLyrics(for: path)
+        }) ?? .unavailable
+    }
+
+    func fetchServerPlaylists() async throws -> ServerPlaylistSnapshot {
+        try await routing.withRead { connector in
+            guard let provider = connector as? any ServerPlaylistConnector else { throw SongloftServiceError.invalidResponse }
+            return try await provider.fetchServerPlaylists()
+        }
+    }
+
+    func fetchServerFavorites() async throws -> ServerFavoriteSnapshot {
+        try await routing.withRead { connector in
+            guard let provider = connector as? any ServerFavoriteConnector else { throw SongloftServiceError.invalidResponse }
+            return try await provider.fetchServerFavorites()
+        }
+    }
+
+    func setServerFavorite(itemID: String, isFavorite: Bool) async throws -> ServerFavoriteSnapshot {
+        try await routing.withMutation { connector in
+            guard let provider = connector as? any ServerFavoriteConnector else { throw SongloftServiceError.invalidResponse }
+            return try await provider.setServerFavorite(itemID: itemID, isFavorite: isFavorite)
+        }
+    }
+
+    func scrobble(songPath: String, submission: Bool) async {
+        _ = try? await routing.withMutation { connector in
+            guard let provider = connector as? any ServerScrobblingConnector else { return }
+            await provider.scrobble(songPath: songPath, submission: submission)
+        }
+    }
+
+    func fetchServerRadioStations() async throws -> ServerRadioStationSnapshot? {
+        try await routing.withRead { connector in
+            guard let provider = connector as? any ServerRadioConnector else { throw SongloftServiceError.invalidResponse }
+            return try await provider.fetchServerRadioStations()
+        }
+    }
+
+    func resolveServerRadioStream(stationID: String, forceRefresh: Bool) async throws -> URL {
+        try await routing.withRead { connector in
+            guard let provider = connector as? any ServerRadioStreamResolvingConnector else { throw SongloftServiceError.invalidResponse }
+            return try await provider.resolveServerRadioStream(stationID: stationID, forceRefresh: forceRefresh)
+        }
     }
 
 }
@@ -2363,6 +2455,13 @@ final class SourceManager {
                 routedSupportsSidecarWriting: supportsSidecarWriting,
                 routedPreferredDeleteBatchSize: preferredDeleteBatchSize
             )
+        case .songloft:
+            return RoutedSongloftConnector(
+                sourceID: source.id,
+                routing: routing,
+                routedSupportsSidecarWriting: supportsSidecarWriting,
+                routedPreferredDeleteBatchSize: preferredDeleteBatchSize
+            )
         default:
             return RoutedMusicSourceConnector(
                 sourceID: source.id,
@@ -2540,6 +2639,19 @@ final class SourceManager {
         case .daoliyu:
             connector = credentialProtectedConnector(for: source) { password in
                 DaoLiYuSource(
+                    sourceID: source.id,
+                    host: source.host ?? "",
+                    port: source.port,
+                    useSSL: source.useSsl,
+                    basePath: source.basePath,
+                    username: source.username ?? "",
+                    password: password,
+                    alternateTLSValidationHostname: source.alternateTLSValidationHostname
+                )
+            }
+        case .songloft:
+            connector = credentialProtectedConnector(for: source) { password in
+                SongloftSource(
                     sourceID: source.id,
                     host: source.host ?? "",
                     port: source.port,

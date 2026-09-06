@@ -52,6 +52,7 @@
 		0A29AD1261453B6735CB9962 /* MusicLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2105927D98B1DF9885EB81 /* MusicLibrary.swift */; };
 		0A6519792957182F0B026F08 /* SFBAudioEngine in Frameworks */ = {isa = PBXBuildFile; productRef = F018F7A8A3643BE3A12DF666 /* SFBAudioEngine */; };
 		0ACA25C2348D8CA0D4AE2966 /* EmbyLyricsTrackEventParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98C6228B8950A5EAB88F9960 /* EmbyLyricsTrackEventParser.swift */; };
+		0ACB1D658F47D5EAA17E73DF /* SongloftSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A373D69542A894AC0E311DF /* SongloftSource.swift */; };
 		0B877004E9BC6105414BD7A5 /* MacDetailContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D09F74F18E7CED7C6CDC0960 /* MacDetailContainer.swift */; };
 		0BAFA3FEF20223C7CA4FFAA1 /* SidecarMetadataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F90F8D26A59F3DF6BF867F /* SidecarMetadataLoader.swift */; };
 		0C01319C3AC219592DDF319B /* LyricsEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E0A23AFAAE5609F948E3DB0 /* LyricsEditorSheet.swift */; };
@@ -294,6 +295,7 @@
 		4527A2F1D19F49D451E75E60 /* libavutil.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 97F67F7EA254BBF6D2BA74A0 /* libavutil.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		454931DF071A087440E73794 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 26DD8E7908AD9D808A2CD73D /* Localizable.strings */; };
 		45792DBCB1B655DB7EDEBFE7 /* SongIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C46A7CFAEE41704BC45A8CB /* SongIdentity.swift */; };
+		45B928C6549AFDAA3AC5C699 /* SongloftSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A373D69542A894AC0E311DF /* SongloftSource.swift */; };
 		45D47CD3A35703F9DC0FF8CD /* MacRadioBatchAddView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D506F3799C64A1F8FA9FE080 /* MacRadioBatchAddView.swift */; };
 		46177DCBA68557D87AB0DC0C /* MacImmersivePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D95026A4255446C98BA2456 /* MacImmersivePlayerView.swift */; };
 		462E50063C5075D907ABD7B6 /* SFTPSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D64868ED9B01B2808EEFF51 /* SFTPSource.swift */; };
@@ -418,6 +420,7 @@
 		5E0C4FB858DCCE7E784D422A /* ThemeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74134D8D32D016D927D59D77 /* ThemeService.swift */; };
 		5E1E95EB6F8FDBC014FEF4BA /* ScraperManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE41DF2E4D5B75A369E0159B /* ScraperManager.swift */; };
 		5E5CD445E8005257DD9A9D76 /* AICredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F266BC40DFEB0858D943B648 /* AICredentialStore.swift */; };
+		5E75E252278302AF1407D5C0 /* SongloftAPIProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8507442CF0DB8F8518111B0 /* SongloftAPIProtocol.swift */; };
 		5E821F60595D5717B952E98C /* DeviceCheck.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B6B2058920D0EF65AE514E1C /* DeviceCheck.framework */; };
 		5F57F340B615890225768BCE /* JellyfinSourceCreationTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE14ABCEB2BD02801AE8BED9 /* JellyfinSourceCreationTransaction.swift */; };
 		5FA7E93E1A11D32470CC8623 /* RadioDirectoryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87CDB114A51764BEBD90ED3 /* RadioDirectoryClient.swift */; };
@@ -565,6 +568,7 @@
 		842D9D5F65C4F4C2B4094BE7 /* SendToTVSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CED344D90A31CB6096E8CF /* SendToTVSheet.swift */; };
 		8457016E2EBE033A08C38A33 /* DuplicateDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2117016184001B6F46168B00 /* DuplicateDetector.swift */; };
 		8485F49F2EE6DF52BCFFD372 /* SettingsCatalogData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81D0685C67A04B385250A962 /* SettingsCatalogData.swift */; };
+		84DE488CE3DA646FB71E8B86 /* SongloftStreamResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 678F2DD30767937AE051A639 /* SongloftStreamResolver.swift */; };
 		84ECB1EB9771EBDA278129BC /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F6AE35FC2EC095FBF1EA0E /* AudioEngine.swift */; };
 		84F363F21A54B345F1EDD614 /* AppleMusicLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46127E52B6E2524CAC08EEB4 /* AppleMusicLibraryService.swift */; };
 		851E6702527455803F1ACB6B /* ImmersiveStageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BD6D04DA8CE429DC75434F6 /* ImmersiveStageView.swift */; };
@@ -610,6 +614,7 @@
 		905195595203C14BB65E504D /* SecondaryWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C25D48D1B47C96F24B829B47 /* SecondaryWidgets.swift */; };
 		90CF71D6E481B7234AABFF0F /* ArtistNameSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780AC3E761A5E47669455B60 /* ArtistNameSettingsView.swift */; };
 		9129126C040F02F724CC2762 /* BaiduFileManagerBatchResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6522627B000671EA9055B5D5 /* BaiduFileManagerBatchResponse.swift */; };
+		915B26BCACF599ACF47A387E /* SongloftServiceClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61DB19509BFC88354F86E632 /* SongloftServiceClient.swift */; };
 		919603D0405D60C9F54482D6 /* MetadataBackfillService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56809F1C697EF691877166D /* MetadataBackfillService.swift */; };
 		9199927F9B6C34A439659593 /* MusicIntelligenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696F0EA37D288187E2E33DD2 /* MusicIntelligenceService.swift */; };
 		91A91048C81EFDD2DC5181BA /* MediaServerStreamResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462A1CC2221A693AE52A85E3 /* MediaServerStreamResolver.swift */; };
@@ -698,6 +703,7 @@
 		AA3D32165BF96C06EEDF1A1B /* UPnPBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6034E45EAB5EDE327A29E399 /* UPnPBrowserView.swift */; };
 		AA508472ADFA435CEA0930A3 /* ConnectorScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A23DCE16E17D3C9AEBAD5AC /* ConnectorScanner.swift */; };
 		AA508AF4BB9076935078B1E6 /* PrimuseAIRelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424E5E7566A61716247785C1 /* PrimuseAIRelayClient.swift */; };
+		AA559B823E7AAA6FE6860687 /* SourceLyricsDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A815E77F1B1FD79F7C32A3 /* SourceLyricsDocument.swift */; };
 		AAFF7692A7D7CD5704F7DC64 /* DiagnosticReportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15B6CFA8E91CA7408F262EA /* DiagnosticReportsView.swift */; };
 		AB11470CFF39E686C288E1BC /* EncodingFixPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE93C100D879B2996CB013F6 /* EncodingFixPicker.swift */; };
 		AB1E8C02F73F9A6844B20D20 /* MacCloudSyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E23D24CDD16F125DE20A4C3F /* MacCloudSyncSettingsView.swift */; };
@@ -837,6 +843,7 @@
 		C563EE8F814D118AC050F7C0 /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45DBC29426E786513B5CFA0 /* MacSettingsView.swift */; };
 		C5C3EDB97E878C3354348252 /* MusicScraperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE228964342BBAAB23DCAD8 /* MusicScraperService.swift */; };
 		C5DA9BC12C2530019948D296 /* SharedNowPlayingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136E43CE662D6E0E06C21E26 /* SharedNowPlayingState.swift */; };
+		C5FDE14699BD4BC04DD7D8E2 /* SongloftSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A373D69542A894AC0E311DF /* SongloftSource.swift */; };
 		C60CBE0D26F59A84CCB5931F /* RadioBatchAddView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A895C0BB7B716450DBD0A73 /* RadioBatchAddView.swift */; };
 		C68B578CB1EAC6C7B84BC318 /* ScrobbleProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A342EFF9101DE4480355B9 /* ScrobbleProvider.swift */; };
 		C6E282334931C63D5C91CB7B /* NFSSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86E05F2143FF7A15E29948C /* NFSSource.swift */; };
@@ -1266,6 +1273,7 @@
 		0A0721DBF2314CD9ABA156A8 /* es-MX */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "es-MX"; path = "es-MX.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		0A0A68B54B7A480C64D2DF3F /* SiriMediaSearchResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriMediaSearchResolver.swift; sourceTree = "<group>"; };
 		0A23DCE16E17D3C9AEBAD5AC /* ConnectorScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectorScanner.swift; sourceTree = "<group>"; };
+		0A373D69542A894AC0E311DF /* SongloftSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongloftSource.swift; sourceTree = "<group>"; };
 		0A682DE882BF7C18268F9428 /* DesktopLyricsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopLyricsWindowController.swift; sourceTree = "<group>"; };
 		0A81E711713C594D6D24C5BF /* SongListSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongListSnapshot.swift; sourceTree = "<group>"; };
 		0B40061F6B6A1BBA0F980C4D /* SSDPNetworkInterfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSDPNetworkInterfaces.swift; sourceTree = "<group>"; };
@@ -1547,6 +1555,7 @@
 		6183B42E15B9A253E26912B5 /* uk */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = uk; path = uk.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		619ED42D72C2CF96721550D0 /* WiFiTransferLibraryPreparation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiTransferLibraryPreparation.swift; sourceTree = "<group>"; };
 		619F72A778551BB017F0840A /* RadioStationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadioStationsView.swift; sourceTree = "<group>"; };
+		61DB19509BFC88354F86E632 /* SongloftServiceClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongloftServiceClient.swift; sourceTree = "<group>"; };
 		61EACF0F812C134ED35D5209 /* SongBatchRemovalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongBatchRemovalService.swift; sourceTree = "<group>"; };
 		6260D8F4F4648F9D7376C4F5 /* BaiduPanIncrementalSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduPanIncrementalSync.swift; sourceTree = "<group>"; };
 		632A16B1EB87A560435B7039 /* ScanService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanService.swift; sourceTree = "<group>"; };
@@ -1563,6 +1572,7 @@
 		6723FC0B92EDA2CC1B5E3C83 /* SourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesView.swift; sourceTree = "<group>"; };
 		674035830422263129C5DAB9 /* AppReviewPromptCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppReviewPromptCoordinator.swift; sourceTree = "<group>"; };
 		674C441197AFC8EDFF6E7E4B /* FullscreenPlayerEffectSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullscreenPlayerEffectSettings.swift; sourceTree = "<group>"; };
+		678F2DD30767937AE051A639 /* SongloftStreamResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongloftStreamResolver.swift; sourceTree = "<group>"; };
 		67A74DBDB4BE669EBE61F4DA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		67EDF7DB74CD3E0D6F725125 /* WiFiTransferHTTP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiTransferHTTP.swift; sourceTree = "<group>"; };
 		6821FC1BF97641265A739D6F /* SubsonicSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubsonicSource.swift; sourceTree = "<group>"; };
@@ -1842,6 +1852,7 @@
 		C6BE43CAD4E9683B7D735649 /* TVUserFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVUserFlowTests.swift; sourceTree = "<group>"; };
 		C778F0BDBC9B4352156B5C31 /* RadioStation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadioStation.swift; sourceTree = "<group>"; };
 		C804B707FEBA12189DA49BB3 /* CloudKitRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitRuntime.swift; sourceTree = "<group>"; };
+		C8507442CF0DB8F8518111B0 /* SongloftAPIProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongloftAPIProtocol.swift; sourceTree = "<group>"; };
 		C891ECCBAEB4EF0ED63759C7 /* TVAudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVAudioEngine.swift; sourceTree = "<group>"; };
 		C8DA11D239500EFCBED9557C /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		C97AD40A4E79629039B84599 /* uk */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = uk; path = uk.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -1933,6 +1944,7 @@
 		E6AB7C14D2E4EC9112B49730 /* YearlyReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YearlyReportView.swift; sourceTree = "<group>"; };
 		E77C291D51A0577AAC67C318 /* PrimuseTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PrimuseTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E7A4B98789824DBE3B31F9D3 /* LibraryFolderSelectionIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryFolderSelectionIndex.swift; sourceTree = "<group>"; };
+		E7A815E77F1B1FD79F7C32A3 /* SourceLyricsDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLyricsDocument.swift; sourceTree = "<group>"; };
 		E7BBFA50461FE980684501FA /* AddSourceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddSourceView.swift; sourceTree = "<group>"; };
 		E7F90F8D26A59F3DF6BF867F /* SidecarMetadataLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarMetadataLoader.swift; sourceTree = "<group>"; };
 		E869595DCD0088EE00182909 /* PrimuseTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PrimuseTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -2263,6 +2275,7 @@
 				2FD2BBC1EC1BECCE0D1EEF17 /* S3Source.swift */,
 				9D64868ED9B01B2808EEFF51 /* SFTPSource.swift */,
 				BEF1C4D090D0F65114B8F0D5 /* SMBSource.swift */,
+				0A373D69542A894AC0E311DF /* SongloftSource.swift */,
 				45C22436A1CD2EB078E9F97A /* SourceErrors.swift */,
 				2749C2730EE3A6AB4EEFE3FE /* SourceManager.swift */,
 				E43D86A7277FFD6BA412DECF /* SourcesStore.swift */,
@@ -2421,6 +2434,7 @@
 				0A81E711713C594D6D24C5BF /* SongListSnapshot.swift */,
 				B258D9243E8F9A579865947D /* SongRowSwipePolicy.swift */,
 				B09E1FFC29629DC9E3BB3883 /* SourceCatalogSnapshotPolicy.swift */,
+				E7A815E77F1B1FD79F7C32A3 /* SourceLyricsDocument.swift */,
 				A231BC160FFDDA890692D36A /* SpotlightIndexPlanning.swift */,
 				0B40061F6B6A1BBA0F980C4D /* SSDPNetworkInterfaces.swift */,
 				BEE60851F0BAD299352085E5 /* SubsonicCatalogPagingPolicy.swift */,
@@ -3333,6 +3347,9 @@
 				5F14A8B457724588F5559B41 /* ProtocolHTTPStreamResolvers.swift */,
 				F99EF0A47317166C18FD865D /* RelayStreamResolver.swift */,
 				C603E86C2F865CDFD1D1C8EB /* S3StreamResolver.swift */,
+				C8507442CF0DB8F8518111B0 /* SongloftAPIProtocol.swift */,
+				61DB19509BFC88354F86E632 /* SongloftServiceClient.swift */,
+				678F2DD30767937AE051A639 /* SongloftStreamResolver.swift */,
 				4430B0204E343AF011F490F1 /* StreamResolver.swift */,
 				F24FFA868034F06D26F041E3 /* StreamResolverRegistry.swift */,
 				A808E934F62A6E8AB8548E11 /* STRMDescriptor.swift */,
@@ -3980,7 +3997,11 @@
 				45792DBCB1B655DB7EDEBFE7 /* SongIdentity.swift in Sources */,
 				1534D0AB0F81ED8041B9B75E /* SongListSnapshot.swift in Sources */,
 				42295F86DFFBCF1704ED002A /* SongRowSwipePolicy.swift in Sources */,
+				5E75E252278302AF1407D5C0 /* SongloftAPIProtocol.swift in Sources */,
+				915B26BCACF599ACF47A387E /* SongloftServiceClient.swift in Sources */,
+				84DE488CE3DA646FB71E8B86 /* SongloftStreamResolver.swift in Sources */,
 				1C901837C560784D2C0CE15B /* SourceCatalogSnapshotPolicy.swift in Sources */,
+				AA559B823E7AAA6FE6860687 /* SourceLyricsDocument.swift in Sources */,
 				DF2BC050126042D35229A91E /* SourceSyncState.swift in Sources */,
 				AD9E45159D3B5AF9B75CC488 /* SpotlightIndexPlanning.swift in Sources */,
 				1A1C7C4F1F0C1B7F7809335A /* StreamResolver.swift in Sources */,
@@ -4304,6 +4325,7 @@
 				B3A0F5CCE5012E02E55C6896 /* SongRowView.swift in Sources */,
 				20B4B08466EF6C5A0DFAE4F2 /* SongSelectable.swift in Sources */,
 				0F22679AF396EB6AB2690522 /* SongSelectionModel.swift in Sources */,
+				C5FDE14699BD4BC04DD7D8E2 /* SongloftSource.swift in Sources */,
 				31CE68BFDECB009846BF409D /* SourceErrors.swift in Sources */,
 				B2AD355139150A6FE1146F2C /* SourceManager.swift in Sources */,
 				F4B6FD2C0B6D5AF88FB9CA4B /* SourceMetadataStatusView.swift in Sources */,
@@ -4415,6 +4437,7 @@
 				7635925D8884E6C7EF5C9D57 /* ScrobbleService.swift in Sources */,
 				5C9C1102C689DE3A5D2756B2 /* ScrobbleSettings.swift in Sources */,
 				1CEDC65A7EFD169B18E22B80 /* SmartPlaylistEngine.swift in Sources */,
+				0ACB1D658F47D5EAA17E73DF /* SongloftSource.swift in Sources */,
 				57C5338AA7873C4449F1331A /* SourceErrors.swift in Sources */,
 				EF42DC10EBE3F86E7C361E81 /* SourcesStore.swift in Sources */,
 				393391520F10BA2BC55108E5 /* SubsonicSource.swift in Sources */,
@@ -4738,6 +4761,7 @@
 				EBB310A0DD524FCF93EEDD63 /* SongRowView.swift in Sources */,
 				C2013CCE9B28C52112EDA8B8 /* SongSelectable.swift in Sources */,
 				F9CDAF1525E2198BCA7BD338 /* SongSelectionModel.swift in Sources */,
+				45B928C6549AFDAA3AC5C699 /* SongloftSource.swift in Sources */,
 				204C9943B244C93DF6DA48A6 /* SourceErrors.swift in Sources */,
 				805D574A9EE6E25009EACFE4 /* SourceManager.swift in Sources */,
 				D31C2238FF06CE4653360789 /* SourceMetadataStatusView.swift in Sources */,

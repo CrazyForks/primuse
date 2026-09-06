@@ -672,3 +672,9 @@
 "tv_metadata_server_hint" = "تحديث مكتبة الخادم والبيانات الوصفية";
 "tv_metadata_source_unavailable" = "فعّل هذا المصدر أو أعد فحصه على iPhone أو Mac ثم زامنه.";
 "tv_metadata_reread_issues" = "تعذرت قراءة %d من الأغاني بالكامل. حُفظت المعلومات الحالية ويمكنك إعادة المحاولة.";
+
+"error.songloft.missingCredential" = "Songloft requires an account and password.";
+"error.songloft.invalidURL" = "The Songloft server address is invalid.";
+"error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
+"error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
+"error.songloft.http" = "Songloft returned HTTP %@.";

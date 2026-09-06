@@ -1504,7 +1504,7 @@ public enum ServerPlaylistIdentity {
 public enum ServerFavoriteWritebackPolicy {
     public static func supports(_ sourceType: MusicSourceType) -> Bool {
         switch sourceType {
-        case .emby, .navidrome, .subsonic:
+        case .emby, .navidrome, .subsonic, .songloft:
             return true
         default:
             return false
@@ -1515,6 +1515,9 @@ public enum ServerFavoriteWritebackPolicy {
         fromConnectorPath filePath: String,
         sourceType: MusicSourceType
     ) -> String? {
+        if sourceType == .songloft {
+            return SongloftAPIProtocol.trackID(from: filePath).map(String.init)
+        }
         let directory: String
         switch sourceType {
         case .emby:

@@ -554,6 +554,7 @@ targets:
       - path: Primuse/Services/Sources/MusicSourceProtocol.swift
       - path: Primuse/Services/Sources/SourceErrors.swift
       - path: Primuse/Services/Sources/SubsonicSource.swift
+      - path: Primuse/Services/Sources/SongloftSource.swift
       - path: Primuse/Services/Sources/MediaServerSource.swift
       - path: Primuse/Services/Sources/TrustedHTTPTransport.swift
       - path: Primuse/Services/Sources/SSLTrustStore.swift

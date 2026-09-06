@@ -76,6 +76,14 @@ enum TVSourceConnectionFailoverPolicy {
             }
         }
 
+        if let error = error as? SongloftServiceError {
+            switch error {
+            case .missingCredential, .authenticationFailed: return false
+            case .badServerResponse(403): return false
+            default: return true
+            }
+        }
+
         let nsError = error as NSError
         if nsError.domain == NSPOSIXErrorDomain,
            [Int(EACCES), Int(EPERM)].contains(nsError.code) {

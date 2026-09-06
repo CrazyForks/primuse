@@ -672,3 +672,9 @@
 "tv_metadata_server_hint" = "Sunucu kataloğunu ve meta verileri yenile";
 "tv_metadata_source_unavailable" = "Önce bu kaynağı etkinleştirin veya iPhone ya da Mac üzerinde yeniden tarayıp eşzamanlayın.";
 "tv_metadata_reread_issues" = "%d şarkı tam olarak okunamadı. Mevcut bilgiler korundu; yeniden deneyebilirsiniz.";
+
+"error.songloft.missingCredential" = "Songloft requires an account and password.";
+"error.songloft.invalidURL" = "The Songloft server address is invalid.";
+"error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
+"error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
+"error.songloft.http" = "Songloft returned HTTP %@.";

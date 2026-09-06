@@ -151,7 +151,7 @@ private extension MusicSourceType {
         case .upnp,
              .jellyfin, .emby, .plex,
              .subsonic, .navidrome, .airsonic, .gonic,
-             .fnMusic, .daoliyu,
+             .fnMusic, .daoliyu, .songloft,
              .aliyunDrive, .googleDrive, .oneDrive,
              .drime, .pan115, .pan123,
              .appleMusic, .appleMusicLibrary:

@@ -672,3 +672,9 @@
 "tv_metadata_server_hint" = "รีเฟรชคลังเพลงและข้อมูลเมตาจากเซิร์ฟเวอร์";
 "tv_metadata_source_unavailable" = "เปิดใช้แหล่งนี้ก่อน หรือสแกนใหม่บน iPhone หรือ Mac แล้วซิงค์";
 "tv_metadata_reread_issues" = "อ่านเพลง %d เพลงได้ไม่ครบถ้วน เก็บข้อมูลเดิมไว้แล้ว คุณสามารถลองอีกครั้งได้";
+
+"error.songloft.missingCredential" = "Songloft requires an account and password.";
+"error.songloft.invalidURL" = "The Songloft server address is invalid.";
+"error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
+"error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
+"error.songloft.http" = "Songloft returned HTTP %@.";

@@ -71,7 +71,7 @@ enum TVSourceLocalLibraryPolicy {
     static func capability(for type: MusicSourceType) -> TVSourceLocalLibraryCapability {
         if type.isAwaitingPublicAPI { return .unavailable }
         switch type {
-        case .smb, .fnMusic, .daoliyu:
+        case .smb, .fnMusic, .daoliyu, .songloft:
             return .directScan
         default:
             return .pairedLibrary
@@ -1066,7 +1066,7 @@ final class TVStore {
     /// 用「服务端账号 + 密码」登录、且能在 TV 直连的源类型 —— 适合在 TV 上手动输入凭据。
     /// 云盘(OAuth)、relay 类(凭据在 iPhone 侧)、原生库源不在此列。
     private static let manualCredentialTypes: Set<MusicSourceType> = [
-        .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu,
+        .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu, .songloft,
         .synology, .qnap, .ugreen,
         .jellyfin, .emby, .plex,
     ]
@@ -1075,7 +1075,7 @@ final class TVStore {
     /// 在 TV 上本机直连播放(不经 iPhone 中继)的协议类型。与 TVPlaybackCoordinator.makeDirectReader 对应。
     static let directProtocolTypes: Set<MusicSourceType> = [.smb, .nfs, .ftp]
     private static let tvScannableTypes: Set<MusicSourceType> = [
-        .smb, .fnMusic, .daoliyu, .oneDrive, .dropbox,
+        .smb, .fnMusic, .daoliyu, .songloft, .oneDrive, .dropbox,
     ]
 
     private func playability(for s: MusicSource) -> TVPlayability {
@@ -1117,7 +1117,7 @@ final class TVStore {
             return credential.refreshToken?.isEmpty == false
                 && credential.clientID?.isEmpty == false
         }
-        if s.type == .fnMusic || s.type == .daoliyu {
+        if s.type == .fnMusic || s.type == .daoliyu || s.type == .songloft {
             let credential = TVCredentialStore.credential(for: s, bundle: credentialBundle)
             return credential.username?.isEmpty == false && credential.password?.isEmpty == false
         }
@@ -1237,6 +1237,24 @@ final class TVStore {
                 return PMString("ext.tv.test.connectedPrefix")
                     + (source.host ?? PMString("ext.tv.test.resolved"))
             } catch let error as DaoLiYuServiceError {
+                switch error {
+                case .missingCredential:
+                    return PMString("ext.tv.test.missingCredential")
+                case .authenticationFailed:
+                    return PMString("ext.tv.test.authFailed")
+                default:
+                    return PMString("ext.tv.test.failedDetail", error.localizedDescription)
+                }
+            } catch {
+                return PMString("ext.tv.test.failedDetail", error.localizedDescription)
+            }
+        }
+        if source.type == .songloft {
+            do {
+                _ = try await scanner.validateSongloftConnection(source: source, credential: cred)
+                return PMString("ext.tv.test.connectedPrefix")
+                    + (source.host ?? PMString("ext.tv.test.resolved"))
+            } catch let error as SongloftServiceError {
                 switch error {
                 case .missingCredential:
                     return PMString("ext.tv.test.missingCredential")
@@ -2027,7 +2045,7 @@ final class TVStore {
     /// 只展示能由 Apple TV 自行建立曲库的来源。其余来源必须先在 iPhone / Mac
     /// 完成授权与扫描，再通过配对或同步传入完整曲库，不能保存成一个空来源冒充成功。
     static let addableTypes: [MusicSourceType] = [
-        .fnMusic, .daoliyu, .smb,
+        .fnMusic, .daoliyu, .songloft, .smb,
     ]
 
     nonisolated static func canBuildLibraryOnTV(_ type: MusicSourceType) -> Bool {
@@ -2493,7 +2511,7 @@ final class TVStore {
             await library.waitForPendingIndex()
             guard isCurrentScan(source: source, generation: generation) else { throw CancellationError() }
             let count = library.songs.lazy.filter { $0.sourceID == source.id }.count
-            if source.type != .fnMusic && source.type != .daoliyu {
+            if source.type != .fnMusic && source.type != .daoliyu && source.type != .songloft {
                 try sourcesStore.updateDurably(source.id) {
                     $0.songCount = count
                     $0.lastScannedAt = Date()
@@ -2507,7 +2525,7 @@ final class TVStore {
             }
             if let pruningRecovery { library.finishScanPruning(pruningRecovery) }
             pruningRecovery = nil
-            if source.type != .fnMusic && source.type != .daoliyu {
+            if source.type != .fnMusic && source.type != .daoliyu && source.type != .songloft {
                 library.updateAutomaticArtistArtworkCatalog(
                     SourceArtistArtworkCatalog(sourceID: source.id, index: result.resumeState.index)
                 )
@@ -2565,7 +2583,7 @@ final class TVStore {
         ) else {
             return false
         }
-        guard source.type == .fnMusic || source.type == .daoliyu,
+        guard source.type == .fnMusic || source.type == .daoliyu || source.type == .songloft,
               let lister = makeLister(for: source) else {
             scanner.phase = .failed(PMString("ext.tv.scan.connectFailed"))
             return true
@@ -3224,7 +3242,7 @@ final class TVStore {
             let digest = SHA256.hash(data: Data("\(raw.sourceID):\(raw.filePath)".utf8))
                 .map { String(format: "%02x", $0) }.joined()
             let type = sourcesStore.source(id: raw.sourceID)?.type
-            guard raw.id == digest || type == .fnMusic || type == .daoliyu else { continue }
+            guard raw.id == digest || type == .fnMusic || type == .daoliyu || type == .songloft else { continue }
             let canonical = TVScanPipelinePolicy.canonicalSongID(raw.id)
             guard canonical != raw.id else { continue }
             replacements[raw.id] = canonical

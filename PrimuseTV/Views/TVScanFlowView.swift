@@ -92,7 +92,7 @@ struct TVScanFlowView: View {
                     },
                     canCancel: store.activeScanSourceID == source.id
                 )
-            } else if source.type == .fnMusic || source.type == .daoliyu {
+            } else if source.type == .fnMusic || source.type == .daoliyu || source.type == .songloft {
                 fnMusicPickView
             } else if rereadMetadata && !source.scannedDirectories.isEmpty {
                 VStack(alignment: .leading, spacing: 24) {
@@ -118,7 +118,7 @@ struct TVScanFlowView: View {
                 started = true
                 return
             }
-            if source.type != .fnMusic && source.type != .daoliyu, lister == nil {
+            if source.type != .fnMusic && source.type != .daoliyu && source.type != .songloft, lister == nil {
                 lister = store.makeLister(for: source)
                 selected = Set(source.scannedDirectories)   // 回填上次扫描勾选的目录
                 if !rereadMetadata || selected.isEmpty { load("/") }
