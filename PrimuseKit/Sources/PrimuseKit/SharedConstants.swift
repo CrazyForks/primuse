@@ -2870,8 +2870,8 @@ public enum MetadataBackfillEligibilityPolicy {
 /// becomes even gentler while audio is the user-facing foreground workload.
 public enum MetadataBackfillExecutionMode: Sendable, Equatable {
     case standard
-    /// The user explicitly asked one source to keep reading. It remains serial
-    /// and throttled, but may take additional snapshots while the scene stays
+    /// The user explicitly asked one source to keep reading. The selected
+    /// reading mode applies while additional snapshots run and the scene stays
     /// active. Per-song failures are recorded and skipped instead of ending the
     /// source job.
     case userInitiated
@@ -2912,77 +2912,127 @@ public struct MetadataBackfillExecutionLimits: Sendable, Equatable {
     }
 }
 
+extension MetadataBackfillExecutionLimits {
+    public func withWorkerCount(_ count: Int) -> Self {
+        .init(workerCount: max(0, count), snapshotLimit: snapshotLimit,
+              interRequestDelay: interRequestDelay, flushInterval: flushInterval,
+              snapshotPassLimit: snapshotPassLimit)
+    }
+}
+
+public enum MetadataReadingMode: String, CaseIterable, Sendable {
+    case automatic
+    case fast
+    case energySaving
+
+    public static func resolve(storedValue: String?, legacyFastEnabled: Bool) -> Self {
+        if let storedValue, let mode = Self(rawValue: storedValue) { return mode }
+        return legacyFastEnabled ? .fast : .automatic
+    }
+}
+
+public enum MetadataReadingThermalState: Sendable {
+    case nominal, fair, serious, critical
+}
+
+public enum MetadataReadingConstraint: String, Sendable {
+    case none, playback, lowPower, thermal, cooling, background
+}
+
+public struct MetadataReadingEnvironment: Sendable {
+    public var thermalState: MetadataReadingThermalState
+    public var lowPowerMode: Bool
+    public var playbackActive: Bool
+    public var offlineSource: Bool
+
+    public init(
+        thermalState: MetadataReadingThermalState = .nominal,
+        lowPowerMode: Bool = false,
+        playbackActive: Bool = false,
+        offlineSource: Bool = false
+    ) {
+        self.thermalState = thermalState
+        self.lowPowerMode = lowPowerMode
+        self.playbackActive = playbackActive
+        self.offlineSource = offlineSource
+    }
+}
+
 public enum MetadataBackfillExecutionPolicy {
-    /// Local, per-device preference. It is intentionally not synchronized:
-    /// users may opt a capable Mac or iPhone into the aggressive profile
-    /// without forcing the same thermal/network trade-off on every device.
     public static let highPerformanceAfterScanDefaultsKey =
         "primuse.metadataBackfill.highPerformanceAfterScan"
+    public static let readingModeDefaultsKey = "primuse.metadataBackfill.readingMode"
 
     public static func limits(
         for mode: MetadataBackfillExecutionMode,
         highPerformanceAfterScanEnabled: Bool = false
     ) -> MetadataBackfillExecutionLimits {
-        if highPerformanceAfterScanEnabled {
-            switch mode {
-            case .foregroundDeviceLocal, .foregroundAfterSourceScan:
-                return MetadataBackfillExecutionLimits(
-                    workerCount: 3,
-                    snapshotLimit: 500,
-                    interRequestDelay: 0,
-                    flushInterval: 5
-                )
-            default:
-                break
-            }
-        }
+        limits(for: mode, preference: highPerformanceAfterScanEnabled ? .fast : .automatic)
+    }
 
-        return switch mode {
-        case .standard:
-            MetadataBackfillExecutionLimits(
-                workerCount: 3,
-                snapshotLimit: 500,
-                interRequestDelay: 0,
-                flushInterval: 5
-            )
-        case .userInitiated:
-            MetadataBackfillExecutionLimits(
-                workerCount: 1,
-                snapshotLimit: 64,
-                interRequestDelay: 0.35,
-                flushInterval: 10
-            )
-        case .foregroundDeviceLocal:
-            MetadataBackfillExecutionLimits(
-                workerCount: 1,
-                snapshotLimit: 96,
-                interRequestDelay: 0.05,
-                flushInterval: 5
-            )
-        case .foregroundAfterSourceScan:
-            MetadataBackfillExecutionLimits(
-                workerCount: 1,
-                snapshotLimit: 24,
-                interRequestDelay: 0.75,
-                flushInterval: 15
-            )
-        case .background:
-            MetadataBackfillExecutionLimits(
-                workerCount: 1,
-                snapshotLimit: 24,
-                interRequestDelay: 0.75,
-                flushInterval: 15,
-                snapshotPassLimit: 1
-            )
-        case .backgroundDuringPlayback:
-            MetadataBackfillExecutionLimits(
-                workerCount: 1,
-                snapshotLimit: 8,
-                interRequestDelay: 1.5,
-                flushInterval: 30,
-                snapshotPassLimit: 1
-            )
+    public static func constraint(
+        for mode: MetadataBackfillExecutionMode,
+        environment: MetadataReadingEnvironment
+    ) -> MetadataReadingConstraint {
+        if environment.thermalState == .critical { return .cooling }
+        if environment.thermalState == .serious || environment.thermalState == .fair {
+            return .thermal
         }
+        if mode == .background || mode == .backgroundDuringPlayback { return .background }
+        if environment.lowPowerMode { return .lowPower }
+        if environment.playbackActive { return .playback }
+        return .none
+    }
+
+    public static func limits(
+        for mode: MetadataBackfillExecutionMode,
+        preference: MetadataReadingMode,
+        environment: MetadataReadingEnvironment = .init()
+    ) -> MetadataBackfillExecutionLimits {
+        let isBackground = mode == .background || mode == .backgroundDuringPlayback
+        let offline = environment.offlineSource || mode == .foregroundDeviceLocal
+        var workers = preference == .fast || offline ? 3 : 2
+        var delay: TimeInterval = 0
+        var snapshot = preference == .fast ? 192 : 96
+        var flush: TimeInterval = 5
+        if preference == .energySaving {
+            workers = 1
+            delay = offline ? 0.1 : 0.75
+            snapshot = 48
+            flush = 10
+        }
+        if environment.playbackActive {
+            workers = min(workers, offline ? 2 : 1)
+        }
+        if environment.lowPowerMode {
+            workers = 1
+            delay = max(delay, offline ? 0.1 : 0.35)
+        }
+        if isBackground {
+            workers = 1
+            let playing = mode == .backgroundDuringPlayback
+            snapshot = playing ? 8 : 24
+            delay = playing ? 1.5 : 0.75
+            flush = playing ? 30 : 15
+        }
+        switch environment.thermalState {
+        case .nominal: break
+        case .fair:
+            workers = min(workers, 1)
+            delay = max(delay, 0.35)
+        case .serious:
+            workers = min(workers, 1)
+            delay = max(delay, 1.5)
+        case .critical:
+            workers = 0
+        }
+        return MetadataBackfillExecutionLimits(
+            workerCount: workers,
+            snapshotLimit: snapshot,
+            interRequestDelay: delay,
+            flushInterval: flush,
+            snapshotPassLimit: isBackground ? 1 : nil
+        )
     }
 }
 

@@ -155,18 +155,18 @@ struct MacSourcesView: View {
                         .foregroundStyle(PMColor.text)
                 }
                 Spacer()
-                MetadataBackfillPerformanceButton { isEnabled in
-                    Image(systemName: isEnabled ? "bolt.fill" : "bolt")
+                MetadataBackfillPerformanceButton { mode in
+                    Image(systemName: mode.symbol)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(isEnabled ? Color.white : PMColor.textMuted)
+                        .foregroundStyle(mode == .fast ? Color.white : PMColor.textMuted)
                         .frame(width: 32, height: 32)
                         .background(
-                            isEnabled ? theme.uiAccentColor : PMColor.matBtn,
+                            mode == .fast ? theme.uiAccentColor : PMColor.matBtn,
                             in: .rect(cornerRadius: 8)
                         )
                 }
                 .buttonStyle(.plain)
-                .help(String(localized: "metadata_backfill_fast_mode_footer"))
+                .help(MetadataReadingText.string("help"))
 
                 Button {
                     showAddSource = true
@@ -520,6 +520,7 @@ struct MacSourcesView: View {
                     .font(.system(size: 10.5))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                MetadataReadingStatusView(sourceID: source.id)
             }
             .foregroundStyle(PMColor.textMuted)
             .padding(10)

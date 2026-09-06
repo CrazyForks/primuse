@@ -512,6 +512,114 @@ final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
         } catch is EmbeddedMetadataWritebackSourceError {}
     }
 
+    @MainActor
+    func testAdaptiveReadingPreservesAudioMetadata() async throws {
+        var wav = Data("RIFF".utf8)
+        func append16(_ value: UInt16) { var value = value.littleEndian; withUnsafeBytes(of: &value) { wav.append(contentsOf: $0) } }
+        func append32(_ value: UInt32) { var value = value.littleEndian; withUnsafeBytes(of: &value) { wav.append(contentsOf: $0) } }
+        append32(16_036)
+        wav.append(Data("WAVEfmt ".utf8))
+        append32(16); append16(1); append16(1)
+        append32(8_000); append32(16_000); append16(2); append16(16)
+        wav.append(Data("data".utf8)); append32(16_000)
+        wav.append(Data(repeating: 0, count: 16_000))
+        let audio = wav
+        let profiles: [(String, MetadataBackfillExecutionLimits)] = [
+            ("previous-foreground", .init(workerCount: 1, snapshotLimit: 24, interRequestDelay: 0.75, flushInterval: 15)),
+            ("automatic", MetadataBackfillExecutionPolicy.limits(for: .foregroundAfterSourceScan, preference: .automatic))
+        ]
+        for (name, limits) in profiles {
+            var completed: [Int] = []
+            let scheduler = MetadataReadScheduler<Int, FileMetadataReader.Metadata>()
+            let start = ContinuousClock.now
+            await scheduler.run(items: Array(0..<12), limits: { limits }) { _ in
+                await FileMetadataReader.read(from: audio, fileExtension: "wav")
+            } completed: { index, metadata in
+                XCTAssertEqual(metadata.duration ?? 0, 1, accuracy: 0.02)
+                XCTAssertEqual(metadata.sampleRate, 8_000)
+                completed.append(index)
+            }
+            XCTAssertEqual(completed.sorted(), Array(0..<12))
+            print("MetadataReadingBenchmark profile=\(name) files=12 elapsed=\(start.duration(to: .now))")
+        }
+    }
+
+    func testLocalLyricsCreateAndReplaceThroughCanonicalRoot() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("music", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let alias = directory.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let source = LocalFileSource(sourceID: UUID().uuidString, basePath: alias)
+        let path = "/2002 - Anne-Marie.lrc"
+        let original = Data("[00:01]original lyrics with a longer ending".utf8)
+        let replacement = Data("[00:01]updated".utf8)
+        try await source.writeFile(data: original, to: path)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(String(path.dropFirst()))), original)
+        try await source.writeFile(data: replacement, to: path)
+        let readback = try await source.fetchRange(path: path, offset: 0, length: 1024)
+        XCTAssertEqual(readback, replacement)
+    }
+
+    func testLocalLyricsRejectTraversalAndEscapingDirectorySymlink() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("music", isDirectory: true)
+        let outside = directory.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("escape"), withDestinationURL: outside
+        )
+        let source = LocalFileSource(sourceID: UUID().uuidString, basePath: root)
+        let sentinel = outside.appendingPathComponent("existing.lrc")
+        let original = Data("original".utf8)
+        try original.write(to: sentinel)
+        for path in ["/../outside/new.lrc", "/escape/new.lrc", "/escape/existing.lrc"] {
+            do {
+                try await source.writeFile(data: Data("wrong".utf8), to: path)
+                XCTFail("Unexpected write outside the selected music directory")
+            } catch is SourceError {}
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("new.lrc").path))
+        XCTAssertEqual(try Data(contentsOf: sentinel), original)
+    }
+
+    func testLocalLyricsUseMatchingBookmarkRoot() async throws {
+        struct Reference: Encodable {
+            let virtualPathComponent: String
+            let bookmarkData: Data
+            let isDirectory: Bool
+        }
+        let directory = try makeTemporaryDirectory()
+        let sourceID = UUID().uuidString
+        defer {
+            LocalBookmarkStore.remove(sourceID: sourceID)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let first = directory.appendingPathComponent("first", isDirectory: true)
+        let second = directory.appendingPathComponent("second", isDirectory: true)
+        for root in [first, second] {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        let references = try [first, second].map { root in
+            Reference(
+                virtualPathComponent: root.lastPathComponent,
+                bookmarkData: try root.bookmarkData(options: .minimalBookmark),
+                isDirectory: true
+            )
+        }
+        UserDefaults.standard.set(
+            try JSONEncoder().encode(references), forKey: "primuse.localBookmarks.v1." + sourceID
+        )
+        let source = LocalFileSource(sourceID: sourceID, basePath: first)
+        let bytes = Data("[00:01]second folder".utf8)
+        try await source.writeFile(data: bytes, to: "/second/song.lrc")
+        XCTAssertEqual(try Data(contentsOf: second.appendingPathComponent("song.lrc")), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.appendingPathComponent("song.lrc").path))
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "PrimuseCloudPlaybackConcurrency-\(UUID().uuidString)",

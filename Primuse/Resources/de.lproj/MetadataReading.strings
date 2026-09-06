@@ -1,0 +1,11 @@
+"title" = "Tempo beim Lesen von Tags";
+"automatic" = "Automatisch";
+"fast" = "Geschwindigkeit bevorzugen";
+"energySaving" = "Energie sparen";
+"help" = "Passt sich Wiedergabe, Stromsparmodus und Temperatur an. Änderungen wirken beim Lesen.";
+"playback" = "Wiedergabe hat Vorrang";
+"lowPower" = "Stromsparmodus";
+"thermal" = "Zum Abkühlen verlangsamt";
+"cooling" = "Pausiert, bis das Gerät abgekühlt ist";
+"background" = "Lesen im Hintergrund";
+"rate" = "%.1f Titel/Min.";

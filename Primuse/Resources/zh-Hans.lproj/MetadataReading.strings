@@ -1,0 +1,11 @@
+"title" = "标签读取速度";
+"automatic" = "自动";
+"fast" = "优先速度";
+"energySaving" = "节能";
+"help" = "根据播放、电量模式和温度调整，读取过程中切换即可生效。";
+"playback" = "优先保障播放";
+"lowPower" = "低电量模式";
+"thermal" = "正在降速散热";
+"cooling" = "等待设备降温后继续";
+"background" = "后台读取";
+"rate" = "%.1f 首/分钟";

@@ -1,0 +1,11 @@
+"title" = "Velocidade de leitura de tags";
+"automatic" = "Automático";
+"fast" = "Priorizar velocidade";
+"energySaving" = "Economizar energia";
+"help" = "Adapta-se à reprodução, à energia e à temperatura. As mudanças são aplicadas durante a leitura.";
+"playback" = "Priorizando a reprodução";
+"lowPower" = "Modo de Pouca Energia";
+"thermal" = "Leitura reduzida para resfriar";
+"cooling" = "Pausado até o dispositivo esfriar";
+"background" = "Leitura em segundo plano";
+"rate" = "%.1f faixas/min";

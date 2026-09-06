@@ -252,13 +252,10 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
             throw SourceError.pathNotFound(parent.path)
         }
 
-        let resolvedBase = basePath.resolvingSymlinksInPath().standardizedFileURL
-        let resolvedParent = parent.resolvingSymlinksInPath().standardizedFileURL
-        let basePrefix = resolvedBase.path.hasSuffix("/")
-            ? resolvedBase.path
-            : resolvedBase.path + "/"
-        guard resolvedParent.path == resolvedBase.path
-                || resolvedParent.path.hasPrefix(basePrefix) else {
+        let authorizedRoots = referenceRoots.isEmpty
+            ? [basePath]
+            : referenceRoots.filter(\.isDirectory).map(\.url)
+        guard authorizedRoots.contains(where: { Self.contains(parent, inside: $0) }) else {
             throw SourceError.connectionFailed("Refusing to write outside source root: \(path)")
         }
 
@@ -880,8 +877,8 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
            let migratedURL = PrimuseSandboxPathResolver.existingURL(
                forStoredAbsolutePath: path
            ) {
-            let standardizedURL = migratedURL.standardizedFileURL
-            let standardizedBase = basePath.standardizedFileURL
+            let standardizedURL = Self.canonicalURL(migratedURL)
+            let standardizedBase = Self.canonicalURL(basePath)
             let basePrefix = standardizedBase.path.hasSuffix("/")
                 ? standardizedBase.path
                 : standardizedBase.path + "/"
@@ -892,8 +889,8 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
         }
 
         let relativePath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let fileURL = (relativePath.isEmpty ? basePath : basePath.appendingPathComponent(relativePath)).standardizedFileURL
-        let baseStandardized = basePath.standardizedFileURL
+        let fileURL = Self.canonicalURL(Self.canonicalURL(basePath).appendingPathComponent(relativePath))
+        let baseStandardized = Self.canonicalURL(basePath)
         if allowRoot, fileURL.path == baseStandardized.path {
             return fileURL
         }
@@ -913,7 +910,7 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
                     guard allowRoot || !root.isDirectory else {
                         throw SourceError.fileNotFound(path)
                     }
-                    return root.url.standardizedFileURL
+                    return Self.canonicalURL(root.url)
                 }
                 let prefix = component + "/"
                 guard relativePath.hasPrefix(prefix) else { continue }
@@ -921,13 +918,13 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
             } else {
                 if relativePath.isEmpty {
                     guard allowRoot else { throw SourceError.fileNotFound(path) }
-                    return root.url.standardizedFileURL
+                    return Self.canonicalURL(root.url)
                 }
                 remainder = relativePath
             }
 
             guard root.isDirectory else { throw SourceError.fileNotFound(path) }
-            let candidate = root.url.appendingPathComponent(remainder).standardizedFileURL
+            let candidate = Self.canonicalURL(Self.canonicalURL(root.url).appendingPathComponent(remainder))
             guard Self.contains(candidate, inside: root.url) else {
                 throw SourceError.connectionFailed("Refusing to access outside source root: \(path)")
             }
@@ -937,9 +934,9 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
     }
 
     private func relativePath(for url: URL) -> String {
-        let standardized = url.standardizedFileURL
+        let standardized = Self.canonicalURL(url)
         for root in referenceRoots where Self.contains(standardized, inside: root.url) {
-            let rootPath = root.url.standardizedFileURL.path
+            let rootPath = Self.canonicalURL(root.url).path
             let suffix = standardized.path.dropFirst(rootPath.count)
             let rootPrefix = root.virtualPathComponent.map { "/\($0)" } ?? ""
             if suffix.isEmpty { return rootPrefix.isEmpty ? "/" : rootPrefix }
@@ -947,7 +944,7 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
             return rootPrefix + childPath
         }
 
-        let standardizedBase = basePath.standardizedFileURL
+        let standardizedBase = Self.canonicalURL(basePath)
         guard Self.contains(standardized, inside: standardizedBase) else {
             return "/" + url.lastPathComponent
         }
@@ -968,13 +965,32 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
 
     private func isIndividuallyReferencedFile(_ url: URL) -> Bool {
         referenceRoots.contains {
-            !$0.isDirectory && $0.url.standardizedFileURL == url.standardizedFileURL
+            !$0.isDirectory && Self.canonicalURL($0.url) == Self.canonicalURL(url)
         }
     }
 
+    /// Foundation may resolve /private/var only for an existing file. Resolve
+    /// the nearest existing ancestor first so a new sidecar has the same root
+    /// identity as its audio file; directory symlinks still participate in the
+    /// boundary check, including when the final child does not exist yet.
+    private nonisolated static func canonicalURL(_ url: URL) -> URL {
+        var ancestor = url.standardizedFileURL
+        var missingComponents: [String] = []
+        while ancestor.path != "/",
+              !FileManager.default.fileExists(atPath: ancestor.path) {
+            missingComponents.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        var resolved = ancestor.resolvingSymlinksInPath().standardizedFileURL
+        for component in missingComponents.reversed() {
+            resolved.appendPathComponent(component)
+        }
+        return resolved.standardizedFileURL
+    }
+
     private nonisolated static func contains(_ candidate: URL, inside root: URL) -> Bool {
-        let candidatePath = candidate.standardizedFileURL.path
-        let rootPath = root.standardizedFileURL.path
+        let candidatePath = canonicalURL(candidate).path
+        let rootPath = canonicalURL(root).path
         if candidatePath == rootPath { return true }
         let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         return candidatePath.hasPrefix(prefix)

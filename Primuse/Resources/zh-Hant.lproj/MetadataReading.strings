@@ -1,0 +1,11 @@
+"title" = "標籤讀取速度";
+"automatic" = "自動";
+"fast" = "優先速度";
+"energySaving" = "節能";
+"help" = "依播放、電量模式及溫度調整，讀取過程中切換即可生效。";
+"playback" = "優先保障播放";
+"lowPower" = "低耗電模式";
+"thermal" = "正在降速散熱";
+"cooling" = "等待裝置降溫後繼續";
+"background" = "背景讀取";
+"rate" = "%.1f 首/分鐘";

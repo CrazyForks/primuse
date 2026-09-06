@@ -253,6 +253,8 @@ struct SourceMetadataStatusView: View {
                 .monospacedDigit()
             }
 
+            MetadataReadingStatusView(sourceID: source.id)
+
             statusTrack
 
             actionPanel
@@ -263,6 +265,7 @@ struct SourceMetadataStatusView: View {
     private var compactOverviewCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             compactSourceIdentityHeader
+            MetadataReadingStatusView(sourceID: source.id)
 
             HStack(alignment: .center, spacing: 10) {
                 Text(healthSummaryText)

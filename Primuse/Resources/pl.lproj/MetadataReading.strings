@@ -1,0 +1,11 @@
+"title" = "Szybkość odczytu tagów";
+"automatic" = "Automatycznie";
+"fast" = "Priorytet szybkości";
+"energySaving" = "Oszczędzanie energii";
+"help" = "Dostosowuje się do odtwarzania, zasilania i temperatury. Zmiany działają podczas odczytu.";
+"playback" = "Priorytet odtwarzania";
+"lowPower" = "Tryb niskiego zużycia energii";
+"thermal" = "Wolniejszy odczyt dla schłodzenia";
+"cooling" = "Wstrzymano do schłodzenia urządzenia";
+"background" = "Odczyt w tle";
+"rate" = "%.1f utworów/min";

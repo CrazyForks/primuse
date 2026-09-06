@@ -656,7 +656,8 @@ final class AppServices {
                     $0.isEnabled
                         && ($0.type.supportsEmbeddedMetadataBackfill || $0.type == .local)
                 }.map(\.id))
-            }
+            },
+            playbackIsActive: { player.isPlaybackActive }
         )
         player.configurePlaybackMetadataBackfill(metadataBackfill) { sourceID in
             store.source(id: sourceID)?.type

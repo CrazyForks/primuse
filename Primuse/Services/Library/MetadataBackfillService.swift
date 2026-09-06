@@ -287,14 +287,73 @@ final class MetadataBackfillService {
 
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var executionMode: MetadataBackfillExecutionMode = .standard
+    @ObservationIgnored private var activeScheduler: MetadataReadScheduler<Song, BackfillOutcome>?
+    @ObservationIgnored private var batchSchedulers: [String: MetadataReadScheduler<String, MetadataTagRereadBatch.Outcome>] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var configurationObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var playbackIsActive: () -> Bool
+    private(set) var readingMode: MetadataReadingMode = .automatic
+    private(set) var readingConfigurationRevision = 0
+    private(set) var readingProgress: [String: (startedAt: Date, completed: Int, lastCompletedAt: Date)] = [:]
+    @ObservationIgnored private var readProgressAccumulator: [String: (startedAt: Date, completed: Int, lastCompletedAt: Date)] = [:]
+    @ObservationIgnored private var lastReadProgressPublishedAt = Date.distantPast
+
     private var executionLimits: MetadataBackfillExecutionLimits {
-        MetadataBackfillExecutionPolicy.limits(
+        let budget = MetadataBackfillExecutionPolicy.limits(
             for: executionMode,
-            highPerformanceAfterScanEnabled: UserDefaults.standard.bool(
-                forKey: MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey
-            )
+            preference: readingMode,
+            environment: readingEnvironment()
+        )
+        // Explicit batches temporarily own the shared budget. In-flight
+        // automatic reads drain normally before those slots become available.
+        return batchSchedulers.isEmpty ? budget : budget.withWorkerCount(0)
+    }
+
+    private func readingEnvironment(sourceID: String? = nil) -> MetadataReadingEnvironment {
+        let thermal: MetadataReadingThermalState = switch ProcessInfo.processInfo.thermalState {
+        case .nominal: .nominal
+        case .fair: .fair
+        case .serious: .serious
+        case .critical: .critical
+        @unknown default: .serious
+        }
+        let sourceIDs = sourceID.map { Set([$0]) } ?? activeSourceIDs
+        return MetadataReadingEnvironment(
+            thermalState: thermal,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            playbackActive: playbackIsActive(),
+            offlineSource: !sourceIDs.isEmpty && sourceIDs.isSubset(of: offlineReadableSourceIDs())
         )
     }
+
+    func readingConstraint(forSource sourceID: String) -> MetadataReadingConstraint {
+        _ = readingConfigurationRevision
+        return MetadataBackfillExecutionPolicy.constraint(
+            for: executionMode, environment: readingEnvironment(sourceID: sourceID)
+        )
+    }
+
+    func readingConfigurationChanged() {
+        readingMode = MetadataReadingMode.resolve(
+            storedValue: UserDefaults.standard.string(forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey),
+            legacyFastEnabled: UserDefaults.standard.bool(forKey: MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
+        )
+        readingConfigurationRevision += 1
+        activeScheduler?.configurationChanged()
+        for scheduler in batchSchedulers.values { scheduler.configurationChanged() }
+    }
+
+    private func recordReadCompletion(sourceID: String) {
+        let now = Date()
+        var value = readProgressAccumulator[sourceID] ?? (now, 0, now)
+        value.completed += 1
+        value.lastCompletedAt = now
+        readProgressAccumulator[sourceID] = value
+        if now.timeIntervalSince(lastReadProgressPublishedAt) >= 2 {
+            readingProgress = readProgressAccumulator
+            lastReadProgressPublishedAt = now
+        }
+    }
+
     /// Session-scoped explicit user intent. Scene transitions may suspend the
     /// worker, but returning active resumes this source until its normal queue
     /// drains or the user taps Pause. Background execution never inherits the
@@ -304,6 +363,7 @@ final class MetadataBackfillService {
     /// survives an active/inactive transition so a large import resumes from
     /// the next bounded snapshot instead of stopping after the first 24 rows.
     @ObservationIgnored private var automaticDeviceLocalSourceID: String?
+    @ObservationIgnored private var automaticForegroundSourceIDs: Set<String> = []
     /// Source lifecycle notifications can arrive from the view, CloudKit and
     /// the global cleanup coordinator almost simultaneously. Coalesce them so
     /// removing several large sources scans the library once instead of once
@@ -341,8 +401,10 @@ final class MetadataBackfillService {
         backfillableSourceIDs: @escaping () -> Set<String> = { [] },
         bareOnlySourceIDs: @escaping () -> Set<String> = { [] },
         offlineReadableSourceIDs: @escaping () -> Set<String> = { [] },
-        manuallyReadableSourceIDs: (() -> Set<String>)? = nil
+        manuallyReadableSourceIDs: (() -> Set<String>)? = nil,
+        playbackIsActive: @escaping () -> Bool = { false }
     ) {
+        self.playbackIsActive = playbackIsActive
         self.library = library
         self.sourceManager = sourceManager
         self.backfillableSourceIDs = backfillableSourceIDs
@@ -926,6 +988,27 @@ final class MetadataBackfillService {
         // mark so backfill re-attempts the song with the fresh file. The
         // song's metadata in the library is already reset to bare by
         // `MusicLibrary.addSongs`, so `start()` will pick it up next pass.
+        readingConfigurationChanged()
+        for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
+            configurationObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.readingConfigurationChanged() }
+            })
+        }
+        configurationObservers.append(NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let mode = MetadataReadingMode.resolve(
+                    storedValue: UserDefaults.standard.string(forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey),
+                    legacyFastEnabled: UserDefaults.standard.bool(forKey: MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
+                )
+                if mode != self.readingMode { self.readingConfigurationChanged() }
+            }
+        })
+
         NotificationCenter.default.addObserver(
             forName: .primuseSongContentChanged,
             object: nil,
@@ -983,12 +1066,17 @@ final class MetadataBackfillService {
         }
     }
 
+    deinit {
+        for observer in configurationObservers { NotificationCenter.default.removeObserver(observer) }
+    }
+
     /// Changes future dispatch cadence without discarding queue state. Moving
     /// into real background playback also releases the short UIKit assertion
     /// so its expiration cannot stop an audio-backed execution window.
     func setExecutionMode(_ mode: MetadataBackfillExecutionMode) {
         guard executionMode != mode else { return }
         executionMode = mode
+        readingConfigurationChanged()
         if mode == .backgroundDuringPlayback {
             // Real background audio already keeps the process eligible to run.
             // Holding a short UIApplication assertion here would make its
@@ -1061,6 +1149,8 @@ final class MetadataBackfillService {
         isRunning = true
         workerGeneration += 1
         let generation = workerGeneration
+        readProgressAccumulator.removeAll()
+        readingProgress.removeAll()
         beginBackgroundTaskIfNeeded()
         // Diagnostic: prove that we only pick still-bare songs. If you see
         // this number stay >0 forever you can compare against
@@ -1075,6 +1165,7 @@ final class MetadataBackfillService {
                 self.worker = nil
                 self.isRunning = false
                 self.activeSourceIDs.removeAll()
+                self.readingProgress.removeAll()
                 self.pendingCount = 0
                 if self.statePersistenceTask != nil {
                     self.scheduleStatePersistence(immediate: true)
@@ -1099,7 +1190,7 @@ final class MetadataBackfillService {
                 #if os(iOS)
                 if self.executionMode == .standard,
                    UIApplication.shared.applicationState == .active {
-                    _ = self.resumeAutomaticDeviceLocalIfNeeded()
+                    _ = self.resumeAutomaticForegroundIfNeeded()
                 }
                 #endif
                 // 完成通知 ── 处理 >= 5 首才发, 避免每次 worker 短跑都打扰用户。
@@ -1164,6 +1255,7 @@ final class MetadataBackfillService {
         worker = nil
         isRunning = false
         activeSourceIDs.removeAll()
+        readingProgress.removeAll()
         pendingCount = 0
         updateWaitingForWiFiState(presentPrompt: false)
         if statePersistenceTask != nil {
@@ -1201,6 +1293,10 @@ final class MetadataBackfillService {
 
     func pauseUserInitiated(sourceID: String? = nil) {
         guard sourceID == nil || userInitiatedSourceID == sourceID else { return }
+        if let pausedSourceID = userInitiatedSourceID {
+            automaticForegroundSourceIDs.remove(pausedSourceID)
+            if automaticDeviceLocalSourceID == pausedSourceID { automaticDeviceLocalSourceID = nil }
+        }
         userInitiatedSourceID = nil
         stop()
         setExecutionMode(.standard)
@@ -1236,25 +1332,26 @@ final class MetadataBackfillService {
         return true
     }
 
-    /// Resumes an interrupted sandbox import only while the app is active.
-    /// Background callbacks replace this mode with their one-snapshot profile,
-    /// so preserving the marker does not make background work unbounded.
+    /// Keep the intent from a completed foreground scan through scene changes.
+    /// Background callbacks still use one bounded snapshot per wake.
     @discardableResult
-    func resumeAutomaticDeviceLocalIfNeeded() -> Bool {
-        guard let sourceID = automaticDeviceLocalSourceID,
-              offlineReadableSourceIDs().contains(sourceID),
-              backfillableSourceIDs().contains(sourceID),
-              !library.disabledSourceIDs.contains(sourceID) else {
-            automaticDeviceLocalSourceID = nil
-            return false
-        }
+    func resumeAutomaticForegroundIfNeeded() -> Bool {
+        guard automaticDeviceLocalSourceID != nil || !automaticForegroundSourceIDs.isEmpty else { return false }
         refreshRemainingCounts(force: true)
-        guard remainingCount(forSource: sourceID) > 0 else {
-            automaticDeviceLocalSourceID = nil
-            setExecutionMode(.standard)
-            return false
+        let readable = backfillableSourceIDs().subtracting(library.disabledSourceIDs)
+        automaticForegroundSourceIDs = automaticForegroundSourceIDs.filter {
+            readable.contains($0) && remainingCount(forSource: $0) > 0
         }
-        setExecutionMode(.foregroundDeviceLocal)
+        if let sourceID = automaticDeviceLocalSourceID,
+           readable.contains(sourceID),
+           offlineReadableSourceIDs().contains(sourceID),
+           remainingCount(forSource: sourceID) > 0 {
+            setExecutionMode(.foregroundDeviceLocal)
+        } else {
+            automaticDeviceLocalSourceID = nil
+            guard !automaticForegroundSourceIDs.isEmpty else { return false }
+            setExecutionMode(.foregroundAfterSourceScan)
+        }
         start()
         return true
     }
@@ -1337,6 +1434,7 @@ final class MetadataBackfillService {
 
         #if os(iOS)
         if UIApplication.shared.applicationState == .active {
+            automaticForegroundSourceIDs.insert(sourceID)
             if offlineReadableSourceIDs().contains(sourceID) {
                 automaticDeviceLocalSourceID = sourceID
             }
@@ -2143,7 +2241,7 @@ final class MetadataBackfillService {
 
         let outcome = await processOne(song, isExplicitReread: true)
         if outcome.cancelled { return .cancelled }
-        let result = applySingleSongTagReadOutcome(outcome, original: song)
+        let result = await applySingleSongTagReadOutcome(outcome, original: song)
         let identity = PlaybackTagReadIdentity(song)
         switch result {
         case .completed(let kind):
@@ -2165,7 +2263,7 @@ final class MetadataBackfillService {
     func rereadTags(
         songIDs: [String],
         expectedSourceID: String,
-        progress: (MetadataTagRereadProgress) -> Void
+        progress: @escaping (MetadataTagRereadProgress) -> Void
     ) async -> MetadataTagRereadProgress {
         guard batchRereadingSourceIDs.insert(expectedSourceID).inserted else {
             var result = MetadataTagRereadProgress(total: Set(songIDs).count)
@@ -2175,16 +2273,57 @@ final class MetadataBackfillService {
         }
         defer {
             batchRereadingSourceIDs.remove(expectedSourceID)
+            library.flushDeferredLibraryMaintenance()
             refreshStatusSnapshot()
         }
-        return await MetadataTagRereadBatch.run(songIDs: songIDs) { songID in
+        let scheduler = MetadataReadScheduler<String, MetadataTagRereadBatch.Outcome>()
+        batchSchedulers[expectedSourceID] = scheduler
+        activeScheduler?.configurationChanged()
+        defer {
+            batchSchedulers[expectedSourceID] = nil
+            readingProgress[expectedSourceID] = nil
+            readProgressAccumulator[expectedSourceID] = nil
+            activeScheduler?.configurationChanged()
+            for other in batchSchedulers.values { other.configurationChanged() }
+        }
+        let now = Date()
+        readProgressAccumulator[expectedSourceID] = (now, 0, now)
+        return await MetadataTagRereadBatch.run(
+            songIDs: songIDs,
+            scheduler: scheduler,
+            limits: { [self] in
+                let budget = MetadataBackfillExecutionPolicy.limits(
+                    for: .userInitiated,
+                    preference: readingMode,
+                    environment: readingEnvironment(sourceID: expectedSourceID)
+                )
+                #if os(iOS)
+                if UIApplication.shared.applicationState != .active {
+                    return MetadataBackfillExecutionLimits(
+                        workerCount: 0, snapshotLimit: budget.snapshotLimit,
+                        interRequestDelay: budget.interRequestDelay, flushInterval: budget.flushInterval
+                    )
+                }
+                #endif
+                let occupied = (activeScheduler?.inFlightCount ?? 0)
+                    + batchSchedulers.filter { $0.key != expectedSourceID }
+                        .values.reduce(0) { $0 + $1.inFlightCount }
+                return budget.withWorkerCount(max(0, budget.workerCount - occupied))
+            }
+        ) { songID in
             let result = await self.rereadTags(songID: songID, expectedSourceID: expectedSourceID)
             switch result {
             case .completed: return .completed
             case .failed: return .failed
             case .alreadyReading, .unsupported: return .skipped
             }
-        } progress: { progress($0) }
+        } progress: { [self] value in
+            if value.processed > (readProgressAccumulator[expectedSourceID]?.completed ?? 0) {
+                recordReadCompletion(sourceID: expectedSourceID)
+            }
+            progress(value)
+            for other in batchSchedulers.values { other.configurationChanged() }
+        }
     }
 
     /// Immediately reads only the selected file. File-oriented remote sources
@@ -2216,7 +2355,7 @@ final class MetadataBackfillService {
                 return .failed(reason: String(localized: "reread_song_tags_failure_song_changed"))
             }
             let outcome = await processOne(song, isExplicitReread: true)
-            return applySingleSongTagReadOutcome(outcome, original: song)
+            return await applySingleSongTagReadOutcome(outcome, original: song)
         }
 
         do {
@@ -2260,7 +2399,11 @@ final class MetadataBackfillService {
                 return .failed(reason: String(localized: "reread_song_tags_failure_song_changed"))
             }
             let merged = mergeSong(bare: live, metadata: metadata)
-            library.replaceSongs([merged])
+            if batchRereadingSourceIDs.contains(song.sourceID) {
+                await library.replaceSongsPreparedOffMain([merged], maintenance: .deferred)
+            } else {
+                library.replaceSongs([merged])
+            }
             return .completed(
                 completionKind(for: metadata, original: live, merged: merged)
             )
@@ -2299,7 +2442,7 @@ final class MetadataBackfillService {
     private func applySingleSongTagReadOutcome(
         _ outcome: BackfillOutcome,
         original song: Song
-    ) -> SingleSongTagReadResult {
+    ) async -> SingleSongTagReadResult {
         let songID = song.id
         guard !outcome.cancelled else {
             return .failed(reason: String(localized: "reread_song_tags_failure_cancelled"))
@@ -2362,7 +2505,11 @@ final class MetadataBackfillService {
         var applied = false
         if let updated = outcome.song,
            let validated = backfillResultForApply(updated) {
-            library.replaceSongs([validated])
+            if batchRereadingSourceIDs.contains(song.sourceID) {
+                await library.replaceSongsPreparedOffMain([validated], maintenance: .deferred)
+            } else {
+                library.replaceSongs([validated])
+            }
             if outcome.artistInspected { markArtistInspected(songID: songID) }
             markMetadataInspected(songID: songID)
             clearAutomaticRetryState(songID: songID, sourceID: song.sourceID)
@@ -2397,7 +2544,11 @@ final class MetadataBackfillService {
         saveDeferredRetries()
         saveInspectionState()
         saveRetryCounts()
-        refreshRemainingCounts(force: true)
+        if batchRereadingSourceIDs.contains(song.sourceID) {
+            await refreshRemainingCountsOffMain()
+        } else {
+            refreshRemainingCounts(force: true)
+        }
         if applied || verifiedWithoutMutation {
             return .completed(outcome.completionKind)
         }
@@ -2424,6 +2575,7 @@ final class MetadataBackfillService {
     /// bounded ranges prove insufficient.
     private static let explicitRereadTimeout: TimeInterval = 180
     private func runWorker() async {
+        defer { library.flushDeferredLibraryMaintenance() }
         // Outer loop: take a snapshot of bare songs, process the snapshot
         // sequentially, flush in batches. We deliberately do NOT call
         // `pickNextBatch` per-song — until we flush the batch the
@@ -2497,7 +2649,6 @@ final class MetadataBackfillService {
     /// every `flushBatchSize` successes (or every `flushInterval` seconds).
     /// Each song in the snapshot is touched exactly once.
     private func processSnapshot(_ snapshot: [Song]) async {
-        defer { library.flushDeferredLibraryMaintenance() }
         var pendingFlush: [Song] = []
         var pendingMetadataInspectionIDs: Set<String> = []
         var pendingArtistInspectionIDs: Set<String> = []
@@ -2511,6 +2662,7 @@ final class MetadataBackfillService {
         let songsBySource: [String: [Song]] = Dictionary(grouping: snapshot) { $0.sourceID }
         for (_, sourceSongs) in songsBySource {
             guard !Task.isCancelled else { return }
+            guard executionLimits.workerCount > 0 else { break }
             guard let representative = sourceSongs.first else { continue }
             guard isStillEligible(representative),
                   canDispatchUnderCurrentNetworkPolicy(representative) else { continue }
@@ -2520,55 +2672,30 @@ final class MetadataBackfillService {
             }
         }
 
-        // 并发 worker 拉取 ── TaskGroup pull-pattern, 启动 N 个 task 跑 processOne,
-        // 谁完成立刻拿下一首。比 chunk 切片均匀, 慢源 / 快源混合时不会被慢
-        // 元素拖整批进度。pendingFlush 的累积 + flush 都在 main actor (TaskGroup
-        // body 是 main actor isolated, 各 task 完成回到这里时是 serial 的),
-        // 不需要锁。
-        var iterator = snapshot.makeIterator()
-        func nextEligibleSong() -> Song? {
-            while let candidate = iterator.next() {
-                if !manuallyReadingSongIDs.contains(candidate.id),
-                   isStillEligible(candidate),
-                   canDispatchUnderCurrentNetworkPolicy(candidate) {
-                    return candidate
-                }
-            }
-            return nil
+        let scheduler = MetadataReadScheduler<Song, BackfillOutcome>()
+        activeScheduler = scheduler
+        defer {
+            if activeScheduler === scheduler { activeScheduler = nil }
+            for other in batchSchedulers.values { other.configurationChanged() }
         }
-        func addTask(for song: Song, to group: inout TaskGroup<(song: Song, outcome: BackfillOutcome)>) {
-            let limits = executionLimits
-            let delay = limits.interRequestDelay
-            let priority: TaskPriority = executionMode == .backgroundDuringPlayback
-                ? .background
-                : .utility
-            group.addTask(priority: priority) { [self] in
-                if delay > 0 {
-                    do {
-                        try await Task.sleep(for: .seconds(delay))
-                    } catch {
-                        return (
-                            song,
-                            BackfillOutcome(song: nil, markFailed: false, cancelled: true)
-                        )
-                    }
-                }
-                return (song, await self.processOne(song))
-            }
+        let startedAt = Date()
+        for sourceID in activeSourceIDs where readProgressAccumulator[sourceID] == nil {
+            readProgressAccumulator[sourceID] = (startedAt, 0, startedAt)
         }
-        await withTaskGroup(of: (song: Song, outcome: BackfillOutcome).self) { group in
-            defer { group.cancelAll() }
-            let initialLimits = executionLimits
-            // Seed: background profiles deliberately launch one task only.
-            for _ in 0..<initialLimits.workerCount {
-                guard let song = nextEligibleSong() else { break }
-                addTask(for: song, to: &group)
-            }
-
-            // Drain: 每完成一个就启动下一个, 同时累积 / flush
-            while let result = await group.next() {
-                if Task.isCancelled { break }
-
+        await scheduler.run(
+            items: snapshot,
+            limits: { [self] in executionLimits },
+            shouldRead: { [self] song in
+                !manuallyReadingSongIDs.contains(song.id)
+                    && isStillEligible(song)
+                    && canDispatchUnderCurrentNetworkPolicy(song)
+            },
+            priority: executionMode == .backgroundDuringPlayback ? .background : .utility,
+            read: { [self] song in await processOne(song) }
+        ) { [self] song, outcome in
+                let result = (song: song, outcome: outcome)
+                if !outcome.cancelled { recordReadCompletion(sourceID: song.sourceID) }
+                for other in batchSchedulers.values { other.configurationChanged() }
                 processedTotal += 1
                 // UI progress does not need per-file granularity. Publishing
                 // every ten results prevents an Observable invalidation storm
@@ -2766,13 +2893,6 @@ final class MetadataBackfillService {
                     await refreshRemainingCountsOffMain()
                 }
 
-                // Cellular check between songs ── 切到 cellular 后停止派发新
-                // task, 已 in-flight 的让它们自然完成 (next 仍会 yield)。
-                // 派发下一首给空闲 worker。
-                if let next = nextEligibleSong() {
-                    addTask(for: next, to: &group)
-                }
-            }
         }
 
         // Final flush

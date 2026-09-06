@@ -1374,6 +1374,7 @@ struct PrimuseApp: App {
                     #endif
                 }
                 .onChange(of: scenePhase) { _, newPhase in
+                    metadataBackfill.readingConfigurationChanged()
                     navidromeAutoRefresh.setApplicationActive(newPhase == .active)
                     #if os(iOS) || os(macOS)
                     audioCacheSync.setApplicationActive(newPhase != .background)
@@ -1509,7 +1510,7 @@ struct PrimuseApp: App {
                         AppServices.shared.lyricsTextBackfill.stop()
                         metadataBackfill.stop()
                         if !metadataBackfill.resumeUserInitiatedIfNeeded(),
-                           !metadataBackfill.resumeAutomaticDeviceLocalIfNeeded() {
+                           !metadataBackfill.resumeAutomaticForegroundIfNeeded() {
                             metadataBackfill.setExecutionMode(.standard)
                         }
                         musicLibrary.suspendPendingIdentityResolution()
@@ -1543,6 +1544,7 @@ struct PrimuseApp: App {
                     }
                 }
                 .onChange(of: playerService.isPlaybackActive) { _, isActive in
+                    metadataBackfill.readingConfigurationChanged()
                     #if os(iOS)
                     guard scenePhase == .background else { return }
                     metadataBackfill.setExecutionMode(

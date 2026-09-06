@@ -14,31 +14,32 @@ public struct MetadataTagRereadProgress: Sendable, Equatable {
 public enum MetadataTagRereadBatch {
     public enum Outcome: Sendable { case completed, failed, skipped }
 
-    /// Freeze the complete filtered selection before rows start disappearing
-    /// from the status list. Serial reads preserve the single-file I/O budget.
+    /// The fixed selection survives row updates; the same live budget applies
+    /// to explicit rereads and automatic backfill. TV callers retain a serial default.
     @MainActor
     public static func run(
         songIDs: [String],
-        read: (String) async -> Outcome,
-        progress: (MetadataTagRereadProgress) -> Void
+        scheduler: MetadataReadScheduler<String, Outcome> = .init(),
+        limits: @escaping @MainActor () -> MetadataBackfillExecutionLimits = {
+            .init(workerCount: 1, snapshotLimit: 64, interRequestDelay: 0, flushInterval: 5)
+        },
+        read: @escaping @MainActor @Sendable (String) async -> Outcome,
+        progress: @escaping @MainActor (MetadataTagRereadProgress) -> Void
     ) async -> MetadataTagRereadProgress {
         var seen = Set<String>()
         let snapshot = songIDs.filter { seen.insert($0).inserted }
         var result = MetadataTagRereadProgress(total: snapshot.count)
         progress(result)
-        for songID in snapshot {
-            guard !Task.isCancelled else { break }
-            let outcome = await read(songID)
-            guard !Task.isCancelled else { break }
+        let cancelled = await scheduler.run(items: snapshot, limits: limits, read: read) { _, outcome in
+            guard !Task.isCancelled else { return }
             switch outcome {
             case .completed: result.completed += 1
             case .failed: result.failed += 1
             case .skipped: result.skipped += 1
             }
             progress(result)
-            await Task.yield()
         }
-        result.isCancelled = Task.isCancelled
+        result.isCancelled = cancelled || Task.isCancelled
         progress(result)
         return result
     }

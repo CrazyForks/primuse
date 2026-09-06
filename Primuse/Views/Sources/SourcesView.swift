@@ -200,44 +200,87 @@ struct SourceDirectorySelectionSession {
     let previousDirectories: [String]
 }
 
-/// Device-local metadata reading mode exposed alongside source management.
-/// Enabling the aggressive profile always requires an explicit confirmation;
-/// disabling it is immediate so a warm device can be throttled quickly.
+enum MetadataReadingText {
+    static func string(_ key: String) -> String {
+        NSLocalizedString(key, tableName: "MetadataReading", bundle: .main, comment: "")
+    }
+}
+
 struct MetadataBackfillPerformanceButton<Label: View>: View {
+    @AppStorage(MetadataBackfillExecutionPolicy.readingModeDefaultsKey)
+    private var storedMode = ""
     @AppStorage(MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
-    private var isEnabled = false
-    @State private var showsWarning = false
+    private var legacyFast = false
+    private let label: (MetadataReadingMode) -> Label
 
-    private let label: (Bool) -> Label
+    init(@ViewBuilder label: @escaping (MetadataReadingMode) -> Label) { self.label = label }
 
-    init(@ViewBuilder label: @escaping (Bool) -> Label) {
-        self.label = label
+    private var mode: MetadataReadingMode {
+        .resolve(storedValue: storedMode, legacyFastEnabled: legacyFast)
     }
 
     var body: some View {
-        Button {
-            if isEnabled {
-                isEnabled = false
-            } else {
-                showsWarning = true
+        Menu {
+            Picker(MetadataReadingText.string("title"), selection: Binding(
+                get: { mode }, set: { storedMode = $0.rawValue }
+            )) {
+                ForEach(MetadataReadingMode.allCases, id: \.self) { option in
+                    SwiftUI.Label(MetadataReadingText.string(option.rawValue), systemImage: option.symbol)
+                        .tag(option)
+                }
             }
+            Text(MetadataReadingText.string("help"))
         } label: {
-            label(isEnabled)
+            label(mode)
         }
-        .accessibilityLabel(Text("metadata_backfill_fast_mode"))
-        .accessibilityValue(isEnabled ? Text("a11y_value_on") : Text("a11y_value_off"))
-        .accessibilityHint(Text("metadata_backfill_fast_mode_footer"))
+        .accessibilityLabel(MetadataReadingText.string("title"))
+        .accessibilityValue(MetadataReadingText.string(mode.rawValue))
+        .accessibilityHint(MetadataReadingText.string("help"))
         .accessibilityIdentifier("sources.metadataBackfillPerformance")
-        .alert(
-            "metadata_backfill_fast_mode_warning_title",
-            isPresented: $showsWarning
-        ) {
-            Button("cancel", role: .cancel) {}
-            Button("metadata_backfill_fast_mode_confirm") {
-                isEnabled = true
+    }
+}
+
+extension MetadataReadingMode {
+    var symbol: String {
+        switch self {
+        case .automatic: "bolt.badge.automatic"
+        case .fast: "bolt.fill"
+        case .energySaving: "leaf"
+        }
+    }
+}
+
+struct MetadataReadingStatusView: View {
+    @Environment(MetadataBackfillService.self) private var backfill
+    let sourceID: String
+
+    var body: some View {
+        if backfill.activeSourceIDs.contains(sourceID)
+            || backfill.batchRereadingSourceIDs.contains(sourceID) {
+            TimelineView(.periodic(from: .now, by: 5)) { context in
+                let constraint = backfill.readingConstraint(forSource: sourceID)
+                let status = MetadataReadingText.string(
+                    constraint == .none ? backfill.readingMode.rawValue : constraint.rawValue
+                )
+                HStack(spacing: 5) {
+                    Text(status)
+                    if constraint != .cooling,
+                       let sample = backfill.readingProgress[sourceID],
+                       sample.completed >= 2,
+                       context.date.timeIntervalSince(sample.startedAt) >= 2,
+                       context.date.timeIntervalSince(sample.lastCompletedAt) < 15 {
+                        Text("·")
+                        Text(String(
+                            format: MetadataReadingText.string("rate"),
+                            Double(sample.completed) * 60 / context.date.timeIntervalSince(sample.startedAt)
+                        ))
+                        .monospacedDigit()
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
-        } message: {
-            Text("metadata_backfill_fast_mode_warning_message")
         }
     }
 }
@@ -325,9 +368,9 @@ struct SourcesContentView: View {
             }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    MetadataBackfillPerformanceButton { isEnabled in
-                        Image(systemName: isEnabled ? "bolt.circle.fill" : "bolt.circle")
-                            .foregroundStyle(isEnabled ? Color.orange : Color.primary)
+                    MetadataBackfillPerformanceButton { mode in
+                        Image(systemName: mode.symbol)
+                            .foregroundStyle(mode == .fast ? Color.orange : Color.primary)
                     }
 
                     Button { showAddSource = true } label: { Image(systemName: "plus") }
@@ -939,6 +982,7 @@ struct SourcesContentView: View {
                     .font(.caption2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                MetadataReadingStatusView(sourceID: source.id)
             }
             .foregroundStyle(.secondary)
             .padding(10)

@@ -1,0 +1,11 @@
+"title" = "Etiket okuma hızı";
+"automatic" = "Otomatik";
+"fast" = "Hıza öncelik ver";
+"energySaving" = "Enerji tasarrufu";
+"help" = "Çalmaya, güç moduna ve sıcaklığa uyum sağlar. Değişiklikler okuma sırasında uygulanır.";
+"playback" = "Çalmaya öncelik veriliyor";
+"lowPower" = "Düşük Güç Modu";
+"thermal" = "Soğutmak için yavaşlatıldı";
+"cooling" = "Aygıt soğuyana kadar duraklatıldı";
+"background" = "Arka planda okuma";
+"rate" = "%.1f parça/dk";

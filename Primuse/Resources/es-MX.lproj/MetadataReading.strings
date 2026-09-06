@@ -1,0 +1,11 @@
+"title" = "Velocidad de lectura de etiquetas";
+"automatic" = "Automático";
+"fast" = "Priorizar velocidad";
+"energySaving" = "Ahorrar energía";
+"help" = "Se adapta a la reproducción, la energía y la temperatura. Los cambios se aplican durante la lectura.";
+"playback" = "Protegiendo la reproducción";
+"lowPower" = "Modo de bajo consumo";
+"thermal" = "Lectura más lenta para enfriar";
+"cooling" = "En pausa hasta que el dispositivo se enfríe";
+"background" = "Lectura en segundo plano";
+"rate" = "%.1f pistas/min";
