@@ -1209,9 +1209,6 @@ struct SearchView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .monospacedDigit()
                     .foregroundStyle(PMColor.textMuted)
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(PMColor.textFaint)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)

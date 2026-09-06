@@ -1974,6 +1974,10 @@ private final class MacShortcutRecorderNSView: NSView {
 private struct MacSTEqualizerView: View {
     @Environment(EqualizerService.self) private var eq
 
+    private var presets: [EQPreset] {
+        EQPreset.builtInPresets + [eq.customPreset]
+    }
+
     var body: some View {
         @Bindable var eq = eq
 
@@ -1988,19 +1992,23 @@ private struct MacSTEqualizerView: View {
                         selection: Binding(
                             get: { eq.currentPreset.id },
                             set: { id in
-                                if let preset = EQPreset.builtInPresets.first(where: { $0.id == id }) {
+                                if let preset = presets.first(where: { $0.id == id }) {
                                     eq.applyPreset(preset)
                                 }
                             }
                         ),
-                        options: EQPreset.builtInPresets.map { ($0.id, $0.localizedName) },
+                        options: presets.map { ($0.id, $0.localizedName) },
                         width: 180
                     )
                 }
                 .settingsAnchor("equalizer.preset")
                 MacSTRow(Lz("Preset"), hint: Lz("Click to switch · Drag the slider below to make it custom"), block: true) {
-                    HStack(spacing: 6) {
-                        ForEach(EQPreset.builtInPresets) { preset in
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 92), spacing: 6, alignment: .leading)],
+                        alignment: .leading,
+                        spacing: 6
+                    ) {
+                        ForEach(presets) { preset in
                             Button {
                                 eq.applyPreset(preset)
                             } label: {
@@ -2009,7 +2017,6 @@ private struct MacSTEqualizerView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        Spacer(minLength: 6)
                         MacSTButton(title: Lz("Reset")) { eq.reset() }
                     }
                 }

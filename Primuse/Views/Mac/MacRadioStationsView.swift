@@ -128,7 +128,8 @@ struct MacRadioStationsView: View {
                         .frame(height: 32)
                         .background(PMColor.brand, in: .rect(cornerRadius: PMRadius.m))
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
             }

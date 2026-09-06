@@ -88,6 +88,12 @@ public final class WiFiTransferLibraryIndex: Sendable {
         return try WiFiTransferLibraryGrouping.toggling(ids, in: selected)
     }
 
+    public func selectingAll(in selected: Set<String>) throws -> Set<String> {
+        let next = try selected.union(toggling(nil, in: []))
+        guard next.count <= WiFiTransferLibraryGrouping.selectionLimit else { throw WiFiTransferError.tooLarge }
+        return next
+    }
+
     fileprivate func orderedSongIDs(in group: WiFiTransferLibraryGroupID) throws -> [String] {
         try Task.checkCancellation()
         let ordered = (members[group] ?? []).sorted { lhs, rhs in

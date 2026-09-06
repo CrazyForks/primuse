@@ -2,6 +2,8 @@ import AppIntents
 import SwiftUI
 
 struct SettingsShortcutsHelpView: View {
+    private let showsDirectlyEditableSettings = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(SettingsStrings.text("Use Siri to open settings, or combine setting actions in Shortcuts."))
@@ -11,19 +13,21 @@ struct SettingsShortcutsHelpView: View {
             help("Set Setting", "Choose a setting and an explicit on or off value.", icon: "switch.2")
             help("Set Audio Output Mode", "Choose High Fidelity or audio effects. Playback Speed is also available in Shortcuts.", icon: "waveform")
 
-            DisclosureGroup(SettingsStrings.text("Settings you can change")) {
-                ForEach(SettingsCatalog.available.filter { SettingsActionService.toggleIDs.contains($0.id) }) { item in
-                    Button {
-                        SettingsNavigation.shared.open(item.id)
-                    } label: {
-                        HStack {
-                            Text(verbatim: item.title)
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+            if showsDirectlyEditableSettings {
+                DisclosureGroup(SettingsStrings.text("Settings you can change")) {
+                    ForEach(SettingsCatalog.available.filter { SettingsActionService.toggleIDs.contains($0.id) }) { item in
+                        Button {
+                            SettingsNavigation.shared.open(item.id)
+                        } label: {
+                            HStack {
+                                Text(verbatim: item.title)
+                                Spacer()
+                                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 6)
                         }
-                        .padding(.vertical, 6)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             Text(SettingsStrings.text("Account authorization, sharing, deletion, and bulk changes are completed in the app with their existing confirmations."))

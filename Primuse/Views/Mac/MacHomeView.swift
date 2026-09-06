@@ -48,6 +48,14 @@ struct MacHomeView: View {
     @AppStorage("primuse.home.showRecentlyAdded") private var showRecentlyAdded = true
     @State private var selectedRadioID: String?
     @State private var pendingInsecureStation: RadioStation?
+    @State private var radioColumnCount = 1
+
+    private let radioGridLayout = RadioStationArtworkGridLayout(
+        minimumItemWidth: 200,
+        maximumItemWidth: .infinity,
+        spacing: Double(PMSpace.m14),
+        horizontalPadding: 0
+    )
 
     // 派生聚合缓存 —— mosaicSongs(全库 sort)、heroStats(全库 reduce)、三个 ratio
     // (各一次全库 filter) 都很重。首页同时观察 scanStates(每扫一个文件就变)和
@@ -721,20 +729,24 @@ struct MacHomeView: View {
         }
     }
 
-    /// 电台改成固定宽度的卡片网格。原来是一张 `maxWidth: .infinity` 的横幅，
-    /// 内容只占左边一小块，窗口越宽右边空出的渐变越大。网格跟下面的
-    /// 「资料库健康度 / 音乐源状态」一致：卡宽固定，宽窗口自动多排几列。
     private var radioStationGrid: some View {
         LazyVGrid(
-            // 下限给到 200 —— 电台名普遍比歌名长(常带频率/地区后缀)，
-            // 再窄就只能显示三四个字加省略号了。
-            columns: [GridItem(.adaptive(minimum: 200, maximum: 260), spacing: PMSpace.m14)],
+            columns: Array(
+                repeating: GridItem(.flexible(), spacing: PMSpace.m14),
+                count: radioColumnCount
+            ),
             alignment: .leading,
             spacing: PMSpace.m14
         ) {
-            ForEach(radioStationsStore.stations.prefix(4)) { station in
+            ForEach(radioStationsStore.stations.prefix(radioColumnCount)) { station in
                 radioStationTile(station)
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: Int.self) { geometry in
+            radioGridLayout.measure(containerWidth: geometry.size.width).columnCount
+        } action: { columnCount in
+            radioColumnCount = columnCount
         }
     }
 

@@ -266,7 +266,9 @@ final class AISettingsEditorModel {
         self.intelligence = intelligence
         isLoading = true
         defer { isLoading = false }
-        await intelligence.regionAvailability.refresh()
+        if intelligence.regionAvailability.context.region == .unknown {
+            await intelligence.regionAvailability.refresh()
+        }
         await intelligence.prepareLyricsTranscriptionCredentialMigration()
         draftProviderSet = intelligence.settingsStore.providerSet
         if !intelligence.settingsStore.hasPersistedSettings,

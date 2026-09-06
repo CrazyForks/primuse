@@ -14,7 +14,7 @@ struct HomeFoldersSection: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 NavigationLink {
-                    HomeFolderBrowser()
+                    HomeFolderBrowser(showsInlineBack: true)
                         #if os(iOS)
                         .minimalNavigationDetail()
                         #endif
@@ -103,41 +103,47 @@ struct HomeFolderArtwork: View {
 
 private struct HomeFolderRow: View {
     let node: LibraryFolderNode
+    var onOpen: (() -> Void)? = nil
     @Environment(HomeDiscoveryModel.self) private var model
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
     @AppStorage(HomeFolderPinStorage.key) private var pinsRawValue = ""
 
+    private var playButtonWidth: CGFloat {
+        #if os(macOS)
+        32
+        #else
+        44
+        #endif
+    }
+
+    private var artworkSize: CGFloat {
+        #if os(macOS)
+        36
+        #else
+        54
+        #endif
+    }
+
     var body: some View {
         let _ = model.revision
         HStack(spacing: 8) {
-            NavigationLink {
-                HomeFolderBrowser(nodeID: node.id)
-                    .environment(model)
-            } label: {
-                HStack(spacing: 14) {
-                    HomeFolderArtwork(node: node)
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "folder.fill").font(.caption).foregroundStyle(.tint)
-                            Text(HomeDiscoveryText.folderTitle(node))
-                                .font(.headline).lineLimit(1).foregroundStyle(.primary)
-                        }
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 6) { sourceBadge; songCount }
-                            VStack(alignment: .leading, spacing: 3) { sourceBadge; songCount }
-                        }
-                    }
-                    Spacer(minLength: 0)
+            Group {
+                if let onOpen {
+                    Button(action: onOpen) { folderLabel }
+                } else {
+                    NavigationLink {
+                        HomeFolderBrowser(nodeID: node.id)
+                            .environment(model)
+                    } label: { folderLabel }
                 }
-                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button { play(shuffle: false) } label: {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 25))
-                    .frame(width: 44, height: 54)
+                    .frame(width: playButtonWidth, height: artworkSize)
             }
             .buttonStyle(.plain).foregroundStyle(.tint)
             .disabled(node.descendantSongCount == 0)
@@ -150,6 +156,25 @@ private struct HomeFolderRow: View {
                 pinsRawValue = HomeFolderPinStorage.encode(model.pins(from: pinsRawValue).filter { $0 != node.id })
             }
         }
+    }
+
+    private var folderLabel: some View {
+        HStack(spacing: 14) {
+            HomeFolderArtwork(node: node, size: artworkSize)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.fill").font(.caption).foregroundStyle(.tint)
+                    Text(HomeDiscoveryText.folderTitle(node))
+                        .font(.headline).lineLimit(1).foregroundStyle(.primary)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { sourceBadge; songCount }
+                    VStack(alignment: .leading, spacing: 3) { sourceBadge; songCount }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
     }
 
     private var sourceBadge: some View {
@@ -181,19 +206,35 @@ private struct HomeFolderRow: View {
 struct HomeFolderBrowser: View {
     var nodeID: LibraryFolderNodeID?
     var usesInlineControls = false
+    var showsInlineBack = false
     #if os(iOS)
     @Environment(\.appNavigationMode) private var appNavigationMode
     @Environment(\.editMode) private var editMode
+    #endif
+    #if os(macOS)
+    @Environment(\.dismiss) private var dismiss
+    @State private var macListChromeHeight: CGFloat = 0
+    @State private var macListViewportHeight: CGFloat = 0
+    @State private var macSongAction: SongRowActionRequest?
+    @State private var macFolderPath: [LibraryFolderNodeID] = []
     #endif
     @Environment(HomeDiscoveryModel.self) private var model
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
     @AppStorage(HomeFolderPinStorage.key) private var pinsRawValue = ""
 
-    private var node: LibraryFolderNode? { nodeID.flatMap { model.index?.node(withID: $0) } }
+    private var currentNodeID: LibraryFolderNodeID? {
+        #if os(macOS)
+        macFolderPath.last ?? nodeID
+        #else
+        nodeID
+        #endif
+    }
+
+    private var node: LibraryFolderNode? { currentNodeID.flatMap { model.index?.node(withID: $0) } }
     private var pins: [LibraryFolderNodeID] { model.pins(from: pinsRawValue) }
     private var children: [LibraryFolderNode] {
-        if let nodeID { return model.index?.children(of: nodeID) ?? [] }
+        if let currentNodeID { return model.index?.children(of: currentNodeID) ?? [] }
         return model.index?.sourceNodes ?? []
     }
 
@@ -201,17 +242,49 @@ struct HomeFolderBrowser: View {
         #if os(iOS)
         appNavigationMode == .minimal ? 0 : 90
         #else
-        90
+        0
         #endif
     }
 
     var body: some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            macHeader
+            if let currentNodeID {
+                macFolderList(nodeID: currentNodeID)
+            } else {
+                folderList
+                    .listStyle(.inset)
+                    .scrollContentBackground(.hidden)
+                    .environment(\.defaultMinListRowHeight, 48)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(PMColor.bg)
+        .background {
+            if let request = macSongAction {
+                // Present actions once per page, outside the recycled scroll rows.
+                SongRowView(song: request.song, actionRequest: request)
+                    .id(request.id)
+            }
+        }
+        .navigationBarBackButtonHidden(nodeID != nil || showsInlineBack)
+        #else
+        folderList
+        #endif
+    }
+
+    private var folderList: some View {
         List {
             if nodeID == nil, !pins.isEmpty {
                 Section {
                     ForEach(pins, id: \.self) { id in
                         if let node = model.index?.node(withID: id) {
+                            #if os(macOS)
+                            HomeFolderRow(node: node, onOpen: { openMacFolder(node.id) })
+                            #else
                             HomeFolderRow(node: node)
+                            #endif
                         } else {
                             Label(HomeDiscoveryText.string("folder_unavailable"), systemImage: "folder.badge.questionmark")
                                 .foregroundStyle(.secondary)
@@ -300,7 +373,6 @@ struct HomeFolderBrowser: View {
                 includesSubfolders: true
             )
         }
-        #endif
         .toolbar {
             if let node {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -313,16 +385,136 @@ struct HomeFolderBrowser: View {
                     .accessibilityLabel("play")
                 }
             }
-            #if os(iOS)
             if node == nil, !usesInlineControls {
                 ToolbarItem(placement: .primaryAction) { EditButton() }
             }
-            #endif
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    private func openMacFolder(_ id: LibraryFolderNodeID) {
+        guard id != currentNodeID else { return }
+        // Native navigation pushes recreate window history/chrome; keep folder changes inside this pane.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            macSongAction = nil
+            macFolderPath.append(id)
         }
     }
 
+    private func macFolderList(nodeID: LibraryFolderNodeID) -> some View {
+        let folders = children
+        let songIDs = model.index?.directSongIDs(in: nodeID) ?? []
+        let hasSongSection = !folders.isEmpty && !songIDs.isEmpty
+        let songStart = folders.count + (hasSongSection ? 1 : 0)
+
+        return MacWindowedSongScrollView(
+            rowCount: songStart + songIDs.count,
+            rowHeight: 56,
+            chromeHeight: $macListChromeHeight,
+            viewportHeight: $macListViewportHeight
+        ) {
+            if !folders.isEmpty || !songIDs.isEmpty {
+                macSectionHeader(folders.isEmpty ? String(localized: "tab_songs") : HomeDiscoveryText.string("folders"))
+                    .padding(.horizontal, PMSpace.xxxl)
+                    .padding(.vertical, 8)
+            }
+        } rowContent: { position in
+            if position < folders.count {
+                childRow(folders[position])
+            } else if hasSongSection && position == folders.count {
+                macSectionHeader(String(localized: "tab_songs"))
+            } else {
+                let songID = songIDs[position - songStart]
+                MacHomeFolderSongRow(songID: songID, orderedSongIDs: songIDs) { song, action in
+                    macSongAction = SongRowActionRequest(song: song, action: action)
+                }
+                    .id(songID)
+            }
+        }
+        .modifier(MacFolderScrollReset(nodeID: nodeID))
+        .overlay {
+            if model.index == nil {
+                ProgressView()
+            } else if folders.isEmpty && songIDs.isEmpty {
+                ContentUnavailableView(
+                    HomeDiscoveryText.string("folder_unavailable"),
+                    systemImage: "folder",
+                    description: Text(HomeDiscoveryText.string("folders_hint"))
+                )
+            }
+        }
+    }
+
+    private func macSectionHeader(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(PMColor.textMuted)
+            Divider()
+        }
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private var macHeader: some View {
+        HStack(spacing: 12) {
+            if currentNodeID != nil || showsInlineBack {
+                MacNavigationBackButton(accessibilityIdentifier: "folderInlineBack") {
+                    if macFolderPath.isEmpty {
+                        dismiss()
+                    } else {
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            macSongAction = nil
+                            macFolderPath.removeLast()
+                        }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(node.map(HomeDiscoveryText.folderTitle) ?? HomeDiscoveryText.string("folders"))
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(PMColor.text)
+                    .lineLimit(1)
+                if let node {
+                    Text("\(node.descendantSongCount.formatted()) \(String(localized: "songs_count"))")
+                        .font(.system(size: 12))
+                        .foregroundStyle(PMColor.textMuted)
+                }
+            }
+            Spacer(minLength: 12)
+            if let node {
+                pinButton(node.id)
+                Button("play_all", systemImage: "play.fill") {
+                    playFolder(node.id, shuffle: false)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(node.descendantSongCount == 0)
+                Button("shuffle", systemImage: "shuffle") {
+                    playFolder(node.id, shuffle: true)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .disabled(node.descendantSongCount == 0)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 16)
+    }
+    #endif
+
     private func childRow(_ child: LibraryFolderNode) -> some View {
         HStack {
+            #if os(macOS)
+            Button { openMacFolder(child.id) } label: {
+                HomeFolderChildLabel(node: child)
+            }
+            .buttonStyle(.plain)
+            #else
             NavigationLink {
                 HomeFolderBrowser(nodeID: child.id)
                     .environment(model)
@@ -330,22 +522,46 @@ struct HomeFolderBrowser: View {
                 HomeFolderChildLabel(node: child)
             }
             if child.kind != .source { pinButton(child.id) }
+            #endif
         }
+        #if os(macOS)
+        .contextMenu {
+            Button("play", systemImage: "play.fill") { playFolder(child.id, shuffle: false) }
+                .disabled(child.descendantSongCount == 0)
+            Button("shuffle", systemImage: "shuffle") { playFolder(child.id, shuffle: true) }
+                .disabled(child.descendantSongCount == 0)
+            if child.kind != .source {
+                let pinned = pins.contains(child.id)
+                Button(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"),
+                       systemImage: pinned ? "pin.slash" : "pin") {
+                    togglePin(child.id)
+                }
+            }
+        }
+        #endif
     }
 
     private func pinButton(_ id: LibraryFolderNodeID) -> some View {
         let pinned = pins.contains(id)
         return Button {
-            var updated = pins
-            if pinned { updated.removeAll { $0 == id } } else { updated.insert(id, at: 0) }
-            pinsRawValue = HomeFolderPinStorage.encode(updated)
+            togglePin(id)
         } label: {
             Image(systemName: pinned ? "pin.fill" : "pin")
+                #if os(macOS)
+                .frame(width: 30, height: 30)
+                #else
                 .frame(width: 44, height: 44)
+                #endif
                 .foregroundStyle(pinned ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.borderless)
         .accessibilityLabel(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"))
+    }
+
+    private func togglePin(_ id: LibraryFolderNodeID) {
+        var updated = pins
+        if updated.contains(id) { updated.removeAll { $0 == id } } else { updated.insert(id, at: 0) }
+        pinsRawValue = HomeFolderPinStorage.encode(updated)
     }
 
     private func playFolder(_ id: LibraryFolderNodeID, shuffle: Bool) {
@@ -353,18 +569,170 @@ struct HomeFolderBrowser: View {
     }
 }
 
+#if os(macOS)
+private struct MacFolderScrollReset: ViewModifier {
+    let nodeID: LibraryFolderNodeID
+    @State private var position = ScrollPosition()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .task(id: nodeID) {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                position.scrollTo(y: 0)
+            }
+    }
+}
+
+private struct MacHomeFolderSongRow: View {
+    let songID: String
+    let orderedSongIDs: [String]
+    let performAction: (Song, SongRowActionRequest.Action) -> Void
+    @Environment(MusicLibrary.self) private var library
+    @Environment(AudioPlayerService.self) private var player
+    @Environment(SourceManager.self) private var sourceManager
+
+    var body: some View {
+        // Observe replacements only for rows inside the scroll window.
+        if let song = library.visibleSong(id: songID) {
+            let isCurrent = player.currentSong?.id == songID
+            Button {
+                if song.isPlayable {
+                    HomeDiscoveryPlayback.play(ids: orderedSongIDs, startingAt: songID, library: library, player: player)
+                } else {
+                    performAction(song, .unavailable)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    CachedArtworkView(
+                        coverRef: song.coverArtFileName, songID: songID,
+                        size: 36, cornerRadius: 5,
+                        sourceID: song.sourceID, filePath: song.filePath,
+                        fileFormat: song.fileFormat
+                    )
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(song.title)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(isCurrent ? PMColor.brand : PMColor.text)
+                        Text([library.artistDisplayName(for: song), song.albumTitle].compactMap { $0 }.joined(separator: " · "))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(PMColor.textMuted)
+                    }
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if isCurrent {
+                        Image(systemName: "play.fill")
+                            .foregroundStyle(PMColor.brand)
+                            .font(.system(size: 11))
+                    }
+                    if song.duration > 0 {
+                        Text(song.duration.formattedDuration)
+                            .font(.system(size: 11, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(PMColor.textMuted)
+                    }
+                    if song.sourceID != AppleMusicLibraryService.systemSourceID {
+                        OfflineAudioStatusBadge(snapshot: sourceManager.offlineAudioSnapshotEntry(for: song).snapshot)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .pmRowBackground(selected: isCurrent)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                MacHomeFolderSongMenu(song: song) { performAction(song, $0) }
+            }
+            .task(id: songID) {
+                guard song.sourceID != AppleMusicLibraryService.systemSourceID else { return }
+                // Skip disk probes for rows that pass through the window during fast scrolling.
+                do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+                await sourceManager.ensureOfflineAudioSnapshot(for: song)
+            }
+        } else {
+            Color.clear
+        }
+    }
+}
+
+private struct MacHomeFolderSongMenu: View {
+    let song: Song
+    let performAction: (SongRowActionRequest.Action) -> Void
+    @Environment(SourceManager.self) private var sourceManager
+    @Environment(MetadataBackfillService.self) private var backfill
+
+    var body: some View {
+        Section {
+            Button("scrape_song", systemImage: "wand.and.stars") { performAction(.scrape) }
+            Button("tag_editor_menu", systemImage: "tag") { performAction(.editTags) }
+            Button("lyrics_editor_menu", systemImage: "quote.bubble") { performAction(.editLyrics) }
+            Button("add_to_playlist", systemImage: "text.badge.plus") { performAction(.addToPlaylist) }
+            Button("similar_songs", systemImage: "sparkles") { performAction(.similar) }
+            if song.sourceID != AppleMusicLibraryService.systemSourceID {
+                offlineActions
+            }
+            if backfill.canRereadTags(for: song) {
+                Button(String(localized: backfill.isRereadingTags(songID: song.id) ? "reread_song_tags_in_progress" : "reread_song_tags"),
+                       systemImage: "arrow.clockwise") { performAction(.rereadTags) }
+                    .disabled(backfill.isRereadingTags(songID: song.id))
+            }
+            Button("song_info", systemImage: "info.circle") { performAction(.info) }
+        }
+        Section {
+            Button("share", systemImage: "square.and.arrow.up") { performAction(.share) }
+        }
+    }
+
+    @ViewBuilder
+    private var offlineActions: some View {
+        let snapshot = sourceManager.offlineAudioSnapshotEntry(for: song).snapshot
+        switch snapshot.state {
+        case .downloading:
+            Button("offline_downloading", systemImage: "arrow.down.circle") {}
+                .disabled(true)
+        case .pinned:
+            Button("offline_remove_song_cache", systemImage: "trash", role: .destructive) {
+                sourceManager.removeOfflineDownload(song: song)
+            }
+        case .cached:
+            Button("offline_keep_cached", systemImage: "pin") { sourceManager.downloadForOffline(song: song) }
+            Button("offline_remove_cached_file", systemImage: "trash", role: .destructive) {
+                sourceManager.removeOfflineDownload(song: song)
+            }
+        case .failed:
+            Button("offline_retry_download", systemImage: "arrow.clockwise") { sourceManager.downloadForOffline(song: song) }
+            Button("offline_clear_failed_download", systemImage: "trash", role: .destructive) {
+                sourceManager.removeOfflineDownload(song: song)
+            }
+        case .notCached:
+            Button("offline_cache_song", systemImage: "arrow.down.circle") { sourceManager.downloadForOffline(song: song) }
+        }
+    }
+}
+#endif
+
 private struct HomeFolderChildLabel: View {
     let node: LibraryFolderNode
 
     var body: some View {
         HStack(spacing: 12) {
+            #if os(macOS)
+            HomeFolderArtwork(node: node, size: 32)
+            #else
             HomeFolderArtwork(node: node, size: 44)
+            #endif
             VStack(alignment: .leading, spacing: 4) {
                 Text(HomeDiscoveryText.folderTitle(node)).lineLimit(2)
                 Text("\(node.descendantSongCount.formatted()) \(String(localized: "songs_count"))")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        #endif
     }
 }
 

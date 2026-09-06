@@ -4,6 +4,16 @@ import PrimuseKit
 import UIKit
 #endif
 
+struct SongRowActionRequest: Identifiable {
+    enum Action {
+        case scrape, editTags, editLyrics, addToPlaylist, similar, info, share, rereadTags, unavailable
+    }
+
+    let id = UUID()
+    let song: Song
+    let action: Action
+}
+
 struct SongRowView: View {
     @Environment(SourceManager.self) private var sourceManager
     @Environment(AudioPlayerService.self) private var player
@@ -17,6 +27,7 @@ struct SongRowView: View {
     @Environment(SourcesStore.self) private var sourcesStore
 
     let song: Song
+    var actionRequest: SongRowActionRequest? = nil
     var isPlaying: Bool = false
     var showAlbum: Bool = true
     var showsActions: Bool = true
@@ -68,229 +79,11 @@ struct SongRowView: View {
     }
 
     var body: some View {
-        let offline = offlineSnapshot
-
-        HStack(spacing: 10) {
-            // Cover art with playing overlay
-            ZStack {
-                CachedArtworkView(
-                    coverRef: song.coverArtFileName,
-                    songID: song.id,
-                    size: 44, cornerRadius: 6,
-                    sourceID: song.sourceID,
-                    filePath: song.filePath,
-                    fileFormat: song.fileFormat
-                )
-
-                if isPlaying {
-                    Color.black.opacity(0.35)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .frame(width: 44, height: 44)
-                    // While the player is still loading the active track,
-                    // show a spinner instead of the playing-waveform so the
-                    // user can tell "tap registered, audio is on the way"
-                    // from "audio is actually playing".
-                    if player.isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.white)
-                    } else {
-                        Image(systemName: "waveform")
-                            .font(.caption)
-                            .symbolEffect(.variableColor.iterative)
-                            .foregroundStyle(.white)
-                    }
-                }
-            }
-            .frame(width: 44, height: 44)
-            .opacity(isReadingDetails ? 0.65 : 1)
-
-            // Song info — title and subtitle only, no format/duration clutter
-            VStack(alignment: .leading, spacing: 2) {
-                Text(song.title)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .foregroundStyle(isPlaying ? Color.accentColor : Color.primary)
-                    .opacity(isReadingDetails ? 0.75 : 1)
-
-                HStack(spacing: 4) {
-                    if showsDetailsStatus {
-                        switch detailsState {
-                        case .reading:
-                            ProgressView()
-                                .scaleEffect(0.55)
-                                .frame(width: 12, height: 12)
-                            if backfill.isDeferredRetry(songID: song.id) {
-                                Text("backfill_retry_in_progress")
-                            } else {
-                                Text("backfill_in_progress")
-                            }
-                        case .waitingForSource:
-                            Image(systemName: "wifi.exclamationmark")
-                                .font(.caption2)
-                            Text("song_details_waiting_source")
-                        case .playableIncomplete:
-                            Image(systemName: "info.circle")
-                                .font(.caption2)
-                            Text("song_details_incomplete")
-                        case .confirmedFailure:
-                            Image(systemName: "exclamationmark.circle")
-                                .font(.caption2)
-                            Text("song_details_parse_failed")
-                        case .ready:
-                            EmptyView()
-                        }
-                        if let sourceName {
-                            Text("·")
-                            if let sourceIconName {
-                                Image(systemName: sourceIconName)
-                            }
-                            Text(sourceName)
-                        }
-                    } else {
-                        if song.isStandaloneMusicVideo {
-                            Image(systemName: "play.rectangle.fill")
-                                .font(.caption2)
-                                .accessibilityLabel(Text("music_video_badge"))
-                        }
-                        if let artist = library.artistDisplayName(for: song) {
-                            if song.isStandaloneMusicVideo { Text("·") }
-                            Text(artist)
-                        }
-                        if showAlbum, let album = song.albumTitle {
-                            Text("·")
-                            Text(album)
-                        }
-                        // 独立 MV 时长可能尚未回填, 不显示 0:00
-                        if song.duration > 0 {
-                            Text("·")
-                            Text(formatDuration(song.duration))
-                                .monospacedDigit()
-                        }
-                        if let sourceName {
-                            Text("·")
-                            if let sourceIconName {
-                                Image(systemName: sourceIconName)
-                            }
-                            Text(sourceName)
-                        }
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-
-            Spacer()
-
-            OfflineAudioStatusBadge(snapshot: offline)
-
-            if showsActions {
-                Menu {
-                    // Group 1: Actions
-                    Section {
-                        Button {
-                            requestScrape(from: .songRowActionMenu)
-                        } label: {
-                            Label(String(localized: "scrape_song"), systemImage: "wand.and.stars")
-                        }
-
-                        Button {
-                            showTagEditor = true
-                        } label: {
-                            Label(String(localized: "tag_editor_menu"), systemImage: "tag")
-                        }
-
-                        Button {
-                            showLyricsEditor = true
-                        } label: {
-                            Label(String(localized: "lyrics_editor_menu"), systemImage: "quote.bubble")
-                        }
-
-                        Button {
-                            showAddToPlaylist = true
-                        } label: {
-                            Label(String(localized: "add_to_playlist"), systemImage: "text.badge.plus")
-                        }
-
-                        Button {
-                            showSimilarSongs = true
-                        } label: {
-                            Label(String(localized: "similar_songs"), systemImage: "sparkles")
-                        }
-
-                        if supportsOfflineAudioCache {
-                            offlineActionButtons(snapshot: offline)
-                        }
-
-                        metadataRecoveryButtons()
-
-                        Button {
-                            showSongInfo = true
-                        } label: {
-                            Label(String(localized: "song_info"), systemImage: "info.circle")
-                        }
-                    }
-
-                    // Group 2: Share
-                    Section {
-                        Button {
-                            presentedShareSong = song
-                        } label: {
-                            Label(String(localized: "share"), systemImage: "square.and.arrow.up")
-                        }
-                    }
-
-                    if canDeleteSourceFile {
-                        // Group 3: Destructive
-                        Section {
-                            Button(role: .destructive) {
-                                showDeleteConfirm = true
-                            } label: {
-                                Label(String(localized: "delete_song"), systemImage: "trash")
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel("a11y_more_actions")
-            }
-        }
-        .songRowSwipeActions(
-            songID: song.id,
-            isEnabled: queueSwipeActionsEnabled
-                && song.isPlayable
-                && selection?.isActive != true,
-            onInsertNext: { player.insertNextInQueue([song]) },
-            onAppendToQueue: { player.appendToQueue([song]) }
-        )
-        .contentShape(Rectangle())
-        .task(id: song.id) {
-            guard supportsOfflineAudioCache else { return }
-            await sourceManager.ensureOfflineAudioSnapshot(for: song)
-        }
-        // VoiceOver 把整行合并成一个可选元素,读出来 "歌名,艺术家"。
-        // 支持多选的 iOS 列表由 SongSelectable 提供命名选择动作；其余页面
-        // 仍可通过 contextMenu 使用单曲操作。
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(
-            [song.title, library.artistDisplayName(for: song)]
-                .compactMap { $0 }
-                .joined(separator: " — ")
-        ))
-        // Only songs with nothing to play (no path and no duration) intercept
-        // taps with a hint; metadata-pending cloud songs stay tappable and
-        // play — the player resolves their duration on the fly.
-        .overlay {
-            if !song.isPlayable {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { showBareAlert = true }
+        Group {
+            if actionRequest != nil {
+                Color.clear.frame(width: 0, height: 0)
+            } else {
+                rowContent
             }
         }
         .alert(
@@ -301,7 +94,7 @@ struct SongRowView: View {
         } message: {
             Text(detailsAlertMessage)
         }
-        .songRowContextMenu(isEnabled: usesContextMenu) {
+        .songRowContextMenu(isEnabled: usesContextMenu && actionRequest == nil) {
             if let selection {
                 Section {
                     Button {
@@ -345,7 +138,7 @@ struct SongRowView: View {
                 }
 
                 if supportsOfflineAudioCache {
-                    offlineActionButtons(snapshot: offline)
+                    offlineActionButtons(snapshot: offlineSnapshot)
                 }
 
                 metadataRecoveryButtons()
@@ -465,7 +258,256 @@ struct SongRowView: View {
             Text(tagReadMessage ?? "")
         }
         .scraperSourceRequiredAlert(isPresented: $showNoScraperSourceAlert)
+        #if os(macOS)
+        .task(id: actionRequest?.id) {
+            guard let actionRequest else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            switch actionRequest.action {
+            case .scrape: requestScrape(from: .songRowContextMenu)
+            case .editTags: showTagEditor = true
+            case .editLyrics: showLyricsEditor = true
+            case .addToPlaylist: showAddToPlaylist = true
+            case .similar: showSimilarSongs = true
+            case .info: showSongInfo = true
+            case .share: presentedShareSong = song
+            case .rereadTags: rereadTags()
+            case .unavailable: showBareAlert = true
+            }
+        }
+        #endif
     }
+
+    @ViewBuilder
+    private var rowContent: some View {
+        let offline = offlineSnapshot
+        HStack(spacing: 10) {
+            // Cover art with playing overlay
+            ZStack {
+                CachedArtworkView(
+                    coverRef: song.coverArtFileName,
+                    songID: song.id,
+                    size: 44, cornerRadius: 6,
+                    sourceID: song.sourceID,
+                    filePath: song.filePath,
+                    fileFormat: song.fileFormat
+                )
+
+                if isPlaying {
+                    Color.black.opacity(0.35)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .frame(width: 44, height: 44)
+                    // While the player is still loading the active track,
+                    // show a spinner instead of the playing-waveform so the
+                    // user can tell "tap registered, audio is on the way"
+                    // from "audio is actually playing".
+                    if player.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "waveform")
+                            .font(.caption)
+                            .symbolEffect(.variableColor.iterative)
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .frame(width: 44, height: 44)
+            .opacity(isReadingDetails ? 0.65 : 1)
+
+            // Song info — title and subtitle only, no format/duration clutter
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .foregroundStyle(isPlaying ? Color.accentColor : Color.primary)
+                    .opacity(isReadingDetails ? 0.75 : 1)
+
+                HStack(spacing: 4) {
+                    if showsDetailsStatus {
+                        switch detailsState {
+                        case .reading:
+                            ProgressView()
+                                .scaleEffect(0.55)
+                                .frame(width: 12, height: 12)
+                            if backfill.isDeferredRetry(songID: song.id) {
+                                Text("backfill_retry_in_progress")
+                            } else {
+                                Text("backfill_in_progress")
+                            }
+                        case .waitingForSource:
+                            Image(systemName: "wifi.exclamationmark")
+                                .font(.caption2)
+                            Text("song_details_waiting_source")
+                        case .playableIncomplete:
+                            Image(systemName: "info.circle")
+                                .font(.caption2)
+                            Text("song_details_incomplete")
+                        case .confirmedFailure:
+                            Image(systemName: "exclamationmark.circle")
+                                .font(.caption2)
+                            Text("song_details_parse_failed")
+                        case .ready:
+                            EmptyView()
+                        }
+                        if let sourceName {
+                            Text("·")
+                            if let sourceIconName {
+                                Image(systemName: sourceIconName)
+                            }
+                            Text(sourceName)
+                        }
+                    } else {
+                        if song.isStandaloneMusicVideo {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.caption2)
+                                .accessibilityLabel(Text("music_video_badge"))
+                        }
+                        if let artist = library.artistDisplayName(for: song) {
+                            if song.isStandaloneMusicVideo { Text("·") }
+                            Text(artist)
+                        }
+                        if showAlbum, let album = song.albumTitle {
+                            Text("·")
+                            Text(album)
+                        }
+                        // 独立 MV 时长可能尚未回填, 不显示 0:00
+                        if song.duration > 0 {
+                            Text("·")
+                            Text(formatDuration(song.duration))
+                                .monospacedDigit()
+                        }
+                        if let sourceName {
+                            Text("·")
+                            if let sourceIconName {
+                                Image(systemName: sourceIconName)
+                            }
+                            Text(sourceName)
+                        }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+
+            Spacer()
+
+            OfflineAudioStatusBadge(snapshot: offline)
+
+            #if !os(macOS)
+            if showsActions {
+                Menu {
+                    // Group 1: Actions
+                    Section {
+                        Button {
+                            requestScrape(from: .songRowActionMenu)
+                        } label: {
+                            Label(String(localized: "scrape_song"), systemImage: "wand.and.stars")
+                        }
+
+                        Button {
+                            showTagEditor = true
+                        } label: {
+                            Label(String(localized: "tag_editor_menu"), systemImage: "tag")
+                        }
+
+                        Button {
+                            showLyricsEditor = true
+                        } label: {
+                            Label(String(localized: "lyrics_editor_menu"), systemImage: "quote.bubble")
+                        }
+
+                        Button {
+                            showAddToPlaylist = true
+                        } label: {
+                            Label(String(localized: "add_to_playlist"), systemImage: "text.badge.plus")
+                        }
+
+                        Button {
+                            showSimilarSongs = true
+                        } label: {
+                            Label(String(localized: "similar_songs"), systemImage: "sparkles")
+                        }
+
+                        if supportsOfflineAudioCache {
+                            offlineActionButtons(snapshot: offline)
+                        }
+
+                        metadataRecoveryButtons()
+
+                        Button {
+                            showSongInfo = true
+                        } label: {
+                            Label(String(localized: "song_info"), systemImage: "info.circle")
+                        }
+                    }
+
+                    // Group 2: Share
+                    Section {
+                        Button {
+                            presentedShareSong = song
+                        } label: {
+                            Label(String(localized: "share"), systemImage: "square.and.arrow.up")
+                        }
+                    }
+
+                    if canDeleteSourceFile {
+                        // Group 3: Destructive
+                        Section {
+                            Button(role: .destructive) {
+                                showDeleteConfirm = true
+                            } label: {
+                                Label(String(localized: "delete_song"), systemImage: "trash")
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("a11y_more_actions")
+            }
+            #endif
+        }
+        .songRowSwipeActions(
+            songID: song.id,
+            isEnabled: queueSwipeActionsEnabled
+                && song.isPlayable
+                && selection?.isActive != true,
+            onInsertNext: { player.insertNextInQueue([song]) },
+            onAppendToQueue: { player.appendToQueue([song]) }
+        )
+        .contentShape(Rectangle())
+        .task(id: song.id) {
+            guard supportsOfflineAudioCache else { return }
+            await sourceManager.ensureOfflineAudioSnapshot(for: song)
+        }
+        // VoiceOver 把整行合并成一个可选元素,读出来 "歌名,艺术家"。
+        // 支持多选的 iOS 列表由 SongSelectable 提供命名选择动作；其余页面
+        // 仍可通过 contextMenu 使用单曲操作。
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(
+            [song.title, library.artistDisplayName(for: song)]
+                .compactMap { $0 }
+                .joined(separator: " — ")
+        ))
+        // Only songs with nothing to play (no path and no duration) intercept
+        // taps with a hint; metadata-pending cloud songs stay tappable and
+        // play — the player resolves their duration on the fly.
+        .overlay {
+            if !song.isPlayable {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { showBareAlert = true }
+            }
+        }
+    }
+
 
     private var usesContextMenu: Bool {
         #if os(iOS)
@@ -1101,7 +1143,7 @@ private extension View {
     }
 }
 
-private struct OfflineAudioStatusBadge: View {
+struct OfflineAudioStatusBadge: View {
     let snapshot: OfflineAudioCacheSnapshot
 
     var body: some View {

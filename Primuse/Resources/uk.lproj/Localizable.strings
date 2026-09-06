@@ -957,7 +957,7 @@
 "yearly_meta_peak_month_big_format" = "Місяць %d";
 "Most Played This Month" = "Найчастіше грали цього місяця";
 "fullscreen_effect_collection_audio_reactive" = "Аудіо реактивний";
-"artwork_choose_file" = "Виберіть із файлів";
+"artwork_choose_file" = "Завантажити";
 "playlist_reorder_changed" = "Замовлення змінено";
 "encoding_fix_empty_message" = "Цей текст не можна перечитати як інше кодування. Якщо це все ще виглядає неправильно, оригінальні символи вже втрачено, і вам потрібно буде ввести їх повторно.";
 "smart_field_isInPlaylist" = "У списку відтворення";

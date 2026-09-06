@@ -2742,7 +2742,7 @@
 "artwork_restore_automatic" = "Restore Automatic Artwork";
 "artwork_upload" = "Upload an Image";
 "artwork_choose_photo" = "Choose from Photos";
-"artwork_choose_file" = "Choose from Files";
+"artwork_choose_file" = "Upload";
 "artwork_choose_song" = "Choose from Songs";
 "artwork_no_songs" = "There are no songs to choose from.";
 "artwork_storage_hint" = "A selected song is saved as a cross-device reference. Uploaded images are stored in Primuse and included when library sync is enabled.";

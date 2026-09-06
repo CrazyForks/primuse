@@ -40,7 +40,7 @@ private struct MacSongScrollWindowMetrics: Equatable {
 
 /// Scrolling invalidates only the bounded row window. The page header and
 /// library observers keep their existing view values while the window moves.
-private struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
+struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
     let rowCount: Int
     let rowHeight: CGFloat
     @Binding var chromeHeight: CGFloat

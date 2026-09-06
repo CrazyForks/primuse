@@ -165,6 +165,67 @@ struct WiFiTransferLibraryIndexTests {
         }
     }
 
+    @Test("Select all merges matching eligible songs across sources without loading pages")
+    func selectsAllMatchingSongsAcrossSources() async throws {
+        let matching = (0..<205).map {
+            Self.makeSong(id: "match-\($0)", title: "Needle \($0)",
+                          albumTitle: "Album \($0 % 2)", artistName: nil)
+        }
+        let restricted = Self.makeSong(id: "restricted", title: "Needle CUE",
+                                       albumTitle: nil, artistName: nil, cueSheetPath: "album.cue")
+        let outsideSearch = Self.makeSong(id: "outside-search", title: "Other song",
+                                         albumTitle: nil, artistName: nil)
+        let other = Self.makeSong(id: "other-source", title: "Needle elsewhere",
+                                 albumTitle: nil, artistName: nil, sourceID: Self.otherSourceID)
+        let songs = matching + [restricted, outsideSearch, other]
+        let first = try await WiFiTransferLibraryIndex.build(
+            sourceID: Self.sourceID, sourceType: .smb, songs: songs, query: "needle"
+        )
+        let second = try await WiFiTransferLibraryIndex.build(
+            sourceID: Self.otherSourceID, sourceType: .smb, songs: songs, query: "needle"
+        )
+
+        var selected: Set<String> = [outsideSearch.id, matching[0].id]
+        selected = try first.selectingAll(in: selected)
+        #expect(selected == Set(matching.map(\.id)).union([outsideSearch.id]))
+        #expect(try first.selectingAll(in: selected) == selected)
+        selected = try second.selectingAll(in: selected)
+        #expect(selected == Set(matching.map(\.id)).union([outsideSearch.id, other.id]))
+
+        let protected = try await WiFiTransferLibraryIndex.build(
+            sourceID: Self.sourceID, sourceType: .appleMusic, songs: songs, query: "needle"
+        )
+        #expect(try protected.selectingAll(in: selected) == selected)
+        let empty = try await WiFiTransferLibraryIndex.build(
+            sourceID: Self.sourceID, sourceType: .smb, songs: songs, query: "no matches"
+        )
+        #expect(try empty.selectingAll(in: selected) == selected)
+    }
+
+    @Test("Select all enforces the combined limit and preserves selection on overflow")
+    func limitsCombinedSelectAll() async throws {
+        let songs = (0..<WiFiTransferLibraryGrouping.selectionLimit).map {
+            Self.makeSong(id: "limit-\($0)", title: "Song \($0)", albumTitle: nil,
+                          artistName: nil, sourceID: $0 < 2_000 ? Self.sourceID : Self.otherSourceID)
+        }
+        let first = try await WiFiTransferLibraryIndex.build(
+            sourceID: Self.sourceID, sourceType: .smb, songs: songs, query: ""
+        )
+        let second = try await WiFiTransferLibraryIndex.build(
+            sourceID: Self.otherSourceID, sourceType: .smb, songs: songs, query: ""
+        )
+        let atLimit = try second.selectingAll(in: first.selectingAll(in: []))
+        #expect(atLimit == Set(songs.map(\.id)))
+        #expect(try first.selectingAll(in: atLimit) == atLimit)
+
+        var selected = try first.selectingAll(in: ["outside-filter"])
+        let original = selected
+        #expect(throws: WiFiTransferError.tooLarge) {
+            selected = try second.selectingAll(in: selected)
+        }
+        #expect(selected == original)
+    }
+
     @Test("100k-row scroll windows remain bounded at every library position")
     func keepsLargeScrollWindowsBounded() {
         let totalCount = 100_000

@@ -787,7 +787,7 @@
 "artist_popular" = "เล่นบ่อยที่สุด";
 "artist_releases" = "การเผยแพร่";
 "artists_count" = "ศิลปิน";
-"artwork_choose_file" = "เลือกจากไฟล์";
+"artwork_choose_file" = "อัปโหลด";
 "artwork_choose_photo" = "เลือกจากรูปภาพ";
 "artwork_choose_song" = "เลือกจากเพลง";
 "artwork_edit" = "เปลี่ยนอาร์ตเวิร์ก";

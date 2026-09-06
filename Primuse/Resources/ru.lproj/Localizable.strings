@@ -957,7 +957,7 @@
 "yearly_meta_peak_month_big_format" = "Месяц %d";
 "Most Played This Month" = "Самые популярные в этом месяце";
 "fullscreen_effect_collection_audio_reactive" = "Реактивный звук";
-"artwork_choose_file" = "Выбрать из файлов";
+"artwork_choose_file" = "Загрузить";
 "playlist_reorder_changed" = "Порядок изменен.";
 "encoding_fix_empty_message" = "Этот текст нельзя перечитать в другой кодировке. Если текст по-прежнему выглядит неправильно, значит, исходные символы уже потеряны, и вам придется ввести их заново.";
 "smart_field_isInPlaylist" = "В плейлисте";

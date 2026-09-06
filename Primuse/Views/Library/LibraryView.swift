@@ -525,22 +525,39 @@ struct LibraryView: View {
                 .font(.subheadline.weight(.medium))
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(visiblePins) { pin in
-                        pinnedItemCard(pin)
-                    }
-
-                    Button {
-                        showQuickAccessEditor = true
-                    } label: {
-                        addQuickAccessLabel
-                    }
-                    .buttonStyle(.plain)
+            if usesMinimalSectionControls {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 140), spacing: 16, alignment: .topLeading)],
+                    alignment: .leading,
+                    spacing: 24
+                ) {
+                    quickAccessItems
                 }
                 .padding(.horizontal, 16)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        quickAccessItems
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .contentMargins(.horizontal, 0, for: .scrollContent)
             }
-            .contentMargins(.horizontal, 0, for: .scrollContent)
+        }
+    }
+
+    private var quickAccessItems: some View {
+        Group {
+            ForEach(visiblePins) { pin in
+                pinnedItemCard(pin)
+            }
+
+            Button {
+                showQuickAccessEditor = true
+            } label: {
+                addQuickAccessLabel
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -609,32 +626,43 @@ struct LibraryView: View {
     private func quickAccessLabel<Artwork: View>(
         title: String,
         subtitle: String,
-        @ViewBuilder artwork: () -> Artwork
+        @ViewBuilder artwork: @escaping (CGFloat) -> Artwork
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            artwork()
-                .frame(width: 116, height: 116)
+            if usesMinimalSectionControls {
+                GeometryReader { geometry in
+                    artwork(geometry.size.width)
+                }
+                .aspectRatio(1, contentMode: .fit)
+            } else {
+                artwork(116)
+                    .frame(width: 116, height: 116)
+            }
 
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .lineLimit(usesMinimalSectionControls ? 2 : 1)
 
             Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 116, alignment: .leading)
+        .frame(width: usesMinimalSectionControls ? nil : 116, alignment: .leading)
+        .frame(maxWidth: usesMinimalSectionControls ? .infinity : nil, alignment: .leading)
         .contentShape(Rectangle())
     }
 
     private var addQuickAccessLabel: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        quickAccessLabel(
+            title: String(localized: "library_add_quick_access"),
+            subtitle: "\(visiblePins.count)/\(quickAccessLimit)"
+        ) { size in
             ZStack {
-                RoundedRectangle(cornerRadius: quickAccessCoverStyle == .circle ? 58 : 16, style: .continuous)
+                RoundedRectangle(cornerRadius: quickAccessCoverStyle == .circle ? size / 2 : 16, style: .continuous)
                     .fill(Color.secondary.opacity(0.07))
-                RoundedRectangle(cornerRadius: quickAccessCoverStyle == .circle ? 58 : 16, style: .continuous)
+                RoundedRectangle(cornerRadius: quickAccessCoverStyle == .circle ? size / 2 : 16, style: .continuous)
                     .stroke(
                         Color.secondary.opacity(0.32),
                         style: StrokeStyle(lineWidth: 1, dash: [5, 4])
@@ -643,19 +671,8 @@ struct LibraryView: View {
                     .font(.system(size: 28, weight: .medium))
                     .foregroundStyle(.secondary)
             }
-            .frame(width: 116, height: 116)
-
-            Text("library_add_quick_access")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-
-            Text("\(visiblePins.count)/\(quickAccessLimit)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .frame(width: size, height: size)
         }
-        .frame(width: 116, alignment: .leading)
-        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -667,9 +684,9 @@ struct LibraryView: View {
                     quickAccessLabel(
                         title: album.title,
                         subtitle: album.artistName ?? String(localized: "unknown_artist")
-                    ) {
-                        QuickAccessArtworkView(item: .album(album), size: 116, cornerRadius: 16) {
-                            libraryAlbumArtwork(album, size: 116, cornerRadius: 16, showsPlaceholder: true)
+                    ) { size in
+                        QuickAccessArtworkView(item: .album(album), size: size, cornerRadius: 16) {
+                            libraryAlbumArtwork(album, size: size, cornerRadius: 16, showsPlaceholder: true)
                         }
                     }
                 }
@@ -681,9 +698,9 @@ struct LibraryView: View {
                     quickAccessLabel(
                         title: artist.name,
                         subtitle: countText(artist.albumCount, unitKey: "albums_count")
-                    ) {
-                        QuickAccessArtworkView(item: .artist(artist), size: 116, cornerRadius: 16) {
-                            libraryArtistArtwork(artist, size: 116, cornerRadius: 58, showsPlaceholder: true)
+                    ) { size in
+                        QuickAccessArtworkView(item: .artist(artist), size: size, cornerRadius: 16) {
+                            libraryArtistArtwork(artist, size: size, cornerRadius: size / 2, showsPlaceholder: true)
                         }
                     }
                 }
@@ -698,9 +715,9 @@ struct LibraryView: View {
                             library.songCount(forPlaylist: MusicLibrary.likedSongsPlaylistID),
                             unitKey: "songs_count"
                         )
-                    ) {
-                        QuickAccessArtworkView(item: .playlist(likedPlaylist), size: 116, cornerRadius: 16) {
-                            likedArtwork(size: 116, cornerRadius: 16)
+                    ) { size in
+                        QuickAccessArtworkView(item: .playlist(likedPlaylist), size: size, cornerRadius: 16) {
+                            likedArtwork(size: size, cornerRadius: 16)
                         }
                     }
                 }
@@ -713,9 +730,9 @@ struct LibraryView: View {
                             library.songCount(forPlaylist: playlist.id),
                             unitKey: "songs_count"
                         )
-                    ) {
-                        QuickAccessArtworkView(item: .playlist(playlist), size: 116, cornerRadius: 16) {
-                            playlistArtwork(playlist, size: 116, cornerRadius: 16)
+                    ) { size in
+                        QuickAccessArtworkView(item: .playlist(playlist), size: size, cornerRadius: 16) {
+                            playlistArtwork(playlist, size: size, cornerRadius: 16)
                         }
                     }
                 }

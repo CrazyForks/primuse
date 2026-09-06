@@ -1692,6 +1692,38 @@ final class OpenAICompatibleProviderTests: XCTestCase {
     }
 
     @MainActor
+    func testReopeningSettingsPreservesResolvedRegionAndMenuAvailability() async throws {
+        let suiteName = "AISettingsEditorRegionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AISettingsStore(defaults: defaults, syncsThroughICloud: false)
+        let transcriptionSettings = LyricsTranscriptionSettingsStore(
+            defaults: defaults,
+            legacySettingsStore: settings,
+            syncsThroughICloud: false
+        )
+        let intelligence = MusicIntelligenceService(
+            settingsStore: settings,
+            lyricsTranscriptionSettingsStore: transcriptionSettings,
+            credentialStore: TestAICredentialStore()
+        )
+        XCTAssertEqual(intelligence.regionAvailability.context.region, .unknown)
+
+        let firstEditor = AISettingsEditorModel()
+        await firstEditor.load(using: intelligence)
+        let resolvedRegion = intelligence.regionAvailability.snapshot
+        XCTAssertTrue(firstEditor.didLoad)
+        XCTAssertNotEqual(resolvedRegion.context.region, .unknown)
+        XCTAssertTrue(intelligence.shouldExposeRemoteConfiguration)
+
+        let reopenedEditor = AISettingsEditorModel()
+        await reopenedEditor.load(using: intelligence)
+        XCTAssertTrue(reopenedEditor.didLoad)
+        XCTAssertEqual(intelligence.regionAvailability.snapshot, resolvedRegion)
+        XCTAssertTrue(intelligence.shouldExposeRemoteConfiguration)
+    }
+
+    @MainActor
     func testSettingsEditorAutomaticallyPersistsValidChanges() async throws {
         let defaults = try XCTUnwrap(UserDefaults(
             suiteName: "AISettingsEditorAutosaveTests.\(UUID().uuidString)"

@@ -30,10 +30,17 @@ struct WiFiTransferLibraryTree: View {
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                         .accessibilityLabel(String(localized: "clear"))
                 }
+                Divider().frame(height: 16)
+                Button(String(localized: "select_all")) { model.selectAll() }
+                    .buttonStyle(.plain).foregroundStyle(TransferAppearance.accent)
+                    .fixedSize()
+                    .disabled(model.selecting || !model.canSelectAll ||
+                              model.query != query.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .accessibilityIdentifier("transfer.library.selectAll")
                 if !selected.isEmpty {
-                    Divider().frame(height: 16)
                     Button(String(localized: "clear")) { model.setSelection([]) }
                         .buttonStyle(.plain).foregroundStyle(TransferAppearance.accent)
+                        .fixedSize()
                         .accessibilityIdentifier("transfer.library.clear")
                 }
             }
@@ -177,6 +184,17 @@ final class TransferLibraryTreeModel {
     @ObservationIgnored private var sourceScopes: [String: String] = [:]
     @ObservationIgnored private var snapshot: ((String) -> [Song])?
     @ObservationIgnored private var commit: ((Set<String>) -> Void)?
+
+    var canSelectAll: Bool {
+        guard rows.count > 0, snapshot != nil else { return false }
+        return sourceOrder.contains { id in
+            guard let source = sourceByID[id], source.type != .appleMusic else { return false }
+            if let index = indices[id] {
+                return index.eligibleCount > sourceSelectedCounts[id, default: 0]
+            }
+            return source.count > 0
+        }
+    }
 
     func reload(sources: [Source], query: String, selected: Set<String>,
                 version: SongListSnapshotVersion, sourceScopes: [String: String], selectedSources: Set<String>,
@@ -330,6 +348,32 @@ final class TransferLibraryTreeModel {
                 error = nil
             } catch {
                 if !Task.isCancelled, revision == generation { self.error = WiFiTransferText.string("librarySelectionLimit") }
+            }
+        }
+    }
+
+    func selectAll() {
+        guard !selecting, canSelectAll else { return }
+        selecting = true
+        let generation = revision, selectionGeneration = selectionRevision
+        let sourceIDs = sourceOrder.filter { sourceByID[$0]?.type != .appleMusic }
+        selectionJob = Task {
+            defer { if selectionRevision == selectionGeneration { selecting = false } }
+            var next = selected
+            do {
+                for id in sourceIDs {
+                    guard let index = await ensureIndex(id), !Task.isCancelled,
+                          revision == generation, selectionRevision == selectionGeneration else { return }
+                    next = try index.selectingAll(in: next)
+                    await Task.yield()
+                }
+                guard !Task.isCancelled, revision == generation, selectionRevision == selectionGeneration else { return }
+                setSelection(next)
+                error = nil
+            } catch {
+                if !Task.isCancelled, revision == generation, selectionRevision == selectionGeneration {
+                    self.error = WiFiTransferText.string("librarySelectionLimit")
+                }
             }
         }
     }

@@ -957,7 +957,7 @@
 "yearly_meta_peak_month_big_format" = "Ay %d";
 "Most Played This Month" = "Bu Ay En Çok Oynananlar";
 "fullscreen_effect_collection_audio_reactive" = "Ses Reaktifi";
-"artwork_choose_file" = "Dosyalardan Seç";
+"artwork_choose_file" = "Yükle";
 "playlist_reorder_changed" = "Sıralama değiştirildi";
 "encoding_fix_empty_message" = "Bu metin başka bir kodlama olarak tekrar okunamaz. Hâlâ yanlış görünüyorsa, orijinal karakterler zaten kaybolmuştur ve bunları yeniden yazmanız gerekecektir.";
 "smart_field_isInPlaylist" = "Çalma listesinde";
