@@ -321,6 +321,7 @@ struct MacImmersivePlayerView: View {
                     .overlay { Capsule().strokeBorder(chromeInk.opacity(0.24), lineWidth: 0.75) }
                 }
                 .buttonStyle(.plain)
+                .pmPointingHand()
                 .keyboardShortcut(.cancelAction)
                 .help(Text("exit_full_screen"))
             }
@@ -481,6 +482,7 @@ struct MacImmersivePlayerView: View {
             .overlay { Capsule().strokeBorder(chromeInk.opacity(0.24), lineWidth: 0.75) }
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
         .fixedSize()
         .overlay(alignment: .topLeading) {
             if showsEffectPicker {
@@ -539,6 +541,7 @@ struct MacImmersivePlayerView: View {
                     .overlay { Circle().strokeBorder(chromeInk.opacity(0.64), lineWidth: 1.4) }
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .disabled(player.isLoading)
             .help(Text(player.isPlaying ? "a11y_pause" : "a11y_play"))
 
@@ -560,6 +563,7 @@ struct MacImmersivePlayerView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
         .help(Text("queue"))
         .accessibilityLabel(Text("queue"))
     }
@@ -575,6 +579,7 @@ struct MacImmersivePlayerView: View {
                 .frame(width: 36, height: 36)
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
     }
 
     private func advanceRepeatMode() {
@@ -626,6 +631,7 @@ struct MacImmersivePlayerView: View {
                 .overlay { Circle().strokeBorder(chromeInk.opacity(0.28), lineWidth: 0.8) }
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
         .accessibilityLabel(Text(label))
     }
 
@@ -638,6 +644,7 @@ struct MacImmersivePlayerView: View {
                 .overlay { Capsule().strokeBorder(chromeInk.opacity(0.24), lineWidth: 0.75) }
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
         .help(Text(help))
     }
 

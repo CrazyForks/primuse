@@ -7,11 +7,12 @@ struct TVPlaylistsView: View {
     @Environment(TVStore.self) private var store
     var openPlayer: () -> Void = {}
 
+    @State private var filter = 0
     private let cols = 4
     private let gap: CGFloat = 36
 
     var body: some View {
-        let playlists = store.playlists
+        let playlists = store.playlists.filter { filter == 0 || (filter == 2 ? $0.kind == .smart : $0.kind != .smart) }
         ZStack {
             TVColor.bg.ignoresSafeArea()
             GeometryReader { geo in
@@ -24,6 +25,11 @@ struct TVPlaylistsView: View {
                             Text(PMString("ext.tv.playlists.title", playlists.count))
                                 .tvFont(.pageTitle).foregroundStyle(TVColor.text)
                         }
+                        HStack(spacing: 16) {
+                            TVSelectionButton(title: PMString("ext.tv.library.filter.all"), selected: filter == 0) { filter = 0 }
+                            TVSelectionButton(title: String(localized: "tab_playlists"), selected: filter == 1) { filter = 1 }
+                            TVSelectionButton(title: PMString("ext.tv.library.filter.smart"), selected: filter == 2) { filter = 2 }
+                        }.focusSection()
                         if playlists.isEmpty {
                             TVEmptyState(
                                 icon: "music.note.list",
@@ -55,8 +61,8 @@ struct TVPlaylistCard: View {
 
     var body: some View {
         let h = width * 0.8
-        TVFocusButton(radius: TVRadius.card, scale: 1.08, lift: 12,
-                      action: { playTapped() }) { _ in
+        TVFocusButton(ring: false,
+                      action: { playTapped() }) { focused in
             VStack(alignment: .leading, spacing: 0) {
                 ZStack {
                     TVPlaylistArtworkView(playlist: playlist, size: width, height: h)
@@ -84,9 +90,10 @@ struct TVPlaylistCard: View {
                     }
                 }
                 .frame(width: width, height: h)
+                .tvFocusRing(focused, radius: TVRadius.cover, scale: 1.04, lift: 0)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(playlist.name).tvFont(.cardTitle)
-                        .foregroundStyle(TVColor.text).lineLimit(2)
+                        .foregroundStyle(TVColor.text).lineLimit(2, reservesSpace: true)
                     Text(PMString("ext.tv.songsCount", playlist.count)).tvFont(.caption)
                         .foregroundStyle(TVColor.textFaint)
                 }

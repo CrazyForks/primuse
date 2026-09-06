@@ -6,6 +6,34 @@ import SwiftUI
 @testable import Primuse
 
 final class LibraryDisplayConfigurationTests: XCTestCase {
+    @MainActor
+    func testHomeAndListeningStatsKeepTheSameHistoricalCounts() {
+        let calendar = ListeningCalendar.make(locale: Locale(identifier: "zh_CN"), timeZone: TimeZone(identifier: "Asia/Shanghai")!)
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 6, hour: 12))!
+        let start = PlayHistoryStore.Range.week.statisticsStartDate(now: now, calendar: calendar)
+        XCTAssertEqual(start, HomeListeningPeriod.week.interval(now: now, calendar: calendar).start)
+        XCTAssertEqual(calendar.component(.day, from: start), 31)
+        let monthStart = PlayHistoryStore.Range.month.statisticsStartDate(now: now, calendar: calendar)
+        let recentStart = PlayHistoryStore.Range.month.startDate(now: now, calendar: calendar)
+        XCTAssertEqual(calendar.component(.day, from: monthStart), 1)
+        XCTAssertEqual(calendar.dateComponents([.day], from: recentStart, to: now).day, 30)
+        let entries: [PlayHistoryStore.Entry] = (0..<3).map { offset in
+            PlayHistoryStore.Entry(songID: offset < 2 ? "archived" : "available", songTitle: offset < 2 ? "历史歌曲" : "当前歌曲",
+                                   artistName: "歌手", albumTitle: "专辑", playedAt: start.addingTimeInterval(Double(offset + 1) * 3_600),
+                                   listenedSec: 120, sourceID: "source")
+        }
+        let home = HomeListeningRanking.ranks(events: entries.map(\.listeningEvent), songs: [:], folders: nil,
+                                              period: .week, category: .songs, now: now, calendar: calendar)
+        let stats = PlayHistoryStore.rankedItems(from: entries, category: .songs, limit: 20)
+        XCTAssertEqual(home.map(\.title), stats.map(\.title))
+        XCTAssertEqual(home.map(\.playCount), [2, 1])
+        XCTAssertEqual(stats.map(\.playCount), [2, 1])
+        let summary = PlayHistoryStore.summary(for: entries, calendar: calendar)
+        XCTAssertEqual(summary.totalPlays, 3)
+        XCTAssertEqual(summary.totalSec, 360)
+        XCTAssertEqual(summary.uniqueSongs, 2)
+    }
+
     func testHomeDiscoverySectionsMigrateWithoutReorderingExistingSections() {
         let original: [HomeSectionKind] = [.stats, .playlists, .continueListening, .quickAccess]
         let decoded = HomeSectionConfiguration.decode(HomeSectionConfiguration.encode(original))

@@ -87,15 +87,9 @@ struct MacMiniPlayerView: View {
             }
             .animation(.easeInOut(duration: 0.28), value: bottomMode)
         }
-        // 内容钉成设计尺寸:宽 300,高随折叠/展开在 220 / 540 间切换。
-        .frame(
-            width: MiniPlayerWindowController.fixedWidth,
-            height: bottomMode == .none
-                ? MiniPlayerWindowController.collapsedHeight
-                : MiniPlayerWindowController.expandedHeight
-        )
+        .frame(width: MiniPlayerWindowController.fixedWidth)
+        .frame(maxHeight: .infinity, alignment: .top)
         .pmWindowDragRegion()
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .task(id: lyricsLoadTaskIdentity) {
             if player.isLiveRadio {
                 lyrics = []
@@ -136,6 +130,7 @@ struct MacMiniPlayerView: View {
                     topBarIcon(bottomMode == .none ? "chevron.up" : "chevron.down")
                 }
                 .buttonStyle(.plain)
+                .pmPointingHand()
                 .help(Text(bottomMode == .none ? "show" : "hide"))
             }
 
@@ -144,6 +139,7 @@ struct MacMiniPlayerView: View {
                 topBarIcon("xmark")
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .help(Text("close"))
         }
         .padding(.trailing, 12)
@@ -215,6 +211,7 @@ struct MacMiniPlayerView: View {
                 bottomMode = bottomMode == .none ? .lyrics : .none
             }
         }
+        .pointerStyle(player.isLiveRadio ? nil : .link)
     }
 
     /// 标题/艺术家 — 居中显示, 紧贴 cover 下方。
@@ -264,6 +261,7 @@ struct MacMiniPlayerView: View {
                 }
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
     }
 
     @ViewBuilder
@@ -281,6 +279,7 @@ struct MacMiniPlayerView: View {
                 miniIcon("airplayaudio", tint: airPlayShown ? theme.accentColor : .secondary)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .glassEffect(.regular.interactive(), in: .circle)
             .popover(isPresented: $airPlayShown, arrowEdge: .top) {
                 AudioOutputPickerView()
@@ -291,6 +290,7 @@ struct MacMiniPlayerView: View {
                 miniIcon("backward.fill")
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .disabled(!player.canSwitchRadioStation)
             .help(Text("radio_previous_station"))
 
@@ -302,12 +302,14 @@ struct MacMiniPlayerView: View {
                 .background(theme.accentColor, in: Circle())
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .help(Text((player.isPlaying || player.isLoading) ? "radio_stop" : "a11y_play"))
 
             Button { Task { await player.next() } } label: {
                 miniIcon("forward.fill")
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .disabled(!player.canSwitchRadioStation)
             .help(Text("radio_next_station"))
 
@@ -346,6 +348,7 @@ struct MacMiniPlayerView: View {
                          tint: bottomMode == .lyrics ? theme.accentColor : .secondary)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .glassEffect(.regular.interactive(), in: .circle)
             .help(Text("lyrics_word"))
 
@@ -357,6 +360,7 @@ struct MacMiniPlayerView: View {
                          tint: bottomMode == .queue ? theme.accentColor : .secondary)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .glassEffect(.regular.interactive(), in: .circle)
             .help(Text("queue_title"))
 
@@ -364,6 +368,7 @@ struct MacMiniPlayerView: View {
                 miniIcon("airplayaudio", tint: airPlayShown ? theme.accentColor : .secondary)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .glassEffect(.regular.interactive(), in: .circle)
             .popover(isPresented: $airPlayShown, arrowEdge: .top) {
                 AudioOutputPickerView()
@@ -399,6 +404,7 @@ struct MacMiniPlayerView: View {
             .frame(width: 28, height: 28)
             .fixedSize()
             .glassEffect(.regular.interactive(), in: .circle)
+            .pmPointingHand()
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 12)
@@ -443,6 +449,7 @@ struct MacMiniPlayerView: View {
                     .background(PMColor.text.opacity(0.06), in: .circle)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
 
             Button { Task { await player.previous() } } label: {
                 Image(systemName: "backward.end.fill")
@@ -450,6 +457,7 @@ struct MacMiniPlayerView: View {
                     .foregroundStyle(PMColor.text)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
 
             // 播放/暂停 —— 实心强调色圆,设计稿里最醒目的粉色圆。
             Button { player.togglePlayPause() } label: {
@@ -470,6 +478,7 @@ struct MacMiniPlayerView: View {
                 }
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .disabled(player.isLoading)
 
             Button { Task { await player.next() } } label: {
@@ -478,6 +487,7 @@ struct MacMiniPlayerView: View {
                     .foregroundStyle(PMColor.text)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
 
             Button { cycleRepeat() } label: {
                 Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat")
@@ -487,6 +497,7 @@ struct MacMiniPlayerView: View {
                     .background(PMColor.text.opacity(0.06), in: .circle)
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
         }
         .frame(maxWidth: .infinity)
     }
@@ -612,6 +623,7 @@ struct MacMiniPlayerView: View {
                 player.currentIndex = index
                 Task { await player.play(song: song) }
             }
+            .pmPointingHand()
         }
     }
 
@@ -641,6 +653,7 @@ struct MacMiniPlayerView: View {
                                 .if(canSeekToLyricLine(line)) { view in
                                     view
                                         .onTapGesture { seekToLyricLine(line) }
+                                        .pmPointingHand()
                                         .accessibilityAddTraits(.isButton)
                                         .accessibilityHint(Text("player_tap_lyrics_to_seek_description"))
                                 }

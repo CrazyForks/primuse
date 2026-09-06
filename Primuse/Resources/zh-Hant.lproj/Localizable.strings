@@ -2866,7 +2866,7 @@
 "batch_delete_failed_format" = "%d 首刪除失敗";
 "batch_playlists_selected_count_format" = "已選 %d 個播放列表";
 "batch_playlists_delete_confirm_format" = "將刪除 %d 個播放列表。列表裡的歌曲不會被刪除。";
-"library_browse_folder" = "資料夾";
+"library_browse_folder" = "目錄";
 "library_browse_flat" = "平鋪";
 "library_browse_switch_loading" = "正在切換檢視…";
 "library_folder_uncategorized" = "未分類";
@@ -2875,8 +2875,8 @@
 "library_folder_apple_music_library_songs" = "資料庫歌曲";
 "library_folder_apple_music_not_in_playlist" = "未加入播放列表";
 "library_folder_apple_music_unnamed_playlist" = "未命名播放列表";
-"library_folder_expand" = "展開資料夾";
-"library_folder_collapse" = "折疊資料夾";
+"library_folder_expand" = "展開目錄";
+"library_folder_collapse" = "折疊目錄";
 "library_folder_selection_none" = "未選取";
 "library_folder_selection_partial" = "部分選取";
 "library_folder_selection_all" = "已選取";

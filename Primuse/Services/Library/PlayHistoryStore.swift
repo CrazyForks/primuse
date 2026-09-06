@@ -31,6 +31,13 @@ final class PlayHistoryStore {
         /// 在 `recordedThresholdSec` 附近。
         let listenedSec: TimeInterval
         let sourceID: String
+
+        var listeningEvent: HomeListeningEvent {
+            HomeListeningEvent(
+                songID: songID, playedAt: playedAt, listenedSeconds: listenedSec,
+                songTitle: songTitle, artistName: artistName, albumTitle: albumTitle
+            )
+        }
     }
 
     static let shared = PlayHistoryStore()
@@ -167,26 +174,41 @@ final class PlayHistoryStore {
             case .all: return "stats_range_all"
             }
         }
-        /// 起点 — 包含这个时刻之后的所有 entry。`.all` 用 distantPast 表示"全部历史"
-        /// (热力图侧另做截断, 见 `dailyPlayCounts`)。
-        func startDate(now: Date = Date()) -> Date {
-            let cal = Calendar.current
+        var calendarComponent: Calendar.Component? {
             switch self {
-            case .week:
-                return cal.date(byAdding: .day, value: -7, to: now) ?? now
-            case .month:
-                return cal.date(byAdding: .day, value: -30, to: now) ?? now
-            case .year:
-                return cal.date(byAdding: .day, value: -365, to: now) ?? now
-            case .all:
-                return .distantPast
+            case .week: return .weekOfYear
+            case .month: return .month
+            case .year: return .year
+            case .all: return nil
             }
+        }
+
+        func startDate(now: Date = Date(), calendar: Calendar = ListeningCalendar.current) -> Date {
+            let days: Int
+            switch self {
+            case .week: days = 7
+            case .month: days = 30
+            case .year: days = 365
+            case .all: return .distantPast
+            }
+            return calendar.date(byAdding: .day, value: -days, to: now) ?? now
+        }
+
+        func statisticsStartDate(now: Date = Date(), calendar: Calendar = ListeningCalendar.current) -> Date {
+            ListeningCalendar.interval(component: calendarComponent, now: now, calendar: calendar).start
         }
     }
 
+    // Discovery uses these rolling windows for "not recently played". Calendar
+    // statistics must not make yesterday's songs stale when a new month starts.
     func entries(in range: Range, now: Date = Date()) -> [Entry] {
         let cutoff = range.startDate(now: now)
-        return entries.filter { $0.playedAt >= cutoff }
+        return entries.filter { $0.playedAt >= cutoff && $0.playedAt <= now }
+    }
+
+    func statisticsEntries(in range: Range, now: Date = Date(), calendar: Calendar = ListeningCalendar.current) -> [Entry] {
+        let cutoff = range.statisticsStartDate(now: now, calendar: calendar)
+        return entries.filter { $0.playedAt >= cutoff && $0.playedAt <= now }
     }
 
     struct SongPlaybackStats: Equatable, Sendable {
@@ -219,72 +241,41 @@ final class PlayHistoryStore {
         let totalSec: TimeInterval
     }
 
-    /// Top 歌曲 — 按播放次数倒序。
     func topSongs(in range: Range, limit: Int = 20) -> [RankedItem] {
-        let scoped = entries(in: range)
-        let groups = Dictionary(grouping: scoped) { $0.songID }
-        return groups
-            .compactMap { (songID, plays) -> RankedItem? in
-                guard let first = plays.first else { return nil }
-                return RankedItem(
-                    id: songID,
-                    title: first.songTitle,
-                    subtitle: first.artistName,
-                    playCount: plays.count,
-                    totalSec: plays.reduce(0) { $0 + $1.listenedSec }
-                )
-            }
-            .sorted { $0.playCount > $1.playCount }
-            .prefix(limit)
-            .map { $0 }
+        Self.rankedItems(from: entries(in: range), category: .songs, limit: limit)
     }
 
-    /// Top 艺术家 —— 按累计听歌次数倒序。
     func topArtists(in range: Range, limit: Int = 20) -> [RankedItem] {
-        let scoped = entries(in: range).filter { !$0.artistName.isEmpty }
-        let groups = Dictionary(grouping: scoped) { $0.artistName }
-        return groups
-            .map { (name, plays) -> RankedItem in
-                let uniqueSongs = Set(plays.map(\.songID)).count
-                return RankedItem(
-                    id: "artist:\(name)",
-                    title: name,
-                    subtitle: String(format: String(localized: "stats_unique_songs_format"), uniqueSongs),
-                    playCount: plays.count,
-                    totalSec: plays.reduce(0) { $0 + $1.listenedSec }
-                )
-            }
-            .sorted { $0.playCount > $1.playCount }
-            .prefix(limit)
-            .map { $0 }
+        Self.rankedItems(from: entries(in: range), category: .artists, limit: limit)
     }
 
-    /// Top 专辑 — 同上。
     func topAlbums(in range: Range, limit: Int = 20) -> [RankedItem] {
-        let scoped = entries(in: range).filter { !$0.albumTitle.isEmpty }
-        let groups = Dictionary(grouping: scoped) { "\($0.albumTitle)|\($0.artistName)" }
-        return groups
-            .compactMap { (key, plays) -> RankedItem? in
-                guard let first = plays.first else { return nil }
-                return RankedItem(
-                    id: "album:\(key)",
-                    title: first.albumTitle,
-                    subtitle: first.artistName,
-                    playCount: plays.count,
-                    totalSec: plays.reduce(0) { $0 + $1.listenedSec }
-                )
-            }
-            .sorted { $0.playCount > $1.playCount }
-            .prefix(limit)
-            .map { $0 }
+        Self.rankedItems(from: entries(in: range), category: .albums, limit: limit)
+    }
+
+    static func rankedItems(from entries: [Entry], category: HomeListeningCategory, limit: Int) -> [RankedItem] {
+        HomeListeningRanking.ranks(
+            events: entries.map(\.listeningEvent), songs: [:], folders: nil,
+            period: .all, category: category
+        ).prefix(limit).map { rank in
+            RankedItem(
+                id: category == .songs ? (rank.songIDs.first ?? rank.id) : rank.id,
+                title: rank.title,
+                subtitle: category == .artists
+                    ? String(format: String(localized: "stats_unique_songs_format"), rank.songIDs.count)
+                    : rank.subtitle,
+                playCount: rank.playCount,
+                totalSec: rank.listenedSeconds
+            )
+        }
     }
 
     /// 按天聚合的播放数 (热力图用)。返回 [日期: 当天播放次数],
     /// 跨度从 `range` 起点到今天, 缺失的日子值为 0。
     func dailyPlayCounts(in range: Range, now: Date = Date()) -> [(date: Date, count: Int)] {
-        let cal = Calendar.current
+        let cal = ListeningCalendar.current
         let end = cal.startOfDay(for: now)
-        let scoped = entries(in: range)
+        let scoped = entries(in: range, now: now)
         // `.all` 没有固定起点 —— 从最早一条记录那天开始; 同时兜底最多回看 ~2 年,
         // 避免极端长的历史把热力图撑出成千上万列。
         let rawStart: Date
@@ -316,14 +307,19 @@ final class PlayHistoryStore {
     }
 
     func summary(in range: Range) -> Summary {
-        let scoped = entries(in: range)
-        let cal = Calendar.current
-        let dayBuckets = Set(scoped.map { cal.startOfDay(for: $0.playedAt) })
-        return Summary(
-            totalPlays: scoped.count,
-            totalSec: scoped.reduce(0) { $0 + $1.listenedSec },
-            activeDays: dayBuckets.count,
-            uniqueSongs: Set(scoped.map(\.songID)).count
+        Self.summary(for: entries(in: range))
+    }
+
+    func statisticsSummary(in range: Range) -> Summary {
+        Self.summary(for: statisticsEntries(in: range))
+    }
+
+    static func summary(for entries: [Entry], calendar: Calendar = ListeningCalendar.current) -> Summary {
+        Summary(
+            totalPlays: entries.count,
+            totalSec: entries.reduce(0) { $0 + ($1.listenedSec.isFinite ? max(0, $1.listenedSec) : 0) },
+            activeDays: Set(entries.map { calendar.startOfDay(for: $0.playedAt) }).count,
+            uniqueSongs: Set(entries.map(\.songID)).count
         )
     }
 

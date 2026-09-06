@@ -592,27 +592,11 @@ targets:
         buildPhase: resources
       - path: Primuse/Resources
         includes:
+          - "**/Localizable.strings"
+          - "**/HomeDiscovery.strings"
           - "**/WiFiTransfer.strings"
           - "**/InfoPlist.strings"
         buildPhase: resources
-    resources:
-      - path: PrimuseTV/Resources
-      - path: Primuse/Resources/en.lproj/Localizable.strings
-      - path: Primuse/Resources/zh-Hans.lproj/Localizable.strings
-      - path: Primuse/Resources/zh-Hant.lproj/Localizable.strings
-      - path: Primuse/Resources/de.lproj/Localizable.strings
-      - path: Primuse/Resources/fr.lproj/Localizable.strings
-      - path: Primuse/Resources/ja.lproj/Localizable.strings
-      - path: Primuse/Resources/ko.lproj/Localizable.strings
-      - path: Primuse/Resources/ru.lproj/Localizable.strings
-      - path: Primuse/Resources/uk.lproj/Localizable.strings
-      - path: Primuse/Resources/ar.lproj/Localizable.strings
-      - path: Primuse/Resources/es-MX.lproj/Localizable.strings
-      - path: Primuse/Resources/pt-BR.lproj/Localizable.strings
-      - path: Primuse/Resources/hi.lproj/Localizable.strings
-      - path: Primuse/Resources/th.lproj/Localizable.strings
-      - path: Primuse/Resources/tr.lproj/Localizable.strings
-      - path: Primuse/Resources/pl.lproj/Localizable.strings
     dependencies:
       - sdk: DeviceCheck.framework
       - target: PrimuseKit

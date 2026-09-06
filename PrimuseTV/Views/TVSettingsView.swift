@@ -18,8 +18,6 @@ private var tvDebugShowsThemePicker: Bool {
     #endif
 }
 
-/// tvOS 设置 — 左列常用清单,右列 Siri Remote 图示(对应 TVSettingsArtboard)。
-/// 刻意精简:无 EQ 推子 / 刮削源 / SSL 信任,这些留在 macOS / iOS。
 struct TVSettingsView: View {
     @Environment(TVStore.self) private var store
     @Environment(TVAppearanceState.self) private var appearanceState
@@ -82,16 +80,16 @@ struct TVSettingsView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 40) {
                     VStack(alignment: .leading, spacing: 0) {
-                        TVEyebrow(text: PMString("ext.tv.settings.eyebrow")).padding(.bottom, 6)
-                        Text(PMString("ext.tv.settings.general"))
+                        Text(PMString("ext.tv.settings.eyebrow"))
                             .tvFont(.pageTitle)
                             .foregroundStyle(TVColor.text)
                             .padding(.bottom, 24)
-                        VStack(spacing: 0) {
+                        settingsSection(String(localized: "sync")) {
                             navRow("icloud.fill", PMString("ext.tv.settings.icloudSync"), syncValue, trailing: "arrow.clockwise", action: sync)
                             settingDivider
                             toggleRow("arrow.triangle.2.circlepath", PMString("ext.tv.settings.autoSync"), isOn: $autoSync)
-                            settingDivider
+                        }
+                        settingsSection(String(localized: "appearance")) {
                             appearanceRow()
                             settingDivider
                             navRow(
@@ -108,7 +106,8 @@ struct TVSettingsView: View {
                             )
                             settingDivider
                             ambientIntensityRow()
-                            settingDivider
+                        }
+                        settingsSection(String(localized: "playback")) {
                             navRow("sparkles.tv", PMString("ext.tv.settings.immersive"),
                                    immersiveEffect.localizedTitle,
                                    action: { showsEffectPicker = true })
@@ -118,7 +117,8 @@ struct TVSettingsView: View {
                                 PMString("player_animated_artwork"),
                                 isOn: $animatedArtworkEnabled
                             )
-                            settingDivider
+                        }
+                        settingsSection(PMString("ext.tv.settings.library")) {
                             navRow("music.note", PMString("ext.tv.settings.library"), libraryStat) { go(.library) }
                             settingDivider
                             infoRow(
@@ -143,14 +143,14 @@ struct TVSettingsView: View {
                                     action: { showsAISettings = true }
                                 )
                             }
-                            settingDivider
+                        }
+                        settingsSection(String(localized: "about")) {
                             navRow("star.bubble", PMString("rate_on_app_store"), "App Store", trailing: "arrow.up.right") {
                                 openURL(PrimuseAppStore.reviewURL)
                             }
                             settingDivider
                             infoRow("info.circle", PMString("ext.tv.settings.about"), "\(version) (\(build)) · tvOS \(osVersion)")
                         }
-                        .tvPanel(radius: 20)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -215,6 +215,15 @@ struct TVSettingsView: View {
             }
         }
         .onAppear { FullscreenPlayerEffectSync.shared.install() }
+    }
+
+    private func settingsSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title).tvFont(.sectionTitle).foregroundStyle(TVColor.textMuted)
+            VStack(spacing: 0, content: content).tvPanel(radius: 20)
+        }
+        .padding(.bottom, 34)
+        .focusSection()
     }
 
     private func sync() {

@@ -123,43 +123,58 @@ final class TVLibraryStateTests: XCTestCase {
         }.pngData())
     }
 
-    func testPortableArtworkRestoresSongAndAlbumCoversWithContentDeduplication() async throws {
+    func testPortableArtworkRestoresSongAlbumAndArtistCoversWithContentDeduplication() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let sender = artworkStore(fixture, name: "sender")
         let receiver = artworkStore(fixture, name: "receiver")
         var first = fixture.song("first")
         first.albumID = "album"
+        first.artistName = "Artwork Artist"
+        first.artistArtworkFileName = "/artists/portrait.jpg"
         var second = fixture.song("second")
         second.albumID = "album"
+        second.artistName = first.artistName
         let original = try artworkImage()
         sender.storeCoverSync(original, for: first.id)
         sender.storeCoverSync(original, for: second.id)
         _ = await sender.storeAlbumCover(original, forAlbumID: "album")
+        let artist = try XCTUnwrap(MusicLibrary.computeAlbumsAndArtists(songs: [first, second]).artists.first)
+        let thumbnail = try XCTUnwrap(artist.thumbnailPath)
+        let sourceCacheID = artist.id + "\u{1F}" + thumbnail
+        _ = await sender.storeArtistImage(original, forArtistID: artist.id)
+        _ = await sender.storeArtistImage(original, forArtistID: sourceCacheID)
         let transfer = try XCTUnwrap(MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
             artworkSnapshot([first, second]), assetStore: sender
         ))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: transfer.data) as? [String: Any])
         XCTAssertEqual((object["cachedArtworkAssets"] as? [String: String])?.count, 1)
-        XCTAssertEqual((object["artworkCacheReferences"] as? [String: String])?.count, 3)
+        XCTAssertEqual((object["artworkCacheReferences"] as? [String: String])?.count, 5)
         MusicLibrary.restorePortableArtworkAssets(from: transfer.data, assetStore: receiver)
         let firstCover = try XCTUnwrap(receiver.readCoverData(named: receiver.expectedCoverFileName(for: first.id)))
         XCTAssertNotNil(UIImage(data: firstCover))
         XCTAssertEqual(firstCover, receiver.readCoverData(named: receiver.expectedCoverFileName(for: second.id)))
         let albumCover = await receiver.cachedAlbumCover(forAlbumID: "album")
         XCTAssertEqual(firstCover, albumCover)
+        let artistCover = await receiver.cachedArtistImage(forArtistID: artist.id)
+        let sourceArtistCover = await receiver.cachedArtistImage(forArtistID: sourceCacheID)
+        XCTAssertEqual(firstCover, artistCover)
+        XCTAssertEqual(firstCover, sourceArtistCover)
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: receiver.customArtworkDirectoryURL.path).isEmpty)
     }
 
-    func testPortableArtworkFiltersDeviceLocalCoversBeforeCloudExport() throws {
+    func testPortableArtworkFiltersDeviceLocalCoversBeforeCloudExport() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let sender = artworkStore(fixture, name: "sender")
-        let local = fixture.song("local-only")
+        var local = fixture.song("local-only")
+        local.artistName = "Local Artist"
         let remoteSource = MusicSource(id: "remote", name: "Remote", type: .smb)
         var remote = fixture.song("remote-song")
         remote.sourceID = remoteSource.id
         sender.storeCoverSync(try artworkImage(), for: local.id)
+        let localArtist = try XCTUnwrap(MusicLibrary.computeAlbumsAndArtists(songs: [local]).artists.first)
+        _ = await sender.storeArtistImage(try artworkImage(), forArtistID: localArtist.id)
         let transfer = try XCTUnwrap(MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
             artworkSnapshot([local, remote]), cloudSources: [fixture.source, remoteSource], assetStore: sender
         ))
@@ -194,7 +209,7 @@ final class TVLibraryStateTests: XCTestCase {
         var snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: artworkSnapshot([song])) as? [String: Any])
         let name = receiver.expectedCoverFileName(for: song.id)
         let otherName = receiver.expectedCoverFileName(for: "unrelated")
-        snapshot["artworkCacheReferences"] = [name: contentID, otherName: contentID, "../escape.jpg": contentID]
+        snapshot["artworkCacheReferences"] = [name: contentID, otherName: contentID, "../escape.jpg": contentID, "artist/" + otherName: contentID, "artist/../" + name: contentID]
         snapshot["cachedArtworkAssets"] = [contentID: Data("invalid".utf8).base64EncodedString()]
         MusicLibrary.restorePortableArtworkAssets(from: try JSONSerialization.data(withJSONObject: snapshot), assetStore: receiver)
         XCTAssertNil(receiver.readCoverData(named: name))
@@ -202,6 +217,7 @@ final class TVLibraryStateTests: XCTestCase {
         MusicLibrary.restorePortableArtworkAssets(from: try JSONSerialization.data(withJSONObject: snapshot), assetStore: receiver)
         XCTAssertEqual(receiver.readCoverData(named: name), data)
         XCTAssertNil(receiver.readCoverData(named: otherName))
+        XCTAssertNil(receiver.readCoverData(named: "artist/" + otherName))
         XCTAssertFalse(FileManager.default.fileExists(atPath: receiver.artworkDirectoryURL.deletingLastPathComponent().appendingPathComponent("escape.jpg").path))
     }
 
@@ -219,6 +235,22 @@ final class TVLibraryStateTests: XCTestCase {
         await fixture.library.waitForPendingIndex()
         let albumID = try XCTUnwrap(fixture.library.song(id: withCover.id)?.albumID)
         XCTAssertEqual(fixture.library.preferredArtworkSong(forAlbumID: albumID)?.id, withCover.id)
+    }
+
+    func testCollectionPlaybackStartsSelectedSongAndKeepsCollectionQueue() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.library.addSongs([fixture.song("first"), fixture.song("second"), fixture.song("outside")])
+        await fixture.library.waitForPendingIndex()
+        let store = fixture.store()
+        store.reload()
+        XCTAssertTrue(store.playResolvedQueue(songIDs: ["first", "second"], shuffled: false, startingAt: "second"))
+        XCTAssertEqual(store.nowPlaying.songID, "second")
+        store.previous(restartCurrentIfNeeded: false)
+        XCTAssertEqual(store.nowPlaying.songID, "first")
+        store.next()
+        XCTAssertEqual(store.nowPlaying.songID, "second")
+        store.engine.stop()
     }
 
     func testPreviousTrackShortcutSkipsEvenAfterPlaybackHasAdvanced() async throws {
@@ -836,6 +868,34 @@ final class TVLibraryStateTests: XCTestCase {
         var wrongType = owned
         wrongType.type = .smb
         XCTAssertFalse(TVLocalTransferSource.isOwned(wrongType))
+    }
+
+    func testArtistArtworkScanRetainsImageAndReadsOnlyOwnedFiles() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = fixture.store()
+        let source = try store.prepareTransferSource()
+        let folderName = "Artist Artwork \(UUID().uuidString)"
+        let folder = TVLocalTransferSource.root.appendingPathComponent(folderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let imageURL = folder.appendingPathComponent("Artist.jpg")
+        try artworkImage().write(to: imageURL)
+        let path = "/\(folderName)/Artist.jpg"
+        let result = await store.scanner.scan(source: source, lister: TVLocalDirectoryLister(),
+            dirs: ["/\(folderName)"], credential: nil, existingSongs: [],
+            onSkeletonBatch: { _ in }, onMetadataBatch: { _ in })
+        XCTAssertTrue(result.enumerationCompleted)
+        XCTAssertTrue(result.songs.isEmpty)
+        let item = try XCTUnwrap(result.resumeState.index.values.first(where: { $0.path == path }))
+        XCTAssertEqual(item.parentPath, "/\(folderName)")
+        let data = await TVArtistArtworkReader.read(reference: path, source: source, credential: nil)
+        XCTAssertNotNil(data.flatMap(UIImage.init(data:)))
+        let traversal = await TVArtistArtworkReader.read(reference: "../Artist.jpg", source: source, credential: nil)
+        XCTAssertNil(traversal)
+        try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("linked.jpg"), withDestinationURL: imageURL)
+        let linked = await TVArtistArtworkReader.read(reference: "/\(folderName)/linked.jpg", source: source, credential: nil)
+        XCTAssertNil(linked)
     }
 
     func testReceivedMusicAdaptersListAndReadOnlyInsideManagedRoot() async throws {

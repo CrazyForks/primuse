@@ -11,10 +11,14 @@
 "pin_folder" = "Przypnij do strony głównej";
 "empty_ranking" = "Brak historii odsłuchów";
 "ranking_hint" = "Odtwórz muzykę lub wybierz inny okres.";
-"ranking_scope" = "Na podstawie zachowanych odtworzeń bieżącej biblioteki.";
+"ranking_scope" = "Korzysta z zachowanej lokalnej historii, tak jak lokalne statystyki słuchania.";
 "champion" = "Najczęściej odtwarzane";
 "rising" = "Najszybszy awans";
 "longest" = "Najdłużej słuchane";
 "play_count" = "Odtworzenia: %d";
 "positions_gained" = "Awans o %d miejsc";
 "recent_albums" = "Ostatnio dodane albumy";
+"folder_display_count" = "Liczba na ekranie głównym";
+"manage_folders" = "Zarządzaj kolejnością katalogów";
+"no_pinned_folders" = "Wybierz katalogi w sekcji Zobacz wszystkie.";
+"folder_ranking_scope" = "Ranking katalogów obejmuje utwory z dostępnym katalogiem.";

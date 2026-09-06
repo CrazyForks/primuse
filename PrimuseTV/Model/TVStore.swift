@@ -2502,6 +2502,11 @@ final class TVStore {
             }
             if let pruningRecovery { library.finishScanPruning(pruningRecovery) }
             pruningRecovery = nil
+            if source.type != .fnMusic && source.type != .daoliyu {
+                library.updateAutomaticArtistArtworkCatalog(
+                    SourceArtistArtworkCatalog(sourceID: source.id, index: result.resumeState.index)
+                )
+            }
             refreshVisibility()
             library.sourceSyncDidComplete()
             sourcesRevision += 1
@@ -2845,7 +2850,7 @@ final class TVStore {
     /// Siri 等系统入口已经解析出确定的歌曲顺序时直接采用该队列，避免再按
     /// 单曲所属专辑重建随机队列而丢失语音请求的范围与顺序。
     @discardableResult
-    func playResolvedQueue(songIDs: [String], shuffled: Bool) -> Bool {
+    func playResolvedQueue(songIDs: [String], shuffled: Bool, startingAt songID: String? = nil) -> Bool {
         guard !hasPendingSnapshotRecovery else { return false }
         let resolved = songIDs.filter { song($0) != nil }
         guard !resolved.isEmpty else { return false }
@@ -2853,9 +2858,9 @@ final class TVStore {
         queueCanonicalIndices = Array(resolved.indices)
         if shuffled { queueCanonicalIndices.shuffle() }
         queue = queueCanonicalIndices.map { resolved[$0] }
-        guard let first = song(queue[0]) else { return false }
+        queueIndex = songID.flatMap { queue.firstIndex(of: $0) } ?? 0
+        guard let first = song(queue[queueIndex]) else { return false }
         shuffleEnabled = shuffled
-        queueIndex = 0
         startPlaying(first)
         return true
     }

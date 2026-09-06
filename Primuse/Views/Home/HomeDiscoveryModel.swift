@@ -67,18 +67,9 @@ final class HomeDiscoveryModel {
     }
 
     func pins(from rawValue: String) -> [LibraryFolderNodeID] {
-        guard rawValue.isEmpty else { return HomeFolderPinStorage.decode(rawValue) }
-        guard let index else { return [] }
-        var result: [LibraryFolderNodeID] = []
-        for source in index.sourceNodes {
-            for node in index.children(of: source.id) {
-                guard node.kind == .scanRoot || node.kind == .folder,
-                      node.descendantSongCount > 0 else { continue }
-                result.append(node.id)
-                if result.count == 3 { return result }
-            }
-        }
-        return result
+        let count = UserDefaults.standard.object(forKey: HomeFolderPinStorage.displayCountKey) as? Int
+            ?? HomeFolderPinStorage.defaultDisplayCount
+        return HomeFolderPinStorage.resolvedPins(rawValue, index: index, defaultCount: count)
     }
 
     func songs(in id: LibraryFolderNodeID, scope: LibraryFolderSongScope = .descendants) -> [Song] {
@@ -146,7 +137,13 @@ struct HomeDiscoveryObserver: View {
                 }
                 if structureChanged { nameRevision &+= 1 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .primusePlaybackHistoryDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
+                model.refreshHistory()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+                model.refreshHistory()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
                 model.refreshHistory()
             }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in

@@ -725,6 +725,11 @@ final class TVSourceScanner {
                 let files = entries.filter { !$0.isDir }
                 for entry in files {
                     try Task.checkCancellation()
+                    if SourceArtistArtworkCatalog.isSupportedCandidateFileName(entry.name) {
+                        Self.recordIndexedItem(entry, parentPath: work.path, songIDs: [], sidecarFingerprint: nil,
+                                               seenEpoch: 1, in: &state.index)
+                        continue
+                    }
                     let ext = (entry.name as NSString).pathExtension.lowercased()
                     var candidates: [Song] = []
                     if PrimuseConstants.supportedAudioExtensions.contains(ext)

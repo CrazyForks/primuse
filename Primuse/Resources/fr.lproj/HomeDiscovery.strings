@@ -11,10 +11,14 @@
 "pin_folder" = "Épingler à l’accueil";
 "empty_ranking" = "Aucune écoute enregistrée";
 "ranking_hint" = "Écoutez de la musique ou choisissez une autre période.";
-"ranking_scope" = "Selon les écoutes conservées de votre bibliothèque actuelle.";
+"ranking_scope" = "Utilise l’historique local conservé, comme les statistiques d’écoute locales.";
 "champion" = "Le plus écouté";
 "rising" = "Plus forte progression";
 "longest" = "Plus longue écoute";
 "play_count" = "%d écoutes";
 "positions_gained" = "Gain de %d places";
 "recent_albums" = "Albums ajoutés récemment";
+"folder_display_count" = "Nombre sur l’accueil";
+"manage_folders" = "Gérer et réorganiser les dossiers";
+"no_pinned_folders" = "Choisissez vos dossiers dans Tout voir.";
+"folder_ranking_scope" = "Le classement des dossiers inclut les titres dont le dossier est disponible.";

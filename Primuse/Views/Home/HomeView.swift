@@ -297,6 +297,15 @@ struct HomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .primusePlaybackHistoryDidChange)) { _ in
                 refreshHomeSnapshot(force: true)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
+                refreshHomeSnapshot(force: true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+                refreshHomeSnapshot(force: true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+                refreshHomeSnapshot(force: true)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
                 tintProvider.invalidateArtwork(from: note)
             }
@@ -529,7 +538,9 @@ struct HomeView: View {
     }
 
     private var contentView: some View {
-        LazyVStack(alignment: .leading, spacing: 24) {
+        // Section contents are bounded. Stable vertical sizes avoid lazy
+        // placement loops when a ranking card changes height near the viewport.
+        VStack(alignment: .leading, spacing: 24) {
             if homeSnapshot.hasContent {
                 libraryHeroSection
             }
@@ -1500,18 +1511,7 @@ struct HomeView: View {
     ) -> HomeSnapshot {
         let snapshotStartedAt = Date()
         let recentSongs = makeRecentSongs()
-        let calendar = Calendar.current
-        let interval = HomeListeningPeriod.week.interval(now: Date(), calendar: calendar)
-        let weekEntries = PlayHistoryStore.shared.entries.filter {
-            $0.playedAt >= interval.start && $0.playedAt <= interval.end
-                && library.unobservedVisibleSong(id: $0.songID) != nil
-        }
-        let summary = PlayHistoryStore.Summary(
-            totalPlays: weekEntries.count,
-            totalSec: weekEntries.reduce(0) { $0 + $1.listenedSec },
-            activeDays: Set(weekEntries.map { calendar.startOfDay(for: $0.playedAt) }).count,
-            uniqueSongs: Set(weekEntries.map(\.songID)).count
-        )
+        let summary = PlayHistoryStore.shared.statisticsSummary(in: .week)
         let topArtistHistory = PlayHistoryStore.shared.topArtists(in: .month, limit: 8)
         let allPlaylists = library.playlists
         let likedPlaylist = allPlaylists.first {
@@ -1680,7 +1680,7 @@ struct HomeView: View {
     @ViewBuilder
     private func statsGlimpseSection(_ summary: PlayHistoryStore.Summary) -> some View {
         NavigationLink {
-            ListeningStatsView()
+            ListeningStatsView(initialRange: .week, initiallyShowsLocalHistory: true)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "chart.bar.xaxis")

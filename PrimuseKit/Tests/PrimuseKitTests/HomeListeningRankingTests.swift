@@ -52,13 +52,70 @@ struct HomeListeningRankingTests {
         #expect(first.map(\.id) == reversed.map(\.id))
     }
 
-    @Test func unavailableSongsAndEmptyMetadataAreExcluded() {
+    @Test func unavailableSongsRemainInHistoryAndEmptyArtistMetadataIsExcluded() {
         let songs = ["a": song("a", artist: "", album: "")]
         let events = [event("a", day: 1), event("removed", day: 2)]
         let songsRank = HomeListeningRanking.ranks(events: events, songs: songs, folders: nil, period: .week, category: .songs, now: date(5), calendar: calendar)
         let artists = HomeListeningRanking.ranks(events: events, songs: songs, folders: nil, period: .week, category: .artists, now: date(5), calendar: calendar)
-        #expect(songsRank.count == 1)
+        #expect(songsRank.count == 2)
         #expect(artists.isEmpty)
+    }
+
+    @Test func historicalMetadataSurvivesLibraryChangesAndUsesLatestRecordedTitle() {
+        let events = [
+            HomeListeningEvent(songID: "a", playedAt: date(1), listenedSeconds: 90,
+                               songTitle: "Old title", artistName: "Original artist", albumTitle: "Original album"),
+            HomeListeningEvent(songID: "a", playedAt: date(2), listenedSeconds: 120,
+                               songTitle: "Latest title", artistName: "Original artist", albumTitle: "Original album"),
+            HomeListeningEvent(songID: "removed", playedAt: date(3), listenedSeconds: 180,
+                               songTitle: "Archived song", artistName: "Original artist", albumTitle: "Original album")
+        ]
+        let currentSongs = ["a": song("a", artist: "Retagged artist", album: "Retagged album")]
+        for category in [HomeListeningCategory.artists, .albums] {
+            let current = HomeListeningRanking.ranks(events: events, songs: currentSongs, folders: nil,
+                                                     period: .week, category: category, now: date(5), calendar: calendar)
+            let historyOnly = HomeListeningRanking.ranks(events: events, songs: [:], folders: nil,
+                                                         period: .week, category: category, now: date(5), calendar: calendar)
+            #expect(current.count == 1)
+            #expect(current.first?.playCount == 3)
+            #expect(current.first?.listenedSeconds == 390)
+            #expect(current.map(\.id) == historyOnly.map(\.id))
+        }
+        let ranks = HomeListeningRanking.ranks(events: events, songs: currentSongs, folders: nil,
+                                               period: .week, category: .songs, now: date(5), calendar: calendar)
+        #expect(ranks.first?.title == "Latest title")
+        #expect(ranks.first?.playCount == 2)
+    }
+
+    @Test func weekBoundariesFollowRegionAndExplicitFirstWeekday() {
+        let zone = TimeZone(identifier: "Asia/Shanghai")!
+        for (locale, weekday, start) in [("zh_CN", 2, date(31, month: 8, hour: 0)),
+                                         ("en_GB", 2, date(31, month: 8, hour: 0)),
+                                         ("en_US", 1, date(6, hour: 0)),
+                                         ("zh_Hans_US", 1, date(6, hour: 0)),
+                                         ("zh_CN@fw=sun", 1, date(6, hour: 0))] {
+            let regional = ListeningCalendar.make(locale: Locale(identifier: locale), timeZone: zone)
+            #expect(regional.firstWeekday == weekday)
+            #expect(HomeListeningPeriod.week.interval(now: date(6), calendar: regional).start == start)
+        }
+        let preferred = ListeningCalendar.make(locale: Locale(identifier: "zh_CN"), timeZone: zone, firstWeekday: 1)
+        #expect(preferred.firstWeekday == 1)
+    }
+
+    @Test func directoryCountCanExceedThreeWithoutTruncatingStoredOrder() {
+        let sources = (1...6).map {
+            LibraryFolderSourceDescriptor(sourceID: "nas\($0)", displayName: "NAS \($0)", scanRoots: ["/Music"], pathSemantics: .hierarchical)
+        }
+        let index = LibraryFolderIndexBuilder.build(sources: sources, songs: (1...6).map { song("song\($0)", source: "nas\($0)") })
+        #expect(HomeFolderPinStorage.resolvedPins("", index: index, defaultCount: 3).count == 3)
+        let six = HomeFolderPinStorage.resolvedPins("", index: index, defaultCount: 6)
+        #expect(six.count == 6)
+        let reordered = Array(six.reversed())
+        let saved = HomeFolderPinStorage.encode(reordered)
+        #expect(HomeFolderPinStorage.resolvedPins(saved, index: index, defaultCount: 1) == reordered)
+        #expect(HomeFolderPinStorage.resolvedPins("[]", index: index, defaultCount: 6).isEmpty)
+        #expect(HomeFolderPinStorage.displayCount(0) == 1)
+        #expect(HomeFolderPinStorage.displayCount(100) == 30)
     }
 
     @Test func nestedFoldersCountEachPlayOnceAndKeepSourcesSeparate() throws {

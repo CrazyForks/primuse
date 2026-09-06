@@ -66,6 +66,39 @@ public struct ProgressScrubSession: Equatable, Sendable {
 
 /// Pure interaction rules shared by the Now Playing UI and its regressions.
 public enum NowPlayingInteractionPolicy {
+    public enum MiniPlayerExpansionAnchor: Sendable {
+        case top
+        case bottom
+    }
+
+    public static func miniPlayerExpansionAnchor(
+        frame: CGRect,
+        expandedHeight: CGFloat,
+        visibleFrame: CGRect
+    ) -> MiniPlayerExpansionAnchor {
+        let additionalHeight = max(0, expandedHeight - frame.height)
+        let spaceBelow = frame.minY - visibleFrame.minY
+        let spaceAbove = visibleFrame.maxY - frame.maxY
+        return spaceBelow >= additionalHeight || spaceBelow >= spaceAbove ? .top : .bottom
+    }
+
+    public static func miniPlayerFrame(
+        currentFrame: CGRect,
+        targetHeight: CGFloat,
+        visibleFrame: CGRect,
+        anchor: MiniPlayerExpansionAnchor
+    ) -> CGRect {
+        let height = min(targetHeight, visibleFrame.height)
+        let width = min(currentFrame.width, visibleFrame.width)
+        let proposedY = anchor == .top ? currentFrame.maxY - height : currentFrame.minY
+        return CGRect(
+            x: min(max(currentFrame.minX, visibleFrame.minX), visibleFrame.maxX - width),
+            y: min(max(proposedY, visibleFrame.minY), visibleFrame.maxY - height),
+            width: width,
+            height: height
+        )
+    }
+
     /// A small movement threshold prevents a normal track tap from becoming a seek.
     public static let minimumScrubDistance: Double = 8
     public static let minimumScrubHitTargetSize: Double = 44

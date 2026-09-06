@@ -4,7 +4,7 @@ import PrimuseKit
 struct HomeFoldersSection: View {
     @Environment(HomeDiscoveryModel.self) private var model
     @AppStorage(HomeFolderPinStorage.key) private var pinsRawValue = ""
-    @State private var showsPicker = false
+    @AppStorage(HomeFolderPinStorage.displayCountKey) private var displayCount = HomeFolderPinStorage.defaultDisplayCount
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -22,46 +22,41 @@ struct HomeFoldersSection: View {
                     }
                     .font(.subheadline).foregroundStyle(.secondary)
                 }
+                .accessibilityIdentifier("home.allFolders")
             }
 
             if model.index == nil {
                 ProgressView().frame(maxWidth: .infinity).padding()
             } else {
                 let nodes = model.pins(from: pinsRawValue).compactMap { model.index?.node(withID: $0) }
-                ForEach(Array(nodes.prefix(3))) { node in
+                ForEach(Array(nodes.prefix(HomeFolderPinStorage.displayCount(displayCount)))) { node in
                     HomeFolderRow(node: node)
                     Divider().padding(.leading, 68)
                 }
-                Button { showsPicker = true } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "plus")
-                            .font(.title3)
-                            .frame(width: 54, height: 54)
-                            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4])))
-                        Text(HomeDiscoveryText.string("add_folder"))
-                            .font(.subheadline)
-                        Spacer()
-                    }
-                    .foregroundStyle(.secondary)
-                    .contentShape(Rectangle())
+                if nodes.isEmpty {
+                    Text(HomeDiscoveryText.string("no_pinned_folders"))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("home.addFolder")
             }
         }
         .padding(.horizontal, 20)
-        .sheet(isPresented: $showsPicker) {
-            NavigationStack {
-                HomeFolderBrowser()
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("done") { showsPicker = false }
-                        }
-                    }
-            }
+    }
+}
+
+struct HomeFolderManagementView: View {
+    @State private var model = HomeDiscoveryModel()
+    #if os(iOS)
+    @State private var editMode: EditMode = .inactive
+    #endif
+
+    var body: some View {
+        HomeFolderBrowser()
             .environment(model)
-        }
+            .background { HomeDiscoveryObserver(model: model) }
+            #if os(iOS)
+            .environment(\.editMode, $editMode)
+            #endif
     }
 }
 
@@ -293,7 +288,7 @@ struct HomeFolderBrowser: View {
         let pinned = pins.contains(id)
         return Button {
             var updated = pins
-            if pinned { updated.removeAll { $0 == id } } else { updated.append(id) }
+            if pinned { updated.removeAll { $0 == id } } else { updated.insert(id, at: 0) }
             pinsRawValue = HomeFolderPinStorage.encode(updated)
         } label: {
             Image(systemName: pinned ? "pin.fill" : "pin")
@@ -333,6 +328,7 @@ enum HomeDiscoveryPlayback {
         var queue = ids.compactMap { library.unobservedVisibleSong(id: $0) }.filteredPlayable()
         if shuffle { queue.shuffle() }
         guard !queue.isEmpty else { return }
+        if let selectedID, !queue.contains(where: { $0.id == selectedID }) { return }
         let position = selectedID.flatMap { id in queue.firstIndex { $0.id == id } } ?? 0
         player.setQueue(queue, startAt: position)
         Task { await player.play(song: queue[position]) }

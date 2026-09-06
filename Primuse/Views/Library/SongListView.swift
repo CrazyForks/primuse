@@ -587,6 +587,7 @@ struct SongListView: View {
     private var storedBrowseModeRawValue = LibrarySongBrowseMode.folder.rawValue
     #endif
     @State private var folderCache = LibraryFolderBrowserCache()
+    @State private var showsHomeFolders = false
     @State private var folderIndexStore = LibraryFolderIndexStore()
     @State private var folderIndexTask: Task<Void, Never>?
     @State private var folderIndexGeneration = 0
@@ -897,6 +898,16 @@ struct SongListView: View {
                 }
             }
             .onDisappear(perform: handleViewDisappear)
+            .sheet(isPresented: $showsHomeFolders) {
+                NavigationStack {
+                    HomeFolderManagementView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("done") { showsHomeFolders = false }
+                            }
+                        }
+                }
+            }
             #if os(macOS)
             .sheet(isPresented: $showAddVisibleToPlaylist) {
                 BatchAddToPlaylistSheet(songs: filteredSongs.filteredPlayable())
@@ -2510,7 +2521,8 @@ struct SongListView: View {
             SongListNormalToolbarMenu(
                 selection: selection,
                 sortOrder: sortOrderBinding,
-                filter: $songFilter
+                filter: $songFilter,
+                manageHomeFolders: showsFolderBrowser ? { showsHomeFolders = true } : nil
             )
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -3853,7 +3865,7 @@ private struct MacLibraryFolderInlineContent: View {
 
                 let children = folderCache.children(of: nodeID)
                 if !children.isEmpty {
-                    sectionHeader("shared_folders")
+                    sectionHeader("library_browse_folder")
                     ForEach(children) { child in
                         LibraryFolderNodeBranch(
                             nodeID: child.id,
@@ -4414,7 +4426,7 @@ private struct LibraryFolderNodeView: View {
 
                     let children = folderCache.children(of: nodeID)
                     if !children.isEmpty {
-                        sectionHeader("shared_folders")
+                        sectionHeader("library_browse_folder")
                         ForEach(children) { child in
                             LibraryFolderNodeBranch(
                                 nodeID: child.id,
@@ -4553,7 +4565,9 @@ private struct LibraryFolderNodeView: View {
         ToolbarItem(placement: .topBarTrailing) {
             LibraryFolderNormalToolbarMenu(
                 selection: selection,
-                sortOrder: $sortOrder
+                sortOrder: $sortOrder,
+                nodeID: nodeID,
+                index: folderCache.index
             )
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -4791,11 +4805,16 @@ private struct SongListNormalToolbarMenu: View {
     let selection: SongSelectionModel
     let sortOrder: Binding<SongListView.SongSortOrder>
     @Binding var filter: SongListView.SongFilter
+    var manageHomeFolders: (() -> Void)?
 
     @ViewBuilder
     var body: some View {
         if !selection.isActive {
             Menu {
+                if let manageHomeFolders {
+                    Button(HomeDiscoveryText.string("add_folder"), systemImage: "pin", action: manageHomeFolders)
+                        .accessibilityIdentifier("library.manageHomeFolders")
+                }
                 Section {
                     SongSortMenuOptions(sortOrder: sortOrder)
                 }
@@ -4894,11 +4913,27 @@ private struct LibraryFolderPlayAllToolbarItem: View {
 private struct LibraryFolderNormalToolbarMenu: View {
     let selection: SongSelectionModel
     @Binding var sortOrder: SongListView.SongSortOrder
+    let nodeID: LibraryFolderNodeID
+    let index: LibraryFolderIndex?
+    @AppStorage(HomeFolderPinStorage.key) private var pinsRawValue = ""
+    @AppStorage(HomeFolderPinStorage.displayCountKey) private var displayCount = HomeFolderPinStorage.defaultDisplayCount
+
+    private var pins: [LibraryFolderNodeID] {
+        HomeFolderPinStorage.resolvedPins(pinsRawValue, index: index, defaultCount: displayCount)
+    }
 
     @ViewBuilder
     var body: some View {
         if !selection.isActive {
             Menu {
+                let pinned = pins.contains(nodeID)
+                Button(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"), systemImage: pinned ? "pin.slash" : "pin") {
+                    var updated = pins
+                    if pinned { updated.removeAll { $0 == nodeID } } else { updated.insert(nodeID, at: 0) }
+                    pinsRawValue = HomeFolderPinStorage.encode(updated)
+                }
+                .disabled(index?.node(withID: nodeID) == nil)
+                .accessibilityIdentifier("libraryFolder.pinToHome")
                 Section {
                     SongSortMenuOptions(sortOrder: $sortOrder)
                 }

@@ -9,15 +9,14 @@ import PrimuseKit
 /// 关键点(都是踩过的坑):
 ///   1. 用无边框 `NSPanel` 而非 `.titled` 窗口:`.titled` 会在内容高度上叠加
 ///      ~32pt 标题栏,做不到设计稿精确的 300×220 / 300×540;无边框下窗口尺寸
-///      == 内容尺寸,正好对齐。圆角 / 阴影由内容 `.clipShape` + 窗口 clear 背景
+///      == 内容尺寸,正好对齐。圆角 / 阴影由宿主 layer 裁切 + 窗口 clear 背景
 ///      + `hasShadow` 实现。
 ///   2. `contentView = host.view`(NSHostingController 的 view)+ `wantsLayer`:
 ///      无边框 + clear 背景下,不开 wantsLayer 内容画不出来(整片透明)。
 ///   3. 内容(MacMiniPlayerView)绝对不能用带 `.drawingGroup()` 的 AmbientBackdrop
 ///      做背景 —— drawingGroup 会把 ZStack 的兄弟层(主内容)整组渲染掉,只剩背景
 ///      (就是"空白卡片"的根因)。已改用简单不透明渐变背景。
-///   4. 内容用 `.frame` 钉成 300×220 / 300×540,折叠/展开切换时 controller 用
-///      `resize()` 把窗口高度动画到目标值并保持顶端不动。
+///   4. 窗口负责高度动画,内容跟随宿主尺寸;展开时按屏幕剩余空间选择固定边。
 ///   5. `isReleasedWhenClosed = false`;`level = .floating` + `.fullScreenAuxiliary`。
 @MainActor
 final class MiniPlayerWindowController: NSWindowController, NSWindowDelegate {
@@ -32,6 +31,8 @@ final class MiniPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     /// 持有 hosting controller,保证 SwiftUI 内容存活、环境更新生效。
     private var hosting: NSViewController?
+    private var expansionAnchor: NowPlayingInteractionPolicy.MiniPlayerExpansionAnchor = .top
+    private var isExpanded = false
 
     convenience init() {
         let panel = MiniPlayerPanel(
@@ -43,7 +44,7 @@ final class MiniPlayerWindowController: NSWindowController, NSWindowDelegate {
         panel.isFloatingPanel = true
         panel.isMovableByWindowBackground = false
         panel.isOpaque = false
-        panel.backgroundColor = .clear  // 圆角外透明,圆角由内容 clipShape 决定
+        panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -70,10 +71,15 @@ final class MiniPlayerWindowController: NSWindowController, NSWindowDelegate {
             .applyPrimuseEnvironments()
         )
         self.hosting = host
+        host.sizingOptions = []
         host.view.frame = panel.contentView?.bounds
             ?? NSRect(x: 0, y: 0, width: Self.fixedWidth, height: Self.collapsedHeight)
         host.view.autoresizingMask = [.width, .height]
         host.view.wantsLayer = true
+        // 裁切边界跟随实际窗口,避免目标高度的 SwiftUI 圆角在缩放中被截成直角。
+        host.view.layer?.cornerRadius = 14
+        host.view.layer?.cornerCurve = .continuous
+        host.view.layer?.masksToBounds = true
         panel.contentView = host.view
         panel.delegate = self
 
@@ -87,19 +93,32 @@ final class MiniPlayerWindowController: NSWindowController, NSWindowDelegate {
         if visible { show() }
     }
 
-    /// 折叠 / 展开时把窗口高度动画到目标值,保持顶端不动(差值加到底边)。
     private func resize(forMode mode: MacMiniPlayerView.BottomMode) {
         guard let window else { return }
-        let target = mode == .none ? Self.collapsedHeight : Self.expandedHeight
+        let expands = mode != .none
+        guard expands != isExpanded else { return }
         let current = window.frame
-        guard abs(current.height - target) > 0.5 else { return }
-        let delta = target - current.height
-        let newFrame = NSRect(
-            x: current.origin.x,
-            y: current.origin.y - delta,
-            width: Self.fixedWidth,
-            height: target
+        let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame ?? current
+        if expands {
+            expansionAnchor = NowPlayingInteractionPolicy.miniPlayerExpansionAnchor(
+                frame: current,
+                expandedHeight: Self.expandedHeight,
+                visibleFrame: visibleFrame
+            )
+        }
+        isExpanded = expands
+        let newFrame = NowPlayingInteractionPolicy.miniPlayerFrame(
+            currentFrame: current,
+            targetHeight: expands ? Self.expandedHeight : Self.collapsedHeight,
+            visibleFrame: visibleFrame,
+            anchor: expansionAnchor
         )
+        guard current != newFrame else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            window.setFrame(newFrame, display: true)
+            window.invalidateShadow()
+            return
+        }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)

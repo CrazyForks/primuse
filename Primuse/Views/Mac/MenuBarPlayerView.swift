@@ -152,6 +152,7 @@ struct MenuBarPlayerView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .pmPointingHand()
                 .help(Text(player.isLiveRadio ? "radio_previous_station" : "previous_song"))
             }
 
@@ -173,6 +174,7 @@ struct MenuBarPlayerView: View {
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .disabled(player.isLoading && !player.isLiveRadio)
             .help(Text(player.isLiveRadio && (player.isPlaying || player.isLoading)
                 ? "radio_stop"
@@ -187,6 +189,7 @@ struct MenuBarPlayerView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .pmPointingHand()
                 .help(Text(player.isLiveRadio ? "radio_next_station" : "next_song"))
             }
             Spacer()
@@ -268,6 +271,7 @@ struct MenuBarPlayerView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
     }
 
 }

@@ -11,10 +11,14 @@
 "pin_folder" = "Ana sayfaya sabitle";
 "empty_ranking" = "Dinleme kaydı yok";
 "ranking_hint" = "Müzik çalın veya başka bir dönem seçin.";
-"ranking_scope" = "Geçerli arşivinizde saklanan çalma kayıtlarına dayanır.";
+"ranking_scope" = "Yerel dinleme istatistikleriyle aynı kayıtlı yerel geçmişi kullanır.";
 "champion" = "En çok çalınan";
 "rising" = "En hızlı yükselen";
 "longest" = "En uzun dinlenen";
 "play_count" = "%d kez çalındı";
 "positions_gained" = "%d sıra yükseldi";
 "recent_albums" = "Son eklenen albümler";
+"folder_display_count" = "Ana sayfada gösterilen sayı";
+"manage_folders" = "Dizinleri yönet ve sırala";
+"no_pinned_folders" = "Tümünü Gör bölümünden dizinlerinizi seçin.";
+"folder_ranking_scope" = "Dizin sıralamaları, geçerli bir dizini olan şarkıları içerir.";

@@ -11,10 +11,14 @@
 "pin_folder" = "Auf Startseite anheften";
 "empty_ranking" = "Noch kein Hörverlauf";
 "ranking_hint" = "Spiele Musik ab oder wähle einen anderen Zeitraum.";
-"ranking_scope" = "Basierend auf gespeicherten Wiedergaben deiner aktuellen Mediathek.";
+"ranking_scope" = "Verwendet den gespeicherten lokalen Hörverlauf wie die lokalen Hörstatistiken.";
 "champion" = "Meistgespielt";
 "rising" = "Größter Aufstieg";
 "longest" = "Längste Hörzeit";
 "play_count" = "%d Wiedergaben";
 "positions_gained" = "%d Plätze höher";
 "recent_albums" = "Zuletzt hinzugefügte Alben";
+"folder_display_count" = "Anzahl auf der Startseite";
+"manage_folders" = "Verzeichnisse verwalten und sortieren";
+"no_pinned_folders" = "Wähle unter „Alle anzeigen“ deine Verzeichnisse.";
+"folder_ranking_scope" = "Verzeichnis-Ranglisten enthalten Titel mit einem aktuellen Verzeichnis.";

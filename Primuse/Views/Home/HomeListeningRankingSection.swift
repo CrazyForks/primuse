@@ -16,6 +16,7 @@ struct HomeListeningRankingSection: View {
         let revision: Int
         let period: HomeListeningPeriod
         let category: HomeListeningCategory
+        let calendar: Calendar
     }
 
     var body: some View {
@@ -30,6 +31,7 @@ struct HomeListeningRankingSection: View {
             }
 
             VStack(spacing: 14) {
+                categoryPicker
                 if isLoading {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 170)
                 } else if let first = ranks.first {
@@ -53,16 +55,15 @@ struct HomeListeningRankingSection: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 150)
                 }
-                categoryPicker
             }
             .padding(16)
             .background(cardSurface, in: RoundedRectangle(cornerRadius: 22))
 
-            Text(HomeDiscoveryText.string("ranking_scope"))
+            Text(HomeDiscoveryText.string(category == .folders ? "folder_ranking_scope" : "ranking_scope"))
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 20)
-        .task(id: Request(revision: model.revision, period: period, category: category)) {
+        .task(id: Request(revision: model.revision, period: period, category: category, calendar: ListeningCalendar.current)) {
             await refresh()
         }
     }
@@ -139,6 +140,7 @@ struct HomeListeningRankingSection: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("play")
+        .disabled(!canPlay(rank))
     }
 
     private func rankRow(_ rank: HomeListeningRank, position: Int) -> some View {
@@ -152,15 +154,18 @@ struct HomeListeningRankingSection: View {
                         library: library, player: player
                     )
                 } label: { rankLabel(rank, position: position) }
+                .disabled(!canPlay(rank))
             } else {
                 NavigationLink {
                     HomeRankedSongsView(title: rank.title, songIDs: rank.songIDs)
                 } label: { rankLabel(rank, position: position) }
+                .disabled(!canPlay(rank))
             }
         }
         .buttonStyle(.plain)
         .contextMenu {
             Button("play", systemImage: "play.fill") { play(rank) }
+                .disabled(!canPlay(rank))
         }
     }
 
@@ -210,6 +215,10 @@ struct HomeListeningRankingSection: View {
         HomeDiscoveryPlayback.play(ids: ids, library: library, player: player)
     }
 
+    private func canPlay(_ rank: HomeListeningRank) -> Bool {
+        !rank.songIDs.compactMap { library.unobservedVisibleSong(id: $0) }.filteredPlayable().isEmpty
+    }
+
     private var cardSurface: Color {
         #if os(iOS)
         Color(uiColor: .secondarySystemBackground)
@@ -219,20 +228,18 @@ struct HomeListeningRankingSection: View {
     }
 
     private func refresh() async {
-        let request = Request(revision: model.revision, period: period, category: category)
+        let request = Request(revision: model.revision, period: period, category: category, calendar: ListeningCalendar.current)
         // Lazy-stack reappearance must not collapse a loaded card to its
         // spinner height and repeatedly move it across the visible boundary.
         guard preparedRequest != request else { return }
         isLoading = ranks.isEmpty
-        let events = PlayHistoryStore.shared.entries.map {
-            HomeListeningEvent(songID: $0.songID, playedAt: $0.playedAt, listenedSeconds: $0.listenedSec)
-        }
+        let events = PlayHistoryStore.shared.entries.map(\.listeningEvent)
         let songs = model.songsByID
         let folders = model.index
         let period = period
         let category = category
         let task = Task.detached(priority: .utility) {
-            HomeListeningRanking.ranks(events: events, songs: songs, folders: folders, period: period, category: category)
+            HomeListeningRanking.ranks(events: events, songs: songs, folders: folders, period: period, category: category, calendar: request.calendar)
         }
         let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         guard !Task.isCancelled else { return }

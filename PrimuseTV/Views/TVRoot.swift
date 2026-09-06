@@ -159,6 +159,7 @@ struct TVRoot: View {
 
     @Environment(TVStore.self) private var store
     @State private var tab: Tab = .home
+    @State private var libraryFilter: TVLibraryView.Filter = .albums
     @State private var showSettings = false
     @State private var showQueue = false
     @State private var showOptions = false
@@ -260,9 +261,6 @@ struct TVRoot: View {
             ZStack {
                 TVColor.bg.ignoresSafeArea()
 
-                content
-                    .transition(.opacity)
-
                 VStack(spacing: 0) {
                     TVTabBar(
                         active: tab,
@@ -273,7 +271,10 @@ struct TVRoot: View {
                         onFocusChanged: tabBarFocusChanged,
                         onSettings: { showSettings = true }
                     )
-                    Spacer(minLength: 0)
+                    .zIndex(1)
+                    content
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
                 }
             }
         }
@@ -341,11 +342,17 @@ struct TVRoot: View {
     @ViewBuilder
     private var content: some View {
         switch tab {
-        case .home:      TVHomeView(openPlayer: { tab = .nowPlaying })
+        case .home:
+            TVHomeView(openPlayer: { tab = .nowPlaying }, onBrowse: { category in
+                libraryFilter = category
+                tab = .library
+            })
         case .library:
             TVLibraryView(
                 openPlayer: { tab = .nowPlaying },
+                onReturnToTabs: returnFocusToTabs,
                 onModalActivityChanged: childModalActivityChanged,
+                filter: $libraryFilter,
                 focusRequest: libraryFocusRequest
             )
         case .nowPlaying:

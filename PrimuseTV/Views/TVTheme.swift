@@ -196,7 +196,7 @@ enum TVColor {
 }
 
 enum TVSpace {
-    static let pageTop: CGFloat = 140    // 让出顶部 tab bar
+    static let pageTop: CGFloat = 30
     static let pageBottom: CGFloat = 48  // 保留焦点放大和电视过扫描安全区
     static let pageH: CGFloat = 80
     static let row: CGFloat = 28

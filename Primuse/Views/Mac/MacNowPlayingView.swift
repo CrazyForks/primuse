@@ -988,6 +988,7 @@ struct MacNowPlayingView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
         .fixedSize()
         .glassEffect(.regular.interactive(), in: .capsule)
         .overlay(alignment: .topLeading) {

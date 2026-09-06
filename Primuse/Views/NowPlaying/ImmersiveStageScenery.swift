@@ -832,6 +832,9 @@ struct ImmersiveGlassActionButton: View {
             )
         }
         .buttonStyle(.plain)
+        #if os(macOS)
+        .pmPointingHand()
+        #endif
         .accessibilityLabel(Text(label))
     }
 }
@@ -902,6 +905,9 @@ struct ImmersiveEffectPickerPanel: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            #if os(macOS)
+                            .pmPointingHand()
+                            #endif
                         }
                     }
                 }

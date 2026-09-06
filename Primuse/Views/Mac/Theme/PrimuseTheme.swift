@@ -402,6 +402,20 @@ struct PMFormatPill: View {
 
 // MARK: - Round icon button
 
+private struct PMPointingHand: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content.pointerStyle(isEnabled ? .link : nil)
+    }
+}
+
+extension View {
+    func pmPointingHand() -> some View {
+        modifier(PMPointingHand())
+    }
+}
+
 /// 圆形 icon 按钮 — 跟设计稿的 `pm-glass-btn` / `pm-mat-btn` 视觉一致。
 struct PMRoundBtn: View {
     enum Style { case glass, material, accent, plain }

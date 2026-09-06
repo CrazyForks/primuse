@@ -18,6 +18,7 @@ struct TVHomeView: View {
     @State private var recommendationHistoryRevision = 0
     @State private var recommendationClockRevision = 0
     var openPlayer: () -> Void = {}
+    var onBrowse: (TVLibraryView.Filter) -> Void = { _ in }
 
     private var candidateAlbum: TVAlbum? {
         store.albums.first(where: { !store.songs(forAlbum: $0.id).isEmpty })
@@ -117,6 +118,11 @@ struct TVHomeView: View {
                 VStack(alignment: .leading, spacing: 30) {
                     if store.hasRealLibrary {
                         heroZone
+                        HStack(spacing: 20) {
+                            browseButton(.folders)
+                            browseButton(.ranking)
+                            Spacer(minLength: 0)
+                        }.focusSection()
                         if !store.recentlyPlayed.isEmpty {
                             TVRow(label: PMString("ext.tv.home.recentlyPlayed")) {
                                 ForEach(store.recentlyPlayed) { song in
@@ -180,6 +186,10 @@ struct TVHomeView: View {
         }
     }
 
+    private func browseButton(_ category: TVLibraryView.Filter) -> some View {
+        TVPillButton(title: category.display, systemImage: category.icon) { onBrowse(category) }
+    }
+
     private var recommendationScene: AIRecommendationScene {
         AIRecommendationScene(rawValue: recommendationSceneRawValue) ?? .automatic
     }
@@ -231,7 +241,7 @@ struct TVHomeView: View {
                 ForEach(displayedRecommendationSongs) { song in
                     TVSongCard(
                         song: song,
-                        reason: aiRecommendation.reason(for: song.id),
+                        reason: aiRecommendation.reason(for: song.id) ?? "",
                         action: openPlayer
                     )
                 }

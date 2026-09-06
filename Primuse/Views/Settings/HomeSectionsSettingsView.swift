@@ -1,4 +1,5 @@
 import SwiftUI
+import PrimuseKit
 
 enum HomeSectionKind: String, CaseIterable, Codable, Identifiable {
     case continueListening
@@ -111,6 +112,8 @@ struct HomeSectionsSettingsView: View {
     @AppStorage("primuse.home.showFolders") private var showFolders = true
     @AppStorage("primuse.home.showListeningRanking") private var showListeningRanking = true
     @AppStorage(HomeSectionConfiguration.orderKey) private var sectionOrderRawValue = ""
+    @AppStorage(HomeFolderPinStorage.displayCountKey) private var folderDisplayCount = HomeFolderPinStorage.defaultDisplayCount
+    @State private var showsFolderManager = false
 
     private var sectionOrder: [HomeSectionKind] {
         HomeSectionConfiguration.decode(sectionOrderRawValue)
@@ -145,6 +148,38 @@ struct HomeSectionsSettingsView: View {
             }
             .settingsAnchor("home.order")
 
+            Section(HomeDiscoveryText.string("folders")) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text(HomeDiscoveryText.string("folder_display_count"))
+                        Spacer()
+                        Text(HomeFolderPinStorage.displayCount(folderDisplayCount).formatted())
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { Double(HomeFolderPinStorage.displayCount(folderDisplayCount)) },
+                        set: { folderDisplayCount = HomeFolderPinStorage.displayCount(Int($0)) }
+                    ), in: Double(HomeFolderPinStorage.displayCountRange.lowerBound)...Double(HomeFolderPinStorage.displayCountRange.upperBound), step: 1)
+                    .accessibilityLabel(HomeDiscoveryText.string("folder_display_count"))
+                    .accessibilityValue(HomeFolderPinStorage.displayCount(folderDisplayCount).formatted())
+                    .accessibilityIdentifier("home.folderDisplayCount")
+                }
+                .settingsAnchor("home.folderDisplayCount")
+                // This list stays in edit mode for reordering, which disables
+                // ordinary NavigationLinks. Keep management available there.
+                Button {
+                    showsFolderManager = true
+                } label: {
+                    HStack {
+                        Label(HomeDiscoveryText.string("manage_folders"), systemImage: "folder.badge.gearshape")
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("home.manageFolders")
+            }
+
             Section {
                 Button("home_settings_restore_default_order") {
                     sectionOrderRawValue = HomeSectionConfiguration.encode(
@@ -153,6 +188,9 @@ struct HomeSectionsSettingsView: View {
                 }
                 .settingsAnchor("home.restoreOrder")
             }
+        }
+        .navigationDestination(isPresented: $showsFolderManager) {
+            HomeFolderManagementView()
         }
         #if os(iOS)
         .environment(\.editMode, .constant(.active))

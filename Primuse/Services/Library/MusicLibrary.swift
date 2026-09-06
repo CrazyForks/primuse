@@ -7547,6 +7547,9 @@ final class MusicLibrary {
             }
             includeCachedCover(named: sourceName, as: name)
         }
+        for name in portableArtistCacheNames(songs: snapshot.songs, assetStore: assetStore).sorted() {
+            includeCachedCover(named: name, as: name)
+        }
         snapshot.cachedArtworkAssets = cachedAssets.isEmpty ? nil : cachedAssets
         snapshot.artworkCacheReferences = references.isEmpty ? nil : references
 
@@ -7572,6 +7575,21 @@ final class MusicLibrary {
             data: encoded,
             eligibleLyricsFileNames: eligibleLyricsFileNames
         )
+    }
+
+    private nonisolated static func portableArtistCacheNames(songs: [Song], assetStore: MetadataAssetStore) -> Set<String> {
+        let artists = computeAlbumsAndArtists(songs: songs, configuration: ArtistNameConfiguration.load(from: .standard)).artists
+        var names = Set<String>()
+        for artist in artists {
+            var cacheIDs = [artist.id]
+            if let reference = artist.thumbnailPath, !reference.isEmpty {
+                cacheIDs.append(artist.id + "\u{1F}" + reference)
+            }
+            for id in cacheIDs {
+                names.insert("artist/" + assetStore.expectedCoverFileName(for: "artist_\(id)"))
+            }
+        }
+        return names
     }
 
     nonisolated static func portableSnapshotDataIncludingArtworkAssets(
@@ -7610,6 +7628,7 @@ final class MusicLibrary {
                 eligibleNames.insert("album/" + assetStore.expectedCoverFileName(for: "album_\(albumID)"))
             }
         }
+        eligibleNames.formUnion(portableArtistCacheNames(songs: snapshot.songs, assetStore: assetStore))
         let byContent = Dictionary(grouping: references.filter { eligibleNames.contains($0.key) }, by: \.value)
         var installed = false
         for (contentID, entries) in byContent {

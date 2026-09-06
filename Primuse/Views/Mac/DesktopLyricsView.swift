@@ -173,6 +173,7 @@ struct DesktopLyricsView: View {
                     .contentShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
+                .pmPointingHand()
                 .help(Text("desktop_lyrics_unlocked"))
             }
             Spacer()
@@ -481,6 +482,7 @@ struct DesktopLyricsView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .help(Text("settings_title"))
             .popover(isPresented: $settingsShown, arrowEdge: .bottom) {
                 settingsPopover
@@ -524,6 +526,7 @@ struct DesktopLyricsView: View {
                 settingsRowLabel(icon: "paintpalette", title: "lyrics_color")
             }
             .buttonStyle(.plain)
+            .pmPointingHand()
             .popover(isPresented: $colorPaletteShown, arrowEdge: .trailing) {
                 colorPalette
             }
@@ -558,6 +561,7 @@ struct DesktopLyricsView: View {
             settingsRowLabel(icon: icon, title: title, role: role)
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
     }
 
     private func settingsRowLabel(icon: String,
@@ -605,6 +609,7 @@ struct DesktopLyricsView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pmPointingHand()
         .help(Text(help))
     }
 
@@ -651,6 +656,7 @@ struct DesktopLyricsView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .pmPointingHand()
                 }
             }
         }

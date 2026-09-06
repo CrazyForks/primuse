@@ -753,7 +753,8 @@ actor MetadataAssetStore {
               CGImageSourceCreateWithData(data as CFData, nil) != nil else { return false }
         var installed = false
         for reference in referenceFileNames {
-            let name = reference.hasPrefix("album/") ? String(reference.dropFirst(6)) : reference
+            let prefix = ["album/", "artist/"].first(where: reference.hasPrefix)
+            let name = prefix.map { String(reference.dropFirst($0.count)) } ?? reference
             let stem = String(name.dropLast(4))
             guard name.hasSuffix(".jpg"), stem.utf8.count == 32,
                   stem.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { continue }

@@ -17,7 +17,7 @@ struct TVRow<Content: View>: View {
                 if let sub { Text(sub).tvFont(.caption).foregroundStyle(TVColor.textFaint) }
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 22) { content() }
+                HStack(alignment: .top, spacing: 28) { content() }
                     // 为首尾卡片的焦点描边和放大保留空间。
                     .padding(.vertical, 30)
                     .padding(.horizontal, 20)
@@ -30,21 +30,22 @@ struct TVRow<Content: View>: View {
 
 struct TVAlbumCard: View {
     let album: TVAlbum
-    var width: CGFloat = 200
+    var width: CGFloat = 240
     var titleOverride: String? = nil
     var subtitleOverride: String? = nil
     var action: () -> Void = {}
     @Environment(TVStore.self) private var store
 
     var body: some View {
-        TVFocusButton(radius: TVRadius.cover, scale: 1.10, lift: 10,
-                      action: { store.play(album: album); action() }) { _ in
+        TVFocusButton(ring: false,
+                      action: { store.play(album: album); action() }) { focused in
             VStack(alignment: .leading, spacing: 0) {
                 TVArtworkView(album: album, size: width)
+                    .tvFocusRing(focused, radius: TVRadius.cover, scale: 1.04, lift: 0)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(titleOverride ?? album.title)
                         .tvFont(.cardTitle)
-                        .foregroundStyle(TVColor.text).lineLimit(2)
+                        .foregroundStyle(TVColor.text).lineLimit(2, reservesSpace: true)
                     Text(subtitleOverride ?? album.artist)
                         .tvFont(.caption)
                         .foregroundStyle(TVColor.textFaint).lineLimit(1)
@@ -54,6 +55,8 @@ struct TVAlbumCard: View {
             }
             .frame(width: width, alignment: .leading)
         }
+        .accessibilityLabel(Text(titleOverride ?? album.title))
+        .accessibilityValue(Text(subtitleOverride ?? album.artist))
     }
 }
 
@@ -62,28 +65,30 @@ struct TVAlbumCard: View {
 struct TVSongCard: View {
     @Environment(TVStore.self) private var store
     let song: TVSong
-    var width: CGFloat = 200
+    var width: CGFloat = 240
     var reason: String? = nil
     var action: () -> Void = {}
 
     var body: some View {
         let album = store.albumOf(song)
-        TVFocusButton(radius: TVRadius.cover, scale: 1.10, lift: 10,
-                      action: { store.play(song); action() }) { _ in
+        TVFocusButton(ring: false,
+                      action: { store.play(song); action() }) { focused in
             VStack(alignment: .leading, spacing: 0) {
                 TVArtworkView(coverKey: album?.id ?? "", artist: album?.artist ?? song.artist,
                               album: album?.title ?? "", songID: song.id, coverRef: song.coverRef,
                               tint: album?.tint ?? TVColor.brand,
                               tint2: album?.tint2 ?? .black, glyph: album?.glyph ?? "♪", size: width)
+                    .tvFocusRing(focused, radius: TVRadius.cover, scale: 1.04, lift: 0)
                 VStack(alignment: .leading, spacing: 6) {
-                    if let reason, !reason.isEmpty {
+                    if let reason {
                         Label(reason, systemImage: "sparkles")
                             .tvFont(.caption, weight: .semibold)
                             .foregroundStyle(TVColor.brand)
-                            .lineLimit(1)
+                            .lineLimit(1, reservesSpace: true)
+                            .opacity(reason.isEmpty ? 0 : 1)
                     }
                     Text(song.title).tvFont(.cardTitle)
-                        .foregroundStyle(TVColor.text).lineLimit(2)
+                        .foregroundStyle(TVColor.text).lineLimit(2, reservesSpace: true)
                     Text(song.artist).tvFont(.caption)
                         .foregroundStyle(TVColor.textFaint).lineLimit(1)
                 }
@@ -104,19 +109,20 @@ struct TVRadioStationCard: View {
     var action: () -> Void = {}
 
     var body: some View {
-        TVFocusButton(radius: TVRadius.cover, scale: 1.10, lift: 10,
+        TVFocusButton(ring: false,
                       action: {
                           TVSiriMediaInteractionDonor.donate(station: station)
                           store.play(station)
                           action()
-                      }) { _ in
+                      }) { focused in
             VStack(alignment: .leading, spacing: 0) {
                 TVRadioArtworkView(station: station, size: width, radius: TVRadius.cover)
+                    .tvFocusRing(focused, radius: TVRadius.cover, scale: 1.04, lift: 0)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(station.name)
                         .tvFont(.cardTitle)
                         .foregroundStyle(TVColor.text)
-                        .lineLimit(2)
+                        .lineLimit(2, reservesSpace: true)
                     Text(station.playbackSubtitle)
                         .tvFont(.caption)
                         .foregroundStyle(TVColor.textFaint)
@@ -210,12 +216,15 @@ struct TVArtistCard: View {
     var action: () -> Void = {}
 
     var body: some View {
-        TVFocusButton(radius: size / 2 + 8, scale: 1.08, lift: 10, action: action) { _ in
+        TVFocusButton(ring: false, action: action) { focused in
             VStack(spacing: 12) {
-                TVCoverArt(tint: artist.tint, tint2: artist.tint2, glyph: artist.glyph,
-                           size: size, radius: size / 2)
+                TVArtistArtworkView(artist: artist, size: size)
+                    .tvFocusRing(focused, radius: size / 2, scale: 1.04, lift: 0)
                 Text(artist.name).tvFont(.cardTitle)
-                    .foregroundStyle(TVColor.text).lineLimit(2).frame(width: size + 20)
+                    .foregroundStyle(TVColor.text)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2, reservesSpace: true)
+                    .frame(width: size + 32)
             }
         }
         .accessibilityLabel(Text(artist.name))

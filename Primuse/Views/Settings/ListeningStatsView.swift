@@ -19,10 +19,21 @@ struct ListeningStatsView: View {
     @State private var range: PlayHistoryStore.Range = .month
     @State private var activityChart: MobileActivityChart = .duration
     #endif
+    @State private var statsCalendar = ListeningCalendar.current
+    @State private var prefersLocalSource = false
     @State private var heatmapYear: Int?
     @State private var rankTab: RankTab = .songs
     @State private var showClearConfirm = false
     private let store = PlayHistoryStore.shared
+
+    init(initialRange: PlayHistoryStore.Range? = nil, initiallyShowsLocalHistory: Bool = false) {
+        #if os(macOS)
+        _range = State(initialValue: initialRange ?? .year)
+        #else
+        _range = State(initialValue: initialRange ?? .month)
+        #endif
+        _prefersLocalSource = State(initialValue: initiallyShowsLocalHistory)
+    }
 
     enum RankTab: String, CaseIterable {
         case songs, artists, albums
@@ -75,6 +86,12 @@ struct ListeningStatsView: View {
             }
         }
         #endif
+        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+            statsCalendar = ListeningCalendar.current
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+            statsCalendar = ListeningCalendar.current
+        }
         .onChange(of: serverSourceIDs, initial: true) { _, validIDs in
             if !selectedServerSourceID.isEmpty,
                !validIDs.contains(selectedServerSourceID) {
@@ -136,7 +153,7 @@ struct ListeningStatsView: View {
     }
 
     private var selectedServerSource: MusicSource? {
-        serverSources.first { $0.id == selectedServerSourceID }
+        prefersLocalSource ? nil : serverSources.first { $0.id == selectedServerSourceID }
     }
 
     private var statsSourcePicker: some View {
@@ -159,7 +176,10 @@ struct ListeningStatsView: View {
     }
 
     private var sourcePicker: some View {
-        Picker("stats_data_source", selection: $selectedServerSourceID) {
+        Picker("stats_data_source", selection: Binding(
+            get: { prefersLocalSource ? "" : selectedServerSourceID },
+            set: { selectedServerSourceID = $0; prefersLocalSource = false }
+        )) {
             Text("stats_source_local").tag("")
             ForEach(serverSources) { source in
                 Text(source.name).tag(source.id)
@@ -356,7 +376,7 @@ struct ListeningStatsView: View {
     // MARK: 热力图 (STATS-02)
 
     private func macHeatmapCard(timeline: ListeningActivityTimeline) -> some View {
-        let calendar = Calendar.current
+        let calendar = statsCalendar
         let weeks = makeMacHeatmapWeeks(timeline: timeline, calendar: calendar)
         return VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
@@ -772,15 +792,12 @@ struct ListeningStatsView: View {
         for entry in store.entries {
             if entry.playedAt >= currentStart, entry.playedAt <= now {
                 scopedEntries.append(entry)
-            } else if let previousInterval, previousInterval.contains(entry.playedAt) {
+            } else if let previousInterval, entry.playedAt >= previousInterval.start, entry.playedAt < previousInterval.end {
                 previousPlayCount += 1
             }
         }
 
-        let calendar = Calendar.current
-        let dayBuckets = Dictionary(grouping: scopedEntries) {
-            calendar.startOfDay(for: $0.playedAt)
-        }
+        let calendar = statsCalendar
         let timeline = ListeningActivityTimeline(
             events: store.entries.map { .init(date: $0.playedAt, seconds: $0.listenedSec) },
             selectedStart: range == .all ? nil : currentStart,
@@ -789,40 +806,25 @@ struct ListeningStatsView: View {
             calendar: calendar
         )
         let playsBySong = Dictionary(grouping: scopedEntries, by: \.songID)
-        let summary = PlayHistoryStore.Summary(
-            totalPlays: scopedEntries.count,
-            totalSec: scopedEntries.reduce(0) { $0 + $1.listenedSec },
-            activeDays: dayBuckets.count,
-            uniqueSongs: playsBySong.count
-        )
+        let summary = PlayHistoryStore.summary(for: scopedEntries, calendar: calendar)
 
         return StatsSnapshot(
             summary: summary,
             timeline: timeline,
             previousPlayCount: range == .all ? nil : previousPlayCount,
             heavyRotationCount: playsBySong.values.lazy.filter { $0.count >= 5 }.count,
-            topSongs: rankedSongs(playsBySong, limit: rankLimit),
-            topArtists: rankedArtists(scopedEntries, limit: rankLimit),
-            topAlbums: rankedAlbums(scopedEntries, limit: rankLimit)
+            topSongs: PlayHistoryStore.rankedItems(from: scopedEntries, category: .songs, limit: rankLimit),
+            topArtists: PlayHistoryStore.rankedItems(from: scopedEntries, category: .artists, limit: rankLimit),
+            topAlbums: PlayHistoryStore.rankedItems(from: scopedEntries, category: .albums, limit: rankLimit)
         )
     }
 
     private func statsRangeStartDate(now: Date) -> Date {
-        let calendar = Calendar.current
-        switch range {
-        case .week:
-            return calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
-        case .month:
-            return calendar.dateInterval(of: .month, for: now)?.start ?? now
-        case .year:
-            return calendar.dateInterval(of: .year, for: now)?.start ?? now
-        case .all:
-            return .distantPast
-        }
+        range.statisticsStartDate(now: now, calendar: statsCalendar)
     }
 
     private func statsPreviousRangeInterval(now: Date, currentStart: Date) -> DateInterval? {
-        let calendar = Calendar.current
+        let calendar = statsCalendar
         let component: Calendar.Component
         switch range {
         case .week: component = .weekOfYear
@@ -835,72 +837,6 @@ struct ListeningStatsView: View {
             return nil
         }
         return DateInterval(start: start, end: end)
-    }
-
-    private func rankedSongs(
-        _ groups: [String: [PlayHistoryStore.Entry]],
-        limit: Int
-    ) -> [PlayHistoryStore.RankedItem] {
-        groups.compactMap { songID, plays in
-            plays.first.map {
-                PlayHistoryStore.RankedItem(
-                    id: songID,
-                    title: $0.songTitle,
-                    subtitle: $0.artistName,
-                    playCount: plays.count,
-                    totalSec: plays.reduce(0) { $0 + $1.listenedSec }
-                )
-            }
-        }
-        .sorted { $0.playCount > $1.playCount }
-        .prefix(limit)
-        .map { $0 }
-    }
-
-    private func rankedArtists(
-        _ entries: [PlayHistoryStore.Entry],
-        limit: Int
-    ) -> [PlayHistoryStore.RankedItem] {
-        Dictionary(grouping: entries.lazy.filter { !$0.artistName.isEmpty }, by: \.artistName)
-            .map { name, plays in
-                PlayHistoryStore.RankedItem(
-                    id: "artist:\(name)",
-                    title: name,
-                    subtitle: String(
-                        format: String(localized: "stats_unique_songs_format"),
-                        Set(plays.map(\.songID)).count
-                    ),
-                    playCount: plays.count,
-                    totalSec: plays.reduce(0) { $0 + $1.listenedSec }
-                )
-            }
-            .sorted { $0.playCount > $1.playCount }
-            .prefix(limit)
-            .map { $0 }
-    }
-
-    private func rankedAlbums(
-        _ entries: [PlayHistoryStore.Entry],
-        limit: Int
-    ) -> [PlayHistoryStore.RankedItem] {
-        Dictionary(
-            grouping: entries.lazy.filter { !$0.albumTitle.isEmpty },
-            by: { "\($0.albumTitle)|\($0.artistName)" }
-        )
-        .compactMap { key, plays in
-            plays.first.map {
-                PlayHistoryStore.RankedItem(
-                    id: "album:\(key)",
-                    title: $0.albumTitle,
-                    subtitle: $0.artistName,
-                    playCount: plays.count,
-                    totalSec: plays.reduce(0) { $0 + $1.listenedSec }
-                )
-            }
-        }
-        .sorted { $0.playCount > $1.playCount }
-        .prefix(limit)
-        .map { $0 }
     }
 
     // MARK: - Sections
@@ -1174,7 +1110,7 @@ struct MobileListeningActivityView: View {
     @State private var expandedMonth: Date?
 
     var body: some View {
-        let model = ListeningActivityCalendar(counts: counts, now: Date(), calendar: .current)
+        let model = ListeningActivityCalendar(counts: counts, now: Date(), calendar: ListeningCalendar.current)
         let year = selectedYear.flatMap { model.availableYears.contains($0) ? $0 : nil }
             ?? model.calendar.component(.year, from: model.today)
         let maximum = counts.filter {

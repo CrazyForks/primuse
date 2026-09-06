@@ -13,23 +13,36 @@ struct TVLibraryView: View {
     @Environment(TVStore.self) private var store
     @Environment(MusicIntelligenceService.self) private var intelligence
     var openPlayer: () -> Void = {}
+    var onReturnToTabs: () -> Void = {}
     var onModalActivityChanged: (Bool) -> Void = { _ in }
 
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "全部", recommendations = "推荐", artists = "艺术家", songs = "歌曲", playlists = "歌单", smart = "智能歌单"
+        case albums, songs, artists, genres, folders, recommendations, ranking
         var id: String { rawValue }
         var display: String {
             switch self {
-            case .all: return PMString("ext.tv.library.filter.all")
+            case .albums: return String(localized: "tab_albums")
+            case .songs: return String(localized: "tab_songs")
+            case .artists: return String(localized: "tab_artists")
+            case .genres: return String(localized: "tab_genres")
+            case .folders: return TVDiscoveryText.string("folders")
             case .recommendations: return PMString("library_recommendations_title")
-            case .artists: return PMString("ext.tv.library.filter.artists")
-            case .songs: return PMString("ext.tv.library.filter.songs")
-            case .playlists: return PMString("ext.tv.library.filter.playlists")
-            case .smart: return PMString("ext.tv.library.filter.smart")
+            case .ranking: return TVDiscoveryText.string("ranking")
+            }
+        }
+        var icon: String {
+            switch self {
+            case .albums: return "square.stack"
+            case .songs: return "music.note"
+            case .artists: return "person.2"
+            case .genres: return "guitars"
+            case .folders: return "folder"
+            case .recommendations: return "sparkles"
+            case .ranking: return "chart.bar"
             }
         }
     }
-    @State private var filter: Filter = .all
+    @Binding var filter: Filter
     @State private var recommendationCandidates: [Song] = []
     @State private var aiRecommendation = AIRecommendationViewModel()
     @AppStorage(AIRecommendationIntentStoragePolicy.storageKey)
@@ -43,28 +56,36 @@ struct TVLibraryView: View {
     @State private var selectedArtist: TVArtist?
     @State private var opensPlayerAfterArtistDismissal = false
 
-    private let cols = 5
-    private let gap: CGFloat = 36
+    private let cols = 4
+    private let gap: CGFloat = 28
     var focusRequest = 0
 
     var body: some View {
-        ZStack {
-            TVColor.bg.ignoresSafeArea()
-            GeometryReader { geo in
-                let contentW = geo.size.width - TVSpace.pageH * 2
-                let cell = (contentW - gap * CGFloat(cols - 1)) / CGFloat(cols)
+        GeometryReader { geo in
+            let contentW = geo.size.width - TVSpace.pageH * 2 - 298
+            let cell = max(140, (contentW - gap * CGFloat(cols - 1)) / CGFloat(cols))
+            HStack(alignment: .top, spacing: 40) {
+                filterStrip.frame(width: 230)
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 30) {
-                        filterStrip
-                        grid(cell: cell).focusSection()
+                        Text(title).tvFont(.pageTitle).foregroundStyle(TVColor.text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        grid(cell: cell)
                     }
-                    .tvPage()
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, TVSpace.pageBottom)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .focusSection()
+                .id(filter)
             }
+            .padding(.horizontal, TVSpace.pageH)
+            .padding(.top, TVSpace.pageTop)
         }
-        .onChange(of: focusRequest) {
-            focusedFilter = .all
-        }
+        .background(TVColor.bg)
+        .onExitCommand(perform: onReturnToTabs)
+        .onChange(of: focusRequest) { focusedFilter = filter }
         .onAppear(perform: normalizeRecommendationIntentSelectionIfNeeded)
         .onChange(of: selectedRecommendationIntentID) { _, _ in
             normalizeRecommendationIntentSelectionIfNeeded()
@@ -111,65 +132,52 @@ struct TVLibraryView: View {
 
     private var title: String {
         switch filter {
-        case .all: return PMString("ext.tv.library.title.albums", store.albums.count)
+        case .albums: return PMString("ext.tv.library.title.albums", store.albums.count)
         case .recommendations: return PMString("library_recommendations_title")
         case .artists: return PMString("ext.tv.library.title.artists", store.artists.count)
         case .songs: return PMString("ext.tv.library.title.songs", TVFmt.count(store.songs.count))
-        case .playlists: return PMString("ext.tv.library.title.playlists", store.normalPlaylists.count)
-        case .smart: return PMString("ext.tv.library.title.smart", store.smartPlaylists.count)
+        case .genres, .folders, .ranking: return filter.display
         }
     }
 
     private var filterStrip: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                TVEyebrow(text: PMString("ext.tv.library.eyebrow"))
-                Text(title).tvFont(.pageTitle).foregroundStyle(TVColor.text)
-            }
-            HStack(spacing: 12) {
-                ForEach(Filter.allCases) { f in
-                    Button {
-                        filter = f
-                    } label: {
-                        Text(f.display)
-                            .tvFont(.button, weight: f == filter ? .bold : .medium)
-                            .foregroundStyle(f == filter ? TVColor.onBrand : TVColor.text)
-                            .padding(.horizontal, 26).padding(.vertical, 12)
-                            .frame(minHeight: 66)
-                            .background(f == filter ? AnyShapeStyle(TVColor.brand)
-                                                    : AnyShapeStyle(TVColor.surfaceStrong),
-                                        in: Capsule())
-                            .tvFocusRing(
-                                focusedFilter == f,
-                                radius: TVRadius.pill,
-                                accent: TVColor.focusRing,
-                                scale: 1.06,
-                                lift: 4
-                            )
-                    }
-                    .buttonStyle(TVBareButtonStyle())
-                    .focused($focusedFilter, equals: f)
-                    .focusEffectDisabled()
-                    .accessibilityAddTraits(
-                        f == filter ? [.isButton, .isSelected] : .isButton
-                    )
+        VStack(alignment: .leading, spacing: 12) {
+            Text(PMString("ext.tv.library.eyebrow")).tvFont(.eyebrow)
+                .foregroundStyle(TVColor.textMuted).padding(.bottom, 14)
+            ForEach(Filter.allCases) { item in
+                if item == .recommendations {
+                    Rectangle().fill(TVColor.cardBorder).frame(height: 1).padding(.vertical, 14)
                 }
+                Button { filter = item } label: {
+                    Label(item.display, systemImage: item.icon)
+                        .tvFont(.caption, weight: item == filter ? .semibold : .regular)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                        .padding(.horizontal, 18)
+                        .foregroundStyle(item == filter ? TVColor.onBrand : TVColor.text)
+                        .background(item == filter ? TVColor.brand : TVColor.card, in: .rect(cornerRadius: 14))
+                        .tvFocusRing(focusedFilter == item, radius: 14, scale: 1.02, lift: 0)
+                }
+                .buttonStyle(TVBareButtonStyle())
+                .focused($focusedFilter, equals: item)
+                .focusEffectDisabled()
+                .accessibilityIdentifier("tv.library.category." + item.rawValue)
+                .accessibilityAddTraits(item == filter ? [.isButton, .isSelected] : .isButton)
             }
-            // 筛选条独立成焦点区:从右上角某个筛选项往下能跳到下方网格(否则横纵混在一起跳不下去)。
-            .focusSection()
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .focusSection()
     }
 
     @ViewBuilder
     private func grid(cell: CGFloat) -> some View {
         let columns = Array(repeating: GridItem(.fixed(cell), spacing: gap, alignment: .top), count: cols)
         switch filter {
-        case .all:
+        case .albums:
             LazyVGrid(columns: columns, alignment: .leading, spacing: gap) {
                 ForEach(store.albums) { a in
                     TVAlbumCard(album: a, width: cell,
-                                subtitleOverride: "\(a.artist) · \(a.year)", action: openPlayer)
+                                subtitleOverride: a.year > 0 ? "\(a.artist) · \(a.year)" : a.artist, action: openPlayer)
                 }
             }
         case .recommendations:
@@ -190,9 +198,10 @@ struct TVLibraryView: View {
                             ) { focused in
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(intent.title)
-                                        .font(.system(size: 19, weight: .bold))
+                                        .tvFont(.caption, weight: .semibold)
                                     Text(intent.detail)
-                                        .font(.system(size: 14))
+                                        .font(.system(size: 20))
+                                        .lineLimit(2, reservesSpace: true)
                                         .opacity(0.75)
                                 }
                                 .foregroundStyle(
@@ -200,7 +209,7 @@ struct TVLibraryView: View {
                                         ? TVColor.onBrand : TVColor.text
                                 )
                                 .padding(.horizontal, 24)
-                                .frame(height: 66, alignment: .leading)
+                                .frame(width: 250, height: 110, alignment: .leading)
                                 .background(
                                     effectiveSelectedRecommendationIntentID == intent.id
                                         ? TVColor.brand
@@ -225,7 +234,7 @@ struct TVLibraryView: View {
                         Text("· \(summary)").foregroundStyle(TVColor.textMuted)
                     }
                 }
-                .font(.system(size: 17, weight: .semibold))
+                .tvFont(.caption, weight: .semibold)
                 .foregroundStyle(TVColor.text)
 
                 LazyVStack(spacing: 10) {
@@ -257,18 +266,12 @@ struct TVLibraryView: View {
                     }
                 }
             }
-        case .playlists:
-            LazyVGrid(columns: columns, alignment: .leading, spacing: gap) {
-                ForEach(store.normalPlaylists) { p in
-                    TVPlaylistCard(playlist: p, width: cell, action: openPlayer)
-                }
-            }
-        case .smart:
-            LazyVGrid(columns: columns, alignment: .leading, spacing: gap) {
-                ForEach(store.smartPlaylists) { p in
-                    TVPlaylistCard(playlist: p, width: cell, action: openPlayer)
-                }
-            }
+        case .genres:
+            TVGenreBrowser(openPlayer: openPlayer, onModalActivityChanged: onModalActivityChanged)
+        case .folders:
+            TVFolderBrowser(openPlayer: openPlayer)
+        case .ranking:
+            TVRankingBrowser(openPlayer: openPlayer, onModalActivityChanged: onModalActivityChanged)
         }
     }
 
@@ -381,23 +384,10 @@ struct TVLibraryView: View {
     private func recommendationIntentDetails(_ intent: RecommendationIntent) -> some View {
         HStack(alignment: .top, spacing: 28) {
             VStack(alignment: .leading, spacing: 8) {
-                if intent.detail != intent.semanticIntent {
-                    Text(PMString("ai_recommendation_intent_description_label"))
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(TVColor.textMuted)
-                    Text(intent.detail)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(TVColor.text)
-                }
-                if let prompt = intent.semanticIntent {
-                    Text(PMString("ai_recommendation_intent_prompt_label"))
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(TVColor.textMuted)
-                        .padding(.top, intent.detail == prompt ? 0 : 4)
-                    Text(prompt)
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(TVColor.text)
-                }
+                Text(intent.detail)
+                    .tvFont(.caption)
+                    .foregroundStyle(TVColor.text)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -412,10 +402,10 @@ struct TVLibraryView: View {
                         PMString("ai_recommendation_custom_remove"),
                         systemImage: "trash"
                     )
-                    .font(.system(size: 15, weight: .semibold))
+                    .tvFont(.caption, weight: .semibold)
                     .foregroundStyle(focused ? TVColor.onBrand : TVColor.text)
                     .padding(.horizontal, 16)
-                    .frame(height: 42)
+                    .frame(minHeight: 60)
                     .background(
                         focused ? TVColor.brand : TVColor.surfaceStrong,
                         in: RoundedRectangle(cornerRadius: 12)
@@ -439,10 +429,10 @@ struct TVLibraryView: View {
                     PMString("ai_recommendation_presets_restore"),
                     systemImage: "arrow.counterclockwise"
                 )
-                .font(.system(size: 15, weight: .semibold))
+                .tvFont(.caption, weight: .semibold)
                 .foregroundStyle(focused ? TVColor.onBrand : TVColor.text)
                 .padding(.horizontal, 16)
-                .frame(height: 42)
+                .frame(minHeight: 60)
                 .background(
                     focused ? TVColor.brand : TVColor.surfaceStrong,
                     in: RoundedRectangle(cornerRadius: 12)
@@ -481,17 +471,11 @@ struct TVArtistDetailView: View {
             TVColor.bg.opacity(0.34).ignoresSafeArea()
             HStack(alignment: .top, spacing: 72) {
                 VStack(alignment: .leading, spacing: 24) {
-                    TVCoverArt(
-                        tint: artist.tint,
-                        tint2: artist.tint2,
-                        glyph: artist.glyph,
-                        size: 300,
-                        radius: 150
-                    )
+                    TVArtistArtworkView(artist: artist, size: 280)
                     Text(artist.name)
                         .tvFont(.pageTitle)
                         .foregroundStyle(TVColor.text)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(PMString("ext.tv.songsCount", songs.count))
                         .tvFont(.body)
                         .foregroundStyle(TVColor.textMuted)
@@ -524,7 +508,7 @@ struct TVArtistDetailView: View {
                             .frame(minHeight: 360)
                         } else {
                             ForEach(songs) { song in
-                                TVSongRow(song: song, action: finishPlayback)
+                                TVSongRow(song: song, queueSongIDs: songs.map(\.id), action: finishPlayback)
                             }
                         }
                     }
@@ -558,12 +542,18 @@ struct TVSongRow: View {
     @Environment(TVStore.self) private var store
     let song: TVSong
     var reason: String? = nil
+    var queueSongIDs: [String]? = nil
     var action: () -> Void = {}
 
     var body: some View {
         let album = store.albumOf(song)
         TVFocusButton(radius: TVRadius.card, scale: 1.02, lift: 0,
-                      action: { store.play(song); action() }) { focused in
+                      action: {
+                          if let queueSongIDs {
+                              guard store.playResolvedQueue(songIDs: queueSongIDs, shuffled: false, startingAt: song.id) else { return }
+                          } else { store.play(song) }
+                          action()
+                      }) { focused in
             HStack(spacing: 18) {
                 TVArtworkView(coverKey: album?.id ?? "", artist: album?.artist ?? song.artist,
                               album: album?.title ?? "", songID: song.id, coverRef: song.coverRef,
@@ -576,9 +566,9 @@ struct TVSongRow: View {
                             .foregroundStyle(TVColor.brand)
                             .lineLimit(1)
                     }
-                    Text(song.title).font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(TVColor.text).lineLimit(1)
-                    Text(song.artist).font(.system(size: 18))
+                    Text(song.title).tvFont(.cardTitle)
+                        .foregroundStyle(TVColor.text).lineLimit(2)
+                    Text(song.artist).tvFont(.caption)
                         .foregroundStyle(TVColor.textFaint).lineLimit(1)
                 }
                 Spacer(minLength: 0)
