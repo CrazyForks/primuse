@@ -5,6 +5,60 @@ import XCTest
 @testable import Primuse
 
 final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
+    func testWebDAVLateReadsAfterDisconnectReturnCancellation() async throws {
+        let source = WebDAVSource(
+            sourceID: "webdav-disconnected-\(UUID().uuidString)",
+            host: "webdav-disconnected.invalid",
+            useSsl: true,
+            username: "",
+            password: ""
+        )
+        await source.disconnect()
+
+        do {
+            _ = try await source.fetchRange(path: "/song.flac", offset: 0, length: 128)
+            XCTFail("A disconnected playback read must stop")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "Unexpected error: \(error)")
+        }
+        for offset: Int64 in [0, -128] {
+            do {
+                _ = try await source.fetchMetadataRange(
+                    path: "/song.flac", offset: offset, length: 128, intent: .bulkBounded
+                )
+                XCTFail("A disconnected metadata read must stop")
+            } catch {
+                XCTAssertTrue(error is CancellationError, "Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testWebDAVCancelledMetadataReadDoesNotStartNetworkRequest() async throws {
+        let source = WebDAVSource(
+            sourceID: "webdav-cancelled-\(UUID().uuidString)",
+            host: "webdav-cancelled.invalid",
+            useSsl: true,
+            username: "",
+            password: ""
+        )
+        let gate = AsyncStream<Void>.makeStream()
+        let read = Task {
+            for await _ in gate.stream { break }
+            return try await source.fetchMetadataRange(
+                path: "/song.flac", offset: 0, length: 128, intent: .bulkBounded
+            )
+        }
+        read.cancel()
+        gate.continuation.finish()
+        do {
+            _ = try await read.value
+            XCTFail("A cancelled metadata read must stop")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "Unexpected error: \(error)")
+        }
+        await source.disconnect()
+    }
+
     @MainActor
     func testReadingConfigurationNotificationsNeverWaitForMainThread() async {
         let center = NotificationCenter()

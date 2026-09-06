@@ -25,9 +25,9 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
     /// 长生命周期 session, 让 fetchRange 复用 HTTP keep-alive 连接,
     /// 避免每次 chunk fetch 都重新 SSL handshake。
     /// 8 路并发: 配合 CloudPlaybackSource 小文件全 prefetch 时多 chunk 并发。
-    private var directorySession: URLSession!
-    private var rangeSession: URLSession!
-    private var redirectedMediaSession: URLSession!
+    private var directorySession: URLSession?
+    private var rangeSession: URLSession?
+    private var redirectedMediaSession: URLSession?
 
     init(
         sourceID: String,
@@ -254,6 +254,14 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         }
     }
 
+    private func requireTransportSession(_ session: URLSession?) throws -> URLSession {
+        try Task.checkCancellation()
+        // Disconnect can run while a read awaits a redirect or retry. Late
+        // requests must stop instead of unwrapping a cleared session.
+        guard let session else { throw CancellationError() }
+        return session
+    }
+
     private func ensureTransportSessions() {
         if directorySession == nil {
             directorySession = Self.makeRangeSession(
@@ -281,6 +289,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
     }
 
     private func resetDirectorySession() {
+        guard directorySession != nil else { return }
         directorySession?.invalidateAndCancel()
         directorySession = Self.makeRangeSession(
             host: host,
@@ -373,7 +382,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             )
             let (_, response) = try await TrustedHTTPTransport.data(
                 for: request,
-                session: rangeSession
+                session: try requireTransportSession(rangeSession)
             )
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode) else {
@@ -477,7 +486,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             move.setValue(destinationCondition, forHTTPHeaderField: "If")
             let (_, moveResponse) = try await TrustedHTTPTransport.data(
                 for: move,
-                session: rangeSession,
+                session: try requireTransportSession(rangeSession),
                 maxBytes: 1024 * 1024
             )
             try validateMutationResponse(moveResponse, operation: "MOVE")
@@ -581,7 +590,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
                 )
             let (temporaryURL, response) = try await TrustedHTTPTransport.download(
                 for: request,
-                session: rangeSession,
+                session: try requireTransportSession(rangeSession),
                 maximumRangedBodyBytes: maximumRangedBodyBytes,
                 wholeResponsePrefixLimit: wholeResponsePrefixLimit
             )
@@ -875,7 +884,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         for attempt in 0..<HTTPMediaRedirectRetryPolicy.maximumAttempts {
             let initial = try await TrustedHTTPTransport.data(
                 for: request,
-                session: rangeSession,
+                session: try requireTransportSession(rangeSession),
                 maxBytes: maxBytes
             )
             guard let redirected = redirectedMediaRequest(
@@ -887,7 +896,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             do {
                 let result = try await TrustedHTTPTransport.data(
                     for: redirected,
-                    session: redirectedMediaSession,
+                    session: try requireTransportSession(redirectedMediaSession),
                     maxBytes: maxBytes
                 )
                 if attempt + 1 < HTTPMediaRedirectRetryPolicy.maximumAttempts,
@@ -914,7 +923,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         for attempt in 0..<HTTPMediaRedirectRetryPolicy.maximumAttempts {
             let initial = try await TrustedHTTPTransport.download(
                 for: request,
-                session: rangeSession,
+                session: try requireTransportSession(rangeSession),
                 maximumRangedBodyBytes: maximumBytes,
                 wholeResponsePrefixLimit: wholeResponsePrefixLimit
             )
@@ -928,7 +937,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             do {
                 let result = try await TrustedHTTPTransport.download(
                     for: redirected,
-                    session: redirectedMediaSession,
+                    session: try requireTransportSession(redirectedMediaSession),
                     maximumRangedBodyBytes: maximumBytes,
                     wholeResponsePrefixLimit: wholeResponsePrefixLimit
                 )
@@ -953,7 +962,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         for request: URLRequest
     ) async throws -> (URLSession.AsyncBytes, URLResponse) {
         for attempt in 0..<HTTPMediaRedirectRetryPolicy.maximumAttempts {
-            let initial = try await rangeSession.bytes(for: request)
+            let initial = try await requireTransportSession(rangeSession).bytes(for: request)
             guard let redirected = redirectedMediaRequest(
                 from: request,
                 response: initial.1
@@ -961,7 +970,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
                 return initial
             }
             do {
-                let result = try await redirectedMediaSession.bytes(for: redirected)
+                let result = try await requireTransportSession(redirectedMediaSession).bytes(for: redirected)
                 if attempt + 1 < HTTPMediaRedirectRetryPolicy.maximumAttempts,
                    let http = result.1 as? HTTPURLResponse,
                    HTTPMediaRedirectRetryPolicy.isRetryable(statusCode: http.statusCode) {
@@ -1171,7 +1180,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         )
         let (data, response) = try await TrustedHTTPTransport.data(
             for: request,
-            session: directorySession,
+            session: try requireTransportSession(directorySession),
             maxBytes: 16 * 1024 * 1024
         )
         guard let http = response as? HTTPURLResponse else {
@@ -1259,7 +1268,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         )
         let (data, response) = try await TrustedHTTPTransport.data(
             for: request,
-            session: rangeSession,
+            session: try requireTransportSession(rangeSession),
             maxBytes: 1024 * 1024
         )
         guard let http = response as? HTTPURLResponse else {
@@ -1292,7 +1301,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         request.setValue(expectedETag, forHTTPHeaderField: "If-Match")
         let (downloadURL, response) = try await TrustedHTTPTransport.download(
             for: request,
-            session: rangeSession
+            session: try requireTransportSession(rangeSession)
         )
         guard let http = response as? HTTPURLResponse else {
             try? FileManager.default.removeItem(at: downloadURL)
@@ -1329,7 +1338,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         }
         let (data, response) = try await TrustedHTTPTransport.data(
             for: request,
-            session: rangeSession,
+            session: try requireTransportSession(rangeSession),
             maxBytes: maximumBytes
         )
         guard let http = response as? HTTPURLResponse else {
@@ -1349,18 +1358,18 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             request.httpBody = data
             return try await TrustedHTTPTransport.data(
                 for: request,
-                session: rangeSession,
+                session: try requireTransportSession(rangeSession),
                 maxBytes: 1024 * 1024
             ).1
         }
-        return try await rangeSession.upload(for: request, from: data).1
+        return try await requireTransportSession(rangeSession).upload(for: request, from: data).1
     }
 
     private func send(fileAt localURL: URL, for request: URLRequest) async throws -> URLResponse {
         if let url = request.url, TrustedHTTPTransport.requiresPlainSocket(for: url) {
             return try await send(data: Data(contentsOf: localURL), for: request)
         }
-        return try await rangeSession.upload(for: request, fromFile: localURL).1
+        return try await requireTransportSession(rangeSession).upload(for: request, fromFile: localURL).1
     }
 
     private func validateMutationResponse(_ response: URLResponse, operation: String) throws {
