@@ -254,6 +254,17 @@ private struct HomeRankedSongsView: View {
     let songIDs: [String]
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
+    #if os(iOS)
+    @Environment(\.appNavigationMode) private var appNavigationMode
+    #endif
+
+    private var legacyBottomClearance: CGFloat {
+        #if os(iOS)
+        appNavigationMode == .minimal ? 0 : 90
+        #else
+        90
+        #endif
+    }
 
     var body: some View {
         List {
@@ -268,6 +279,11 @@ private struct HomeRankedSongsView: View {
             }
         }
         .navigationTitle(title)
-        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 90) }
+        #if os(iOS)
+        .minimalNavigationDetail()
+        #endif
+        .safeAreaInset(edge: .bottom, spacing: legacyBottomClearance == 0 ? 0 : nil) {
+            Color.clear.frame(height: legacyBottomClearance)
+        }
     }
 }

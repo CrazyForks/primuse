@@ -1265,6 +1265,9 @@ struct LibraryView: View {
             VStack(spacing: 10) {
                 NavigationLink {
                     SourcesContentView()
+                        #if os(iOS)
+                        .minimalNavigationDetail()
+                        #endif
                 } label: {
                     Text("manage_sources")
                 }

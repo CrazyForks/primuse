@@ -341,10 +341,7 @@ struct HomeView: View {
             .navigationTitle("home_title")
             .toolbarTitleDisplayMode(.inlineLarge)
             #if os(iOS)
-            .toolbar(
-                appNavigationMode == .minimal ? .hidden : .automatic,
-                for: .navigationBar
-            )
+            .minimalNavigationRoot()
             #endif
             .toolbar {
                 #if os(iOS)
@@ -850,6 +847,9 @@ struct HomeView: View {
                 Spacer()
                 NavigationLink {
                     RadioStationsView()
+                        #if os(iOS)
+                        .minimalNavigationDetail()
+                        #endif
                 } label: {
                     Text(String(
                         format: String(localized: "home_radio_wall_manage %lld"),
@@ -1008,6 +1008,9 @@ struct HomeView: View {
 
             NavigationLink {
                 RadioStationsView()
+                    #if os(iOS)
+                    .minimalNavigationDetail()
+                    #endif
             } label: {
                 Text("radio_manage")
                     .fontWeight(.medium)
@@ -1681,6 +1684,9 @@ struct HomeView: View {
     private func statsGlimpseSection(_ summary: PlayHistoryStore.Summary) -> some View {
         NavigationLink {
             ListeningStatsView(initialRange: .week, initiallyShowsLocalHistory: true)
+                #if os(iOS)
+                .minimalNavigationDetail()
+                #endif
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "chart.bar.xaxis")
@@ -2367,6 +2373,9 @@ struct HomeView: View {
                 Spacer()
                 NavigationLink {
                     RecentlyAddedAlbumsView()
+                        #if os(iOS)
+                        .minimalNavigationDetail()
+                        #endif
                 } label: {
                     Text("home_section_view_all")
                         .font(.subheadline)

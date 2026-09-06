@@ -153,6 +153,15 @@ private struct MinimalNavigationDetailScopeEnvironmentKey: EnvironmentKey {
     static let defaultValue: MinimalNavigationDetailScope? = nil
 }
 
+private struct MinimalNavigationBars {
+    let top: AnyView
+    let bottom: AnyView
+}
+
+private struct MinimalNavigationBarsEnvironmentKey: EnvironmentKey {
+    static var defaultValue: MinimalNavigationBars? { nil }
+}
+
 private struct MinimalNavigationDetailTransitionHandlerEnvironmentKey: EnvironmentKey {
     static let defaultValue:
         (@MainActor (UUID, MinimalNavigationDetailScope, Bool) -> Void)? = nil
@@ -170,6 +179,11 @@ private struct MinimalNavigationDetailScopesPreferenceKey: PreferenceKey {
 }
 
 extension EnvironmentValues {
+    fileprivate var minimalNavigationBars: MinimalNavigationBars? {
+        get { self[MinimalNavigationBarsEnvironmentKey.self] }
+        set { self[MinimalNavigationBarsEnvironmentKey.self] = newValue }
+    }
+
     var appNavigationMode: AppNavigationMode {
         get { self[AppNavigationModeEnvironmentKey.self] }
         set { self[AppNavigationModeEnvironmentKey.self] = newValue }
@@ -188,6 +202,19 @@ extension EnvironmentValues {
 }
 
 extension View {
+    @ViewBuilder
+    fileprivate func minimalSafeAreaBar<Bar: View>(
+        edge: VerticalEdge,
+        @ViewBuilder content: () -> Bar
+    ) -> some View {
+        if #available(iOS 26.0, *) {
+            safeAreaBar(edge: edge, spacing: 0, content: content)
+                .scrollEdgeEffectStyle(.soft, for: edge == .top ? .top : .bottom)
+        } else {
+            safeAreaInset(edge: edge, spacing: 0, content: content)
+        }
+    }
+
     func minimalNavigationRoot() -> some View {
         modifier(MinimalNavigationRootModifier())
     }
@@ -199,15 +226,17 @@ extension View {
 
 private struct MinimalNavigationRootModifier: ViewModifier {
     @Environment(\.appNavigationMode) private var appNavigationMode
+    @Environment(\.minimalNavigationBars) private var bars
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if appNavigationMode == .minimal {
-            // The outer layout already clears the status bar. NavigationStack
-            // can retain that top inset when a detail page is popped.
             content
-                .ignoresSafeArea(.container, edges: .top)
+                // Empty states have an intrinsic height; bars need the full page bounds.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .toolbar(.hidden, for: .navigationBar)
+                .minimalSafeAreaBar(edge: .top) { bars?.top }
+                .minimalSafeAreaBar(edge: .bottom) { bars?.bottom }
         } else {
             content
         }
@@ -219,12 +248,14 @@ private struct MinimalNavigationDetailModifier: ViewModifier {
     @Environment(\.appNavigationMode) private var appNavigationMode
     @Environment(\.minimalNavigationDetailScope) private var detailScope
     @Environment(\.minimalNavigationDetailTransitionHandler) private var transitionHandler
+    @Environment(\.minimalNavigationBars) private var bars
     @State private var transitionID = UUID()
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isDetail, appNavigationMode == .minimal, let detailScope {
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .preference(
                     key: MinimalNavigationDetailScopesPreferenceKey.self,
                     value: Set([detailScope])
@@ -237,6 +268,7 @@ private struct MinimalNavigationDetailModifier: ViewModifier {
                 }
                 .toolbar(.visible, for: .navigationBar)
                 .navigationBarBackButtonHidden(false)
+                .minimalSafeAreaBar(edge: .bottom) { bars?.bottom }
         } else {
             content
         }
@@ -595,68 +627,74 @@ struct ContentView: View {
 
     @ViewBuilder
     private var minimalRoot: some View {
-        VStack(spacing: 0) {
-            MinimalNavigationChromeLayout(
-                visibility: minimalTopNavigationHidden ? 0 : 1
-            ) {
-                MinimalTopNavigationBar(
-                    searchText: selectedTab == 3 ? $settingsSearch.query : $searchText,
-                    settingsSearchPresented: $settingsSearch.isPresented,
-                    searchScope: $searchScope,
-                    searchContext: searchContext,
-                    categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
-                    libraryPages: MinimalNavigationPolicy.libraryPages(
-                        visibleSections: visibleLibrarySections
-                    ),
-                    selection: MinimalNavigationPolicy.selectedPage(
-                        selectedTab: selectedTab,
-                        activeLibrarySection: minimalLibrarySection,
-                        visibleSections: visibleLibrarySections
-                    ),
-                    onSelect: selectMinimalPage,
-                    onSubmitSearch: submitMinimalSearch
+        tabRoot
+            .environment(
+                \.minimalNavigationBars,
+                MinimalNavigationBars(
+                    top: AnyView(minimalTopChrome),
+                    bottom: AnyView(minimalBottomChrome)
                 )
-                .opacity(
-                    minimalTopNavigationHidden
-                        ? 0
-                        : (batchSelectionActive ? 0.42 : 1)
-                )
-                .scaleEffect(
-                    x: 1,
-                    y: minimalTopNavigationHidden ? 0.985 : 1,
-                    anchor: .top
-                )
-            }
-            .clipped()
-            .allowsHitTesting(!minimalTopNavigationHidden && !batchSelectionActive)
-            .accessibilityHidden(minimalTopNavigationHidden || batchSelectionActive)
-            .animation(
-                reduceMotion ? nil : .smooth(duration: 0.26, extraBounce: 0),
-                value: minimalTopNavigationHidden
             )
-
-            tabRoot
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .contentShape(Rectangle())
-                .background {
-                    MinimalNavigationScrollObserver(
-                        categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
-                        isEnabled: !minimalTopNavigationHidden,
-                        refreshID: selectedTab
-                    )
-                }
-
-            if miniPlayerVisible {
-                MinimalNowPlayingAccessory(onTap: presentNowPlaying)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            .background {
+                MinimalNavigationScrollObserver(
+                    categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
+                    isEnabled: !minimalTopNavigationHidden,
+                    refreshID: selectedTab
+                )
             }
+            .onPreferenceChange(MinimalNavigationDetailScopesPreferenceKey.self) { scopes in
+                minimalDetailScopes = scopes
+                minimalReturningDetailScopes.formIntersection(scopes)
+            }
+    }
+
+    @ViewBuilder
+    private var minimalBottomChrome: some View {
+        if miniPlayerVisible {
+            MinimalNowPlayingAccessory(onTap: presentNowPlaying)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
         }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .onPreferenceChange(MinimalNavigationDetailScopesPreferenceKey.self) { scopes in
-            minimalDetailScopes = scopes
-            minimalReturningDetailScopes.formIntersection(scopes)
+    }
+
+    private var minimalTopChrome: some View {
+        MinimalNavigationChromeLayout(
+            visibility: minimalTopNavigationHidden ? 0 : 1
+        ) {
+            MinimalTopNavigationBar(
+                searchText: selectedTab == 3 ? $settingsSearch.query : $searchText,
+                settingsSearchPresented: $settingsSearch.isPresented,
+                searchScope: $searchScope,
+                searchContext: searchContext,
+                categoriesCollapsed: $minimalNavigationCategoriesCollapsed,
+                libraryPages: MinimalNavigationPolicy.libraryPages(
+                    visibleSections: visibleLibrarySections
+                ),
+                selection: MinimalNavigationPolicy.selectedPage(
+                    selectedTab: selectedTab,
+                    activeLibrarySection: minimalLibrarySection,
+                    visibleSections: visibleLibrarySections
+                ),
+                onSelect: selectMinimalPage,
+                onSubmitSearch: submitMinimalSearch
+            )
+            .opacity(
+                minimalTopNavigationHidden
+                    ? 0
+                    : (batchSelectionActive ? 0.42 : 1)
+            )
+            .scaleEffect(
+                x: 1,
+                y: minimalTopNavigationHidden ? 0.985 : 1,
+                anchor: .top
+            )
         }
+        .clipped()
+        .allowsHitTesting(!minimalTopNavigationHidden && !batchSelectionActive)
+        .accessibilityHidden(minimalTopNavigationHidden || batchSelectionActive)
+        .animation(
+            reduceMotion ? nil : .smooth(duration: 0.26, extraBounce: 0),
+            value: minimalTopNavigationHidden
+        )
     }
 
     @ViewBuilder
@@ -1515,26 +1553,6 @@ private struct MinimalTopNavigationBar: View {
         }
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    LinearGradient(
-                        colors: [
-                            Color(uiColor: .systemBackground).opacity(0.72),
-                            Color(uiColor: .systemBackground).opacity(0.42),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                .ignoresSafeArea(edges: .top)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.08))
-                .frame(height: 0.5)
-        }
         .animation(
             reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86),
             value: categoriesCollapsed

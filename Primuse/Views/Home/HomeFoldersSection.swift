@@ -15,6 +15,9 @@ struct HomeFoldersSection: View {
                 Spacer()
                 NavigationLink {
                     HomeFolderBrowser()
+                        #if os(iOS)
+                        .minimalNavigationDetail()
+                        #endif
                 } label: {
                     HStack(spacing: 5) {
                         Text("see_all")

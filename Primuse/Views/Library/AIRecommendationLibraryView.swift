@@ -415,6 +415,9 @@ struct AIRecommendationLibraryView: View {
                     #else
                     NavigationLink {
                         AISettingsView()
+                            #if os(iOS)
+                            .minimalNavigationDetail()
+                            #endif
                     } label: {
                         intelligenceSettingsIcon
                     }

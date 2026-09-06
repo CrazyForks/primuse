@@ -3782,6 +3782,9 @@ private enum LibraryFolderNodePresentation {
 }
 
 private struct LibraryFolderRootView: View {
+    #if os(iOS)
+    @Environment(\.appNavigationMode) private var appNavigationMode
+    #endif
     let folderCache: LibraryFolderBrowserCache
     let listCache: SongListCache
     let rootSourceID: String?
@@ -3799,7 +3802,11 @@ private struct LibraryFolderRootView: View {
                 onOpenFolder: nil
             )
             .padding(.horizontal, 12)
+            #if os(iOS)
+            .padding(.bottom, appNavigationMode == .minimal ? 16 : 112)
+            #else
             .padding(.bottom, 112)
+            #endif
         }
         .background(LibraryFolderNodePresentation.background.ignoresSafeArea())
     }
@@ -4385,6 +4392,9 @@ private struct LibraryFolderNodeLabel: View {
 private struct LibraryFolderNodeView: View {
     @Environment(AudioPlayerService.self) private var player
     @Environment(MusicLibrary.self) private var library
+    #if os(iOS)
+    @Environment(\.appNavigationMode) private var appNavigationMode
+    #endif
 
     let nodeID: LibraryFolderNodeID
     let folderCache: LibraryFolderBrowserCache
@@ -4397,6 +4407,7 @@ private struct LibraryFolderNodeView: View {
             .navigationTitle(Text(verbatim: navigationTitle))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            .minimalNavigationDetail()
             .toolbar { iosToolbar }
             .librarySearchContext {
                 LibrarySearchScope(
@@ -4473,7 +4484,11 @@ private struct LibraryFolderNodeView: View {
                     }
                 }
                 .padding(.horizontal, 8)
+                #if os(iOS)
+                .padding(.bottom, appNavigationMode == .minimal ? 16 : 112)
+                #else
                 .padding(.bottom, 112)
+                #endif
             }
             .background(LibraryFolderNodePresentation.background.ignoresSafeArea())
         } else {
