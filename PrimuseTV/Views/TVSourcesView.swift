@@ -9,6 +9,7 @@ struct TVSourcesView: View {
         case addSource
         case recycleBin
         case receive
+        case metadata
     }
 
     @Environment(TVStore.self) private var store
@@ -23,6 +24,7 @@ struct TVSourcesView: View {
     @State private var pendingScanAfterSave: MusicSource?
     @State private var recycleBin = false           // 回收站
     @State private var showTransfer = false
+    @State private var showsMetadata = false
     @State private var otpSource: TVSource?         // 两步验证(OTP)输入
     @State private var scanSource: MusicSource?     // 选目录 + 扫描流程
     @FocusState private var focusedPrimaryAction: PrimaryAction?
@@ -41,6 +43,7 @@ struct TVSourcesView: View {
             pendingScanAfterSave != nil,
             recycleBin,
             showTransfer,
+            showsMetadata,
             otpSource != nil,
             scanSource != nil,
         ].filter { $0 }.count
@@ -117,6 +120,14 @@ struct TVSourcesView: View {
                     Text(PMString("ext.tv.sources.addSource"))
                         .font(.system(size: 18, weight: .medium)).foregroundStyle(TVColor.textMuted)
                     TVSourcesInfoCard()
+                    TVFocusButton(radius: 16, scale: 1.02, lift: 0, action: { showsMetadata = true }) { focused in
+                        Label(PMString("tv_metadata_reread"), systemImage: "arrow.clockwise")
+                            .tvFont(.body).foregroundStyle(TVColor.text)
+                            .padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(focused ? TVColor.surfaceStrong : TVColor.surface)
+                    }
+                    .focused($focusedPrimaryAction, equals: .metadata)
+                    .accessibilityIdentifier("tv.sources.metadata")
                     Button { showTransfer = true } label: {
                         Label(TVTransferText.string("receive"), systemImage: "arrow.down.circle")
                             .font(.system(size: 20, weight: .semibold))
@@ -210,6 +221,9 @@ struct TVSourcesView: View {
         }
         .fullScreenCover(isPresented: $showTransfer, onDismiss: restorePrimaryFocus) {
             TVTransferReceiveView().environment(store)
+        }
+        .fullScreenCover(isPresented: $showsMetadata, onDismiss: restorePrimaryFocus) {
+            TVMetadataMaintenanceView().environment(store)
         }
         .sheet(item: $credentialEditor, onDismiss: restorePrimaryFocus) { src in
             TVCredentialEditorView(source: src).environment(store)
@@ -723,4 +737,126 @@ private struct TVCredentialEditorView: View {
     }
 }
 
+struct TVMetadataMaintenanceView: View {
+    @Environment(TVStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedSource: MusicSource?
+    @State private var artistArtworkTask: Task<Void, Never>?
+    @State private var artistArtworkProgress = ""
+
+    var body: some View {
+        ZStack {
+            TVColor.bg.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 28) {
+                HStack {
+                    Text(String(localized: "metadata")).tvFont(.pageTitle)
+                    Spacer()
+                    TVPillButton(title: String(localized: "done"), systemImage: "xmark") { dismiss() }
+                }
+                HStack(alignment: .top, spacing: 48) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            Text(PMString("tv_metadata_reread")).tvFont(.sectionTitle)
+                            Text(PMString("tv_metadata_reread_body"))
+                                .tvFont(.body).foregroundStyle(TVColor.textMuted)
+                            Text(PMString("tv_metadata_select_source"))
+                                .tvFont(.caption).foregroundStyle(TVColor.textFaint)
+                            ForEach(store.sources) { source in
+                                sourceRow(source)
+                            }
+                            if store.sources.isEmpty {
+                                Text(PMString("ext.tv.sources.emptyTitle")).tvFont(.body)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .focusSection()
+                    VStack(alignment: .leading, spacing: 20) {
+                        Text(PMString("tv_complete_artist_artwork")).tvFont(.sectionTitle)
+                        Text(PMString("tv_artist_artwork_source_hint"))
+                            .tvFont(.body).foregroundStyle(TVColor.textMuted)
+                        TVPillButton(
+                            title: PMString(artistArtworkTask == nil
+                                ? "tv_complete_artist_artwork" : "ext.tv.sources.cancel"),
+                            systemImage: artistArtworkTask == nil ? "person.crop.circle.badge.plus" : "xmark",
+                            action: refreshArtistArtwork
+                        )
+                        .disabled(store.artists.isEmpty)
+                        .accessibilityIdentifier("tv.metadata.completeArtistArtwork")
+                        if !artistArtworkProgress.isEmpty {
+                            Text(artistArtworkProgress).tvFont(.caption).foregroundStyle(TVColor.textMuted)
+                        }
+                    }
+                    .padding(28).frame(width: 440, alignment: .leading).tvPanel(radius: 20)
+                    .focusSection()
+                }
+            }
+            .padding(.horizontal, 80).padding(.vertical, 48)
+        }
+        .foregroundStyle(TVColor.text)
+        .fullScreenCover(item: $selectedSource) { source in
+            TVScanFlowView(source: source, rereadMetadata: true).environment(store)
+        }
+        .onExitCommand {
+            if selectedSource != nil { selectedSource = nil } else { dismiss() }
+        }
+        .onDisappear { artistArtworkTask?.cancel(); artistArtworkTask = nil }
+        .accessibilityIdentifier("tv.metadata.maintenance")
+    }
+
+    private func sourceRow(_ source: TVSource) -> some View {
+        let canRead = source.canScan && source.status != .disabled
+        let isServer = source.type == MusicSourceType.fnMusic.rawValue
+            || source.type == MusicSourceType.daoliyu.rawValue
+        return TVFocusButton(radius: 16, scale: 1.0, lift: 0, action: {
+            selectedSource = store.source(id: source.id)
+        }) { focused in
+            HStack(spacing: 20) {
+                Image(systemName: source.iconName).tvFont(.sectionTitle)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(source.name).tvFont(.body).lineLimit(2)
+                    Text(PMString(canRead
+                        ? (isServer ? "tv_metadata_server_hint" : "tv_metadata_source_hint")
+                        : "tv_metadata_source_unavailable"))
+                        .tvFont(.caption).foregroundStyle(TVColor.textMuted)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").tvFont(.caption)
+            }
+            .padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            .background(focused ? TVColor.surfaceStrong : TVColor.surface)
+        }
+        .disabled(!canRead || (store.activeScanSourceID != nil && store.activeScanSourceID != source.id))
+        .accessibilityIdentifier("tv.metadata.source.\(source.id)")
+    }
+
+    private func refreshArtistArtwork() {
+        if let task = artistArtworkTask { task.cancel(); artistArtworkTask = nil; return }
+        let candidates = store.artists.filter { artist in
+            let presentation = store.library.artworkPresentation(for: .init(kind: .artist, id: artist.id))
+            return presentation.resolution == .automatic
+                && store.library.visibleArtist(id: artist.id)?.thumbnailPath?.isEmpty != false
+        }
+        artistArtworkTask = Task { @MainActor in
+            var available = 0
+            var missing = 0
+            for (index, artist) in candidates.enumerated() {
+                guard !Task.isCancelled else { return }
+                artistArtworkProgress = PMString("batch_scrape_artwork_progress_format", index + 1, candidates.count)
+                let data = await ArtworkFetchService.shared.fetchArtistImage(
+                    artistName: artist.name, artistID: artist.id, allowBuiltInFallback: true
+                )
+                guard !Task.isCancelled else { return }
+                if data != nil {
+                    available += 1
+                    NotificationCenter.default.post(name: .primuseArtworkDidCache, object: nil,
+                                                    userInfo: ["artistID": artist.id])
+                } else { missing += 1 }
+            }
+            artistArtworkProgress = PMString("batch_scrape_artwork_counts_format", available, missing)
+            artistArtworkTask = nil
+        }
+    }
+}
 #endif

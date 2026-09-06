@@ -664,3 +664,11 @@
 "batch_scrape_artwork_counts_format" = "Dostępne %d · Nie pobrano %d";
 
 "tv_artist_artwork_source_hint" = "Szukaj według nazwy wykonawcy w aktywnych źródłach lub w iTunes, jeśli nie ma skonfigurowanych źródeł.";
+
+"tv_metadata_reread" = "Odczytaj ponownie wszystkie tagi";
+"tv_metadata_reread_body" = "Ponownie przeskanuj wybrane foldery i odczytaj tytuły, wykonawców, albumy, gatunki, lata, numery utworów, dane audio, okładki i teksty. Ręczne zmiany zostaną zachowane; pliki źródłowe nie zmienią się.";
+"tv_metadata_select_source" = "Wybierz źródło muzyki. Wcześniej sprawdzone pliki również zostaną odczytane ponownie.";
+"tv_metadata_source_hint" = "Ponownie odczytaj tagi, okładki i teksty w wybranych folderach";
+"tv_metadata_server_hint" = "Odśwież katalog i metadane serwera";
+"tv_metadata_source_unavailable" = "Włącz źródło lub przeskanuj je ponownie na iPhonie albo Macu i zsynchronizuj.";
+"tv_metadata_reread_issues" = "Nie udało się w pełni odczytać %d utworów. Dotychczasowe dane zachowano; możesz spróbować ponownie.";

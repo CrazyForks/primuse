@@ -2364,7 +2364,8 @@ final class TVStore {
     func runScan(
         source: MusicSource,
         lister: TVDirectoryLister,
-        dirs: [String]
+        dirs: [String],
+        rereadMetadata: Bool = false
     ) async -> Bool {
         guard await retryPendingSnapshotImport() else { return false }
         guard canMutateLibrary, !locallyRemovedSourceIDs.contains(source.id), TVScanAdmissionPolicy.canStart(
@@ -2376,7 +2377,10 @@ final class TVStore {
         activeScanSourceID = source.id
         let generation = UUID()
         scanGeneration = generation
-        let task = Task { await self.performScan(source: source, lister: lister, dirs: dirs, generation: generation) }
+        let task = Task {
+            await self.performScan(source: source, lister: lister, dirs: dirs,
+                                   rereadMetadata: rereadMetadata, generation: generation)
+        }
         scanTask = task
         let committed = await task.value
         if scanGeneration == generation {
@@ -2427,7 +2431,7 @@ final class TVStore {
     }
 
     private func performScan(source: MusicSource, lister: TVDirectoryLister, dirs: [String],
-                             generation: UUID) async -> Bool {
+                             rereadMetadata: Bool, generation: UUID) async -> Bool {
         pendingScanSongs = []
         scanExistingIDsByFile = Dictionary(
             library.songs.filter { $0.sourceID == source.id }.map { (Self.scanFileIdentity($0), $0.id) },
@@ -2466,8 +2470,9 @@ final class TVStore {
             dirs: dirs,
             credential: cred,
             existingSongs: library.songs.filter { $0.sourceID == source.id },
-            resumeState: resumeState,
-            onCheckpoint: saveCheckpoint,
+            rereadMetadata: rereadMetadata,
+            resumeState: rereadMetadata ? nil : resumeState,
+            onCheckpoint: rereadMetadata ? nil : saveCheckpoint,
             onSkeletonBatch: { songs in
                 try await self.acceptScanBatch(songs, sourceID: source.id, generation: generation)
             },
@@ -2553,7 +2558,7 @@ final class TVStore {
 
     /// 飞牛音乐没有目录选择步骤，直接从服务端分页读取完整曲库。
     @discardableResult
-    func runFnMusicScan(source: MusicSource) async -> Bool {
+    func runFnMusicScan(source: MusicSource, rereadMetadata: Bool = false) async -> Bool {
         guard TVScanAdmissionPolicy.canStart(
             activeSourceID: activeScanSourceID,
             requestedSourceID: source.id
@@ -2565,7 +2570,7 @@ final class TVStore {
             scanner.phase = .failed(PMString("ext.tv.scan.connectFailed"))
             return true
         }
-        return await runScan(source: source, lister: lister, dirs: [])
+        return await runScan(source: source, lister: lister, dirs: [], rereadMetadata: rereadMetadata)
     }
 
     /// 串行化 sources 上传:快速连续改源时,前一个上传跑完再发下一个,

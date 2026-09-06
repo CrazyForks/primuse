@@ -2,6 +2,7 @@
 import Foundation
 import PrimuseKit
 import XCTest
+import UIKit
 @testable import PrimuseTV
 
 @MainActor
@@ -165,6 +166,144 @@ final class TVMetadataParityTests: XCTestCase {
         XCTAssertEqual(result.songs.first?.id, original.id)
         XCTAssertEqual(result.songs.first?.filePath, entry.path)
         await inspections.flush()
+    }
+
+    func testExplicitRereadRefreshesUnchangedFilesAndAssetsFromAllRoots() async throws {
+        let folderName = "MetadataReread-" + UUID().uuidString
+        let folder = TVLocalTransferSource.root.appendingPathComponent(folderName)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = MusicSource(id: TVLocalTransferSource.sourceID, name: "Local", type: .local,
+                                 basePath: TVLocalTransferSource.root.path)
+        let inspections = TVMetadataInspectionStore(url: folder.appendingPathComponent("inspection.json"))
+        let scanner = TVSourceScanner(metadataInspections: inspections)
+        let audio = folder.appendingPathComponent("Track.wav")
+        let cover = folder.appendingPathComponent("Track.png")
+        let lyrics = folder.appendingPathComponent("Track.lrc")
+        let modified = Date(timeIntervalSince1970: 100)
+        func writeFiles(title: String, genre: String, color: UIColor, line: String) throws {
+            try taggedWave(title: title, genre: genre, album: folderName).write(to: audio)
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+                color.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+            try XCTUnwrap(image.pngData()).write(to: cover)
+            try "[00:00.00]\(line)".write(to: lyrics, atomically: true, encoding: .utf8)
+            for url in [audio, cover, lyrics] {
+                try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+            }
+        }
+        try writeFiles(title: "Before", genre: "Rock", color: .red, line: "Before")
+        let first = await scanner.scan(source: source, lister: TVLocalDirectoryLister(), dirs: ["/" + folderName],
+            credential: nil, existingSongs: [], onSkeletonBatch: { _ in }, onMetadataBatch: { _ in })
+        XCTAssertEqual(first.metadataFailureCount, 0)
+        let original = try XCTUnwrap(first.songs.first)
+        XCTAssertEqual(original.title, "Before")
+        let albumID = try XCTUnwrap(original.albumID)
+        let oldCover = await MetadataAssetStore.shared.cachedAlbumCover(forAlbumID: albumID)
+        XCTAssertNotNil(oldCover)
+        try writeFiles(title: "After!", genre: "Jazz", color: .blue, line: "After!")
+        // Keep an inspection for the unchanged byte identity to model stale
+        // source timestamps and a previous scan that had already checked tags.
+        let entries = try await TVLocalDirectoryLister().list("/" + folderName)
+        await inspections.record(original, sidecars: .init(entries), complete: true)
+        let normal = await scanner.scan(source: source, lister: TVLocalDirectoryLister(), dirs: ["/" + folderName],
+            credential: nil, existingSongs: first.songs, onSkeletonBatch: { _ in }, onMetadataBatch: { _ in })
+        XCTAssertEqual(normal.songs.first?.title, "Before")
+        let forced = await scanner.scan(source: source, lister: TVLocalDirectoryLister(), dirs: ["/" + folderName],
+            credential: nil, existingSongs: normal.songs, rereadMetadata: true,
+            resumeState: SourceScanResumeState(pendingDirectories: ["/missing-checkpoint-folder"]),
+            onSkeletonBatch: { _ in }, onMetadataBatch: { _ in })
+        XCTAssertEqual(forced.metadataFailureCount, 0)
+        XCTAssertTrue(forced.enumerationCompleted)
+        let updated = try XCTUnwrap(forced.songs.first)
+        XCTAssertEqual(updated.id, original.id)
+        XCTAssertEqual(updated.dateAdded, original.dateAdded)
+        XCTAssertEqual(updated.title, "After!")
+        XCTAssertEqual(updated.artistName, "Tagged Artist")
+        XCTAssertEqual(updated.albumArtistName, "Album Artist")
+        XCTAssertEqual(updated.genre, "Jazz")
+        XCTAssertEqual(updated.year, 2001)
+        XCTAssertEqual(updated.trackNumber, 3)
+        XCTAssertEqual(updated.discNumber, 2)
+        XCTAssertEqual(updated.sampleRate, 8000)
+        XCTAssertTrue(updated.lyricsText?.contains("After!") == true)
+        let newCover = await MetadataAssetStore.shared.cachedAlbumCover(forAlbumID: albumID)
+        XCTAssertNotEqual(newCover, oldCover)
+        await inspections.flush()
+    }
+
+    func testForcedRereadFailurePreservesExistingSongAndReportsIssue() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let inspections = TVMetadataInspectionStore(url: url)
+        let source = MusicSource(id: UUID().uuidString, name: "Unavailable", type: .local)
+        var original = song()
+        original.sourceID = source.id
+        original.filePath = "/missing-" + UUID().uuidString + ".mp3"
+        original.id = TVScanPipelinePolicy.songID(sourceID: source.id, path: original.filePath)
+        let entry = TVDirEntry(name: (original.filePath as NSString).lastPathComponent, isDir: false,
+            size: original.fileSize, path: original.filePath, modifiedDate: original.lastModified)
+        await inspections.record(original, sidecars: .init([entry]), complete: true)
+        let scanner = TVSourceScanner(metadataInspections: inspections)
+        let result = await scanner.scan(source: source, lister: ListedFiles(entries: [entry]), dirs: ["/"],
+            credential: nil, existingSongs: [original], rereadMetadata: true,
+            onSkeletonBatch: { _ in }, onMetadataBatch: { _ in })
+        XCTAssertEqual(result.metadataFailureCount, 1)
+        XCTAssertEqual(scanner.metadataIssueCount, 1)
+        XCTAssertEqual(result.songs.first?.id, original.id)
+        XCTAssertEqual(result.songs.first?.title, original.title)
+        await inspections.flush()
+    }
+
+    func testServerRereadUpdatesUnchangedCatalogAndPreservesManualEdits() {
+        var original = song()
+        original.replayGainTrackGain = -6
+        original.artistArtworkFileName = "/artist.jpg"
+        var incoming = original
+        incoming.replayGainTrackGain = nil
+        incoming.artistArtworkFileName = nil
+        incoming.title = "Updated server title"
+        incoming.artistName = "Updated server artist"
+        incoming.genre = "Jazz"
+        let updated = TVSourceScanner.rereadServerSong(existing: original, incoming: incoming)
+        XCTAssertEqual(updated.title, incoming.title)
+        XCTAssertEqual(updated.artistName, incoming.artistName)
+        XCTAssertEqual(updated.genre, "Jazz")
+        XCTAssertEqual(updated.replayGainTrackGain, -6)
+        XCTAssertEqual(updated.artistArtworkFileName, "/artist.jpg")
+        XCTAssertEqual(updated.dateAdded, original.dateAdded)
+        var edited = original
+        edited.userMetadataEditedAt = Date()
+        let preserved = TVSourceScanner.rereadServerSong(existing: edited, incoming: incoming)
+        XCTAssertEqual(preserved.title, original.title)
+        XCTAssertEqual(preserved.artistName, original.artistName)
+    }
+
+    private func taggedWave(title: String, genre: String, album: String) -> Data {
+        func le<T: FixedWidthInteger>(_ value: T) -> Data {
+            var encoded = value.littleEndian
+            return withUnsafeBytes(of: &encoded) { Data($0) }
+        }
+        func chunk(_ name: String, _ payload: Data) -> Data {
+            var data = Data(name.utf8) + le(UInt32(payload.count)) + payload
+            if payload.count % 2 != 0 { data.append(0) }
+            return data
+        }
+        var tags = Data()
+        for (id, value) in [("TIT2", title), ("TPE1", "Tagged Artist"), ("TPE2", "Album Artist"),
+                            ("TALB", album), ("TCON", genre), ("TYER", "2001"),
+                            ("TRCK", "3"), ("TPOS", "2")] {
+            let payload = Data([0]) + Data(value.utf8)
+            var size = UInt32(payload.count).bigEndian
+            tags += Data(id.utf8) + withUnsafeBytes(of: &size) { Data($0) } + Data([0, 0]) + payload
+        }
+        let size = tags.count
+        let tag = Data([0x49, 0x44, 0x33, 3, 0, 0, UInt8((size >> 21) & 127),
+                        UInt8((size >> 14) & 127), UInt8((size >> 7) & 127), UInt8(size & 127)]) + tags
+        let format = le(UInt16(1)) + le(UInt16(1)) + le(UInt32(8000)) + le(UInt32(16000)) + le(UInt16(2)) + le(UInt16(16))
+        let body = Data("WAVE".utf8) + chunk("fmt ", format) + chunk("id3 ", tag) + chunk("data", Data(repeating: 0, count: 1600))
+        return Data("RIFF".utf8) + le(UInt32(body.count)) + body
     }
 
     func testBuiltInArtistLookupRequiresExplicitOptInAndPreservesConfiguredSources() {

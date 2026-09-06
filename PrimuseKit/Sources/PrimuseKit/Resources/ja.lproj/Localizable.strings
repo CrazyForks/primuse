@@ -717,3 +717,11 @@
 "batch_scrape_artwork_counts_format" = "取得済み %d · 未取得 %d";
 
 "tv_artist_artwork_source_hint" = "アーティスト名で有効なソースを検索します。未設定の場合は iTunes を使用します。";
+
+"tv_metadata_reread" = "すべてのタグを再読み込み";
+"tv_metadata_reread_body" = "選択したフォルダを再スキャンし、曲名、アーティスト、アルバム、ジャンル、年、トラック番号、音声情報、アートワーク、歌詞を読み込みます。手動の編集は保持され、元のファイルは変更されません。";
+"tv_metadata_select_source" = "音楽ソースを選択してください。確認済みのファイルも再度読み込みます。";
+"tv_metadata_source_hint" = "選択したフォルダ内のタグ、アートワーク、歌詞を再読み込み";
+"tv_metadata_server_hint" = "サーバーのカタログとメタデータを更新";
+"tv_metadata_source_unavailable" = "ソースを有効にするか、iPhoneまたはMacで再スキャンして同期してください。";
+"tv_metadata_reread_issues" = "%d曲を完全に読み込めませんでした。既存の情報は保持されています。再試行できます。";

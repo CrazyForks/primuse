@@ -118,6 +118,8 @@ actor TVMetadataReaderPool {
     }
 
     private let source: MusicSource
+    private let rereadMetadata: Bool
+    private var refreshedAlbumIDs: Set<String> = []
     private let audit = TVMetadataReadAudit()
     var readFailureCount: Int { get async { await audit.failures } }
     func markIncomplete() async { await audit.failed() }
@@ -131,14 +133,19 @@ actor TVMetadataReaderPool {
     private static let maximumCachedRangeBytes = 24 * 1024 * 1024
     private static let maximumIndividualCachedRangeBytes: Int64 = 4 * 1024 * 1024
 
-    init(source: MusicSource, credential: SourceCredential?) {
+    init(source: MusicSource, credential: SourceCredential?, rereadMetadata: Bool = false) {
         self.source = source
+        self.rereadMetadata = rereadMetadata
         self.credential = credential
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 12
         configuration.timeoutIntervalForResource = 20
         configuration.httpMaximumConnectionsPerHost = 2
         session = URLSession(configuration: configuration)
+    }
+
+    func refreshesAlbumArtwork(_ albumID: String) -> Bool {
+        rereadMetadata && refreshedAlbumIDs.insert(albumID).inserted
     }
 
     func localURL(path: String) -> URL? {
@@ -706,15 +713,15 @@ enum TVMetadataEnricher {
                 }
             }
             try Task.checkCancellation()
-            if let coverData, !coverData.isEmpty {
+            if let coverData,
+               ArtworkImageCompatibility.isCompleteImage(coverData),
+               !ArtworkImageCompatibility.hasRedundantJPEGSampling(coverData) {
                 let store = MetadataAssetStore.shared
-                if let albumID = output.albumID,
-                   !albumID.isEmpty,
-                   !store.hasAlbumCover(forAlbumID: albumID) {
-                    _ = await store.storeAlbumCover(
-                        coverData,
-                        forAlbumID: albumID
-                    )
+                if let albumID = output.albumID, !albumID.isEmpty {
+                    let refresh = await readerPool.refreshesAlbumArtwork(albumID)
+                    if refresh || !store.hasAlbumCover(forAlbumID: albumID) {
+                        _ = await store.storeAlbumCover(coverData, forAlbumID: albumID)
+                    }
                 }
                 try Task.checkCancellation()
                 await store.cacheCover(coverData, forSongID: output.id)
@@ -723,6 +730,8 @@ enum TVMetadataEnricher {
                 } else {
                     await readerPool.markIncomplete()
                 }
+            } else if coverData != nil {
+                await readerPool.markIncomplete()
             }
         }
 

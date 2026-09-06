@@ -714,3 +714,11 @@
 "batch_scrape_artwork_counts_format" = "已获取 %d · 未获取 %d";
 
 "tv_artist_artwork_source_hint" = "按艺术家名称在线查找图片，使用已启用的刮削源；未配置时使用 iTunes。";
+
+"tv_metadata_reread" = "重新读取全部标签";
+"tv_metadata_reread_body" = "重新扫描已选目录，读取歌名、艺术家、专辑、流派、年份、轨号、音质信息、封面和歌词。保留手动编辑的内容，不修改源文件。";
+"tv_metadata_select_source" = "选择需要重读的音乐源，包括已检查过的文件也会重新读取。";
+"tv_metadata_source_hint" = "重读已选目录内所有歌曲的标签、封面和歌词";
+"tv_metadata_server_hint" = "刷新服务端曲库和元数据";
+"tv_metadata_source_unavailable" = "请先启用此来源，或在 iPhone / Mac 重新扫描后同步。";
+"tv_metadata_reread_issues" = "%d 首未能完整读取，已保留现有信息，可再次重试。";

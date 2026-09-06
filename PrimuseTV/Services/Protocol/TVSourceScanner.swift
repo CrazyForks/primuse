@@ -321,6 +321,7 @@ final class TVSourceScanner {
     var phase: Phase = .idle
     var indexed: Int = 0
     var currentFile: String = ""
+    var metadataIssueCount = 0
     private let metadataInspections: TVMetadataInspectionStore
 
     init(metadataInspections: TVMetadataInspectionStore = .shared) {
@@ -423,6 +424,7 @@ final class TVSourceScanner {
         dirs: [String],
         credential: SourceCredential?,
         existingSongs: [Song],
+        rereadMetadata: Bool = false,
         resumeState: SourceScanResumeState? = nil,
         onCheckpoint: TVScanCheckpointHandler? = nil,
         onSkeletonBatch: @escaping TVScanBatchHandler,
@@ -431,11 +433,13 @@ final class TVSourceScanner {
         phase = .scanning
         indexed = 0
         currentFile = ""
+        metadataIssueCount = 0
         if source.type == .fnMusic || source.type == .daoliyu {
             return await scanServerCatalog(
                 source: source,
                 credential: credential,
                 existingSongs: existingSongs,
+                rereadMetadata: rereadMetadata,
                 onSkeletonBatch: onSkeletonBatch
             )
         }
@@ -445,7 +449,8 @@ final class TVSourceScanner {
             dirs: dirs,
             credential: credential,
             existingSongs: existingSongs,
-            resumeState: resumeState,
+            rereadMetadata: rereadMetadata,
+            resumeState: rereadMetadata ? nil : resumeState,
             onCheckpoint: onCheckpoint,
             onSkeletonBatch: onSkeletonBatch,
             onMetadataBatch: onMetadataBatch
@@ -487,6 +492,7 @@ final class TVSourceScanner {
         source: MusicSource,
         credential: SourceCredential?,
         existingSongs: [Song],
+        rereadMetadata: Bool,
         onSkeletonBatch: @escaping TVScanBatchHandler
     ) async -> TVScanResult {
         let existingByID = Self.existingSongsByCanonicalID(existingSongs)
@@ -502,10 +508,9 @@ final class TVSourceScanner {
             candidate.id = TVScanPipelinePolicy.canonicalSongID(candidate.id)
             let existing = existingByID[candidate.id]
                 ?? existingByLocation[Self.locationKey(candidate)]
-            let song = TVScanPipelinePolicy.reconciledSkeleton(
-                existing: existing,
-                candidate: candidate
-            )
+            let song = rereadMetadata
+                ? Self.rereadServerSong(existing: existing, incoming: candidate)
+                : TVScanPipelinePolicy.reconciledSkeleton(existing: existing, candidate: candidate)
             if discoveredIDs.insert(song.id).inserted {
                 songOrder.append(song.id)
             }
@@ -620,12 +625,38 @@ final class TVSourceScanner {
         }
     }
 
+    static func rereadServerSong(existing: Song?, incoming: Song) -> Song {
+        var song = incoming
+        if let existing {
+            if !ServerSongCatalogMergePolicy.contentChanged(existing: existing, incoming: incoming) {
+                song.coverArtFileName = song.coverArtFileName ?? existing.coverArtFileName
+                song.artistArtworkFileName = song.artistArtworkFileName ?? existing.artistArtworkFileName
+                song.lyricsFileName = song.lyricsFileName ?? existing.lyricsFileName
+                song.lyricsText = song.lyricsText ?? existing.lyricsText
+                song.mvPath = song.mvPath ?? existing.mvPath
+                song.bitRate = song.bitRate ?? existing.bitRate
+                song.sampleRate = song.sampleRate ?? existing.sampleRate
+                song.bitDepth = song.bitDepth ?? existing.bitDepth
+                song.replayGainTrackGain = song.replayGainTrackGain ?? existing.replayGainTrackGain
+                song.replayGainTrackPeak = song.replayGainTrackPeak ?? existing.replayGainTrackPeak
+                song.replayGainAlbumGain = song.replayGainAlbumGain ?? existing.replayGainAlbumGain
+                song.replayGainAlbumPeak = song.replayGainAlbumPeak ?? existing.replayGainAlbumPeak
+                if song.duration <= 0 { song.duration = existing.duration }
+            }
+            song = SongUserMetadataPolicy.preservingUserEdits(from: existing, in: song)
+            song.dateAdded = existing.dateAdded
+        }
+        MusicLibrary.fillDerivedIDs(&song)
+        return song
+    }
+
     private func scanDirectories(
         source: MusicSource,
         lister: TVDirectoryLister,
         dirs: [String],
         credential: SourceCredential?,
         existingSongs: [Song],
+        rereadMetadata: Bool,
         resumeState suppliedResumeState: SourceScanResumeState?,
         onCheckpoint: TVScanCheckpointHandler?,
         onSkeletonBatch: @escaping TVScanBatchHandler,
@@ -668,7 +699,7 @@ final class TVSourceScanner {
         var partialDirectories: [String] = []
         var songsSinceCheckpoint = 0
         var lastCheckpointAt = Date()
-        let readerPool = TVMetadataReaderPool(source: source, credential: credential)
+        let readerPool = TVMetadataReaderPool(source: source, credential: credential, rereadMetadata: rereadMetadata)
 
         // A resumed walk already published completed directories. Seed the
         // final authoritative result without emitting the same skeletons again.
@@ -977,7 +1008,7 @@ final class TVSourceScanner {
                 ) { group in
                     for position in positions {
                         let item = items[position]
-                        if TVScanPipelinePolicy.canReuseMetadata(
+                        if !rereadMetadata, TVScanPipelinePolicy.canReuseMetadata(
                             existing: item.existing,
                             candidate: item.candidate
                         ), let existing = item.existing,
@@ -1008,6 +1039,7 @@ final class TVSourceScanner {
                 for (position, result) in results {
                     switch result.status {
                     case .enriched:
+                        if !result.inspectionComplete { metadataFailureCount += 1 }
                         await metadataInspections.record(
                             result.song, sidecars: items[position].sidecars, complete: result.inspectionComplete
                         )
@@ -1019,6 +1051,7 @@ final class TVSourceScanner {
                     case .cancelled:
                         throw CancellationError()
                     }
+                    metadataIssueCount = metadataFailureCount
                     if pendingMetadataBatch.count
                         >= TVScanPipelinePolicy.publicationBatchSize {
                         let batch = Array(

@@ -44,6 +44,7 @@ struct TVSettingsView: View {
     @State private var showsEffectPicker = tvDebugShowsEffectPicker
     @State private var showsThemePicker = tvDebugShowsThemePicker
     @State private var showsAISettings = false
+    @State private var showsMetadata = false
     @State private var isSyncing = false
     @State private var syncMsg: String?
     @State private var artistNameSettings = ArtistNameSettingsStore.shared
@@ -119,6 +120,10 @@ struct TVSettingsView: View {
                             )
                         }
                         settingsSection(PMString("ext.tv.settings.library")) {
+                            navRow("arrow.clockwise", String(localized: "metadata"), PMString("tv_metadata_reread")) {
+                                showsMetadata = true
+                            }
+                            settingDivider
                             navRow("music.note", PMString("ext.tv.settings.library"), libraryStat) { go(.library) }
                             settingDivider
                             infoRow(
@@ -202,9 +207,14 @@ struct TVSettingsView: View {
             TVAISettingsContainer()
                 .environment(intelligence)
         }
+        .fullScreenCover(isPresented: $showsMetadata) {
+            TVMetadataMaintenanceView().environment(store)
+        }
         .preferredColorScheme(appearance.colorScheme)
         .onExitCommand {
-            if showsAISettings {
+            if showsMetadata {
+                showsMetadata = false
+            } else if showsAISettings {
                 showsAISettings = false
             } else if showsThemePicker {
                 showsThemePicker = false

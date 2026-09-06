@@ -61,6 +61,7 @@ struct TVScanFlowView: View {
     @Environment(TVStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let source: MusicSource
+    var rereadMetadata = false
 
     @State private var lister: TVDirectoryLister?
     @State private var path = "/"
@@ -93,6 +94,18 @@ struct TVScanFlowView: View {
                 )
             } else if source.type == .fnMusic || source.type == .daoliyu {
                 fnMusicPickView
+            } else if rereadMetadata && !source.scannedDirectories.isEmpty {
+                VStack(alignment: .leading, spacing: 24) {
+                    Text(PMString("tv_metadata_reread")).tvFont(.pageTitle)
+                    Text(source.name).tvFont(.sectionTitle)
+                    Text(PMString("tv_metadata_reread_body")).tvFont(.body)
+                        .foregroundStyle(TVColor.textMuted)
+                    Text(source.scannedDirectories.joined(separator: "\n"))
+                        .tvFont(.caption).foregroundStyle(TVColor.textFaint)
+                        .lineLimit(4)
+                    summaryPanel
+                }
+                .frame(maxWidth: 920, alignment: .leading)
             } else {
                 pickView
             }
@@ -108,7 +121,7 @@ struct TVScanFlowView: View {
             if source.type != .fnMusic && source.type != .daoliyu, lister == nil {
                 lister = store.makeLister(for: source)
                 selected = Set(source.scannedDirectories)   // 回填上次扫描勾选的目录
-                load("/")
+                if !rereadMetadata || selected.isEmpty { load("/") }
             }
         }
     }
@@ -258,15 +271,20 @@ struct TVScanFlowView: View {
             VStack(alignment: .leading, spacing: 0) {
                 TVEyebrow(text: PMString("ext.tv.scan.summary")).padding(.bottom, 14)
                 summaryRow(PMString("ext.tv.scan.selected"), selected.isEmpty ? PMString("ext.tv.scan.currentFolder") : PMString("ext.tv.scan.folderCount", selected.count))
-                summaryRow(PMString("ext.tv.scan.metadata"), PMString("ext.tv.scan.metadataValue"))
+                summaryRow(PMString("ext.tv.scan.metadata"), PMString(
+                    rereadMetadata ? "tv_metadata_reread" : "ext.tv.scan.metadataValue"
+                ))
                 summaryRow(PMString("ext.tv.scan.playable"), PMString("ext.tv.scan.formats"))
             }
             .padding(26).frame(maxWidth: .infinity)
             .background(TVColor.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(TVColor.cardBorder, lineWidth: 0.5) }
 
+            if let browseError {
+                Text(browseError).tvFont(.caption).foregroundStyle(TVColor.warn)
+            }
             TVFocusButton(radius: 16, accent: TVColor.brand, scale: 1.05, lift: 4, action: startScan) { f in
-                Label(PMString("ext.tv.scan.start"), systemImage: "arrow.triangle.2.circlepath")
+                Label(PMString(rereadMetadata ? "tv_metadata_reread" : "ext.tv.scan.start"), systemImage: "arrow.triangle.2.circlepath")
                     .font(.system(size: 24, weight: .bold)).foregroundStyle(TVColor.onBrand)
                     .frame(maxWidth: .infinity).padding(.vertical, 20)
                     .background(TVColor.brand.opacity(f ? 1 : 0.88), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -335,14 +353,18 @@ struct TVScanFlowView: View {
     }
 
     private func startScan() {
-        guard let lister else { return }
+        guard let lister else {
+            browseError = PMString("ext.tv.scan.connectFailed")
+            return
+        }
         let dirs = TVScanDirectorySelectionPolicy.normalized(
             selected.isEmpty ? [path] : Array(selected)
         )
         loadTask?.cancel()
         started = true
         Task {
-            let admitted = await store.runScan(source: source, lister: lister, dirs: dirs)
+            let admitted = await store.runScan(source: source, lister: lister, dirs: dirs,
+                                              rereadMetadata: rereadMetadata)
             guard !admitted, !Task.isCancelled else { return }
             browseError = PMString("ext.tv.scan.busy")
             started = false
@@ -353,7 +375,7 @@ struct TVScanFlowView: View {
         loadTask?.cancel()
         started = true
         Task {
-            let admitted = await store.runFnMusicScan(source: source)
+            let admitted = await store.runFnMusicScan(source: source, rereadMetadata: rereadMetadata)
             guard !admitted, !Task.isCancelled else { return }
             browseError = PMString("ext.tv.scan.busy")
             started = false
@@ -385,7 +407,8 @@ private struct TVScanningView: View {
             Text(title)
                 .font(.system(size: 40, weight: .bold)).foregroundStyle(TVColor.text).padding(.bottom, 10)
             Text(currentLine).font(.system(size: 18, design: .monospaced)).foregroundStyle(TVColor.textFaint)
-                .lineLimit(1).truncationMode(.middle).frame(maxWidth: 900).padding(.bottom, 36)
+                .lineLimit(done ? 3 : 1).truncationMode(.middle).multilineTextAlignment(.center)
+                .frame(maxWidth: 900).padding(.bottom, 36)
 
             HStack(spacing: 56) {
                 stat("\(store.scanner.indexed)", PMString("ext.tv.scan.indexed"))
@@ -448,6 +471,9 @@ private struct TVScanningView: View {
 
     private var currentLine: String {
         if case .failed = phase { return PMString("ext.tv.scan.interrupted") }
+        if done, store.scanner.metadataIssueCount > 0 {
+            return PMString("tv_metadata_reread_issues", store.scanner.metadataIssueCount)
+        }
         return done
             ? PMString("ext.tv.scan.totalIndexed", store.scanner.indexed)
             : (store.scanner.currentFile.isEmpty ? PMString("ext.tv.scan.walking") : store.scanner.currentFile)
