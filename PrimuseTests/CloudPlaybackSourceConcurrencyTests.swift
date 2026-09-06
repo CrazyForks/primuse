@@ -5,6 +5,66 @@ import XCTest
 @testable import Primuse
 
 final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
+    @MainActor
+    func testReadingConfigurationNotificationsNeverWaitForMainThread() async {
+        let center = NotificationCenter()
+        let names = [UserDefaults.didChangeNotification,
+                     ProcessInfo.thermalStateDidChangeNotification,
+                     Notification.Name.NSProcessInfoPowerStateDidChange]
+        let updated = expectation(description: "configuration updates reach the main actor")
+        updated.expectedFulfillmentCount = names.count
+        var received: [Notification.Name] = []
+        let observers = MetadataBackfillService.observeReadingConfigurationChanges(center: center) { name in
+            XCTAssertTrue(Thread.isMainThread)
+            received.append(name)
+            updated.fulfill()
+        }
+        defer { observers.forEach(center.removeObserver) }
+
+        for name in names {
+            let returned = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                center.post(name: name, object: NSObject())
+                returned.signal()
+            }
+            // Hold the main thread as MusicKit does while waiting for its
+            // identity queue. The sender must finish without a main run loop.
+            XCTAssertEqual(returned.wait(timeout: .now() + 1), .success)
+        }
+        XCTAssertTrue(received.isEmpty)
+        await fulfillment(of: [updated], timeout: 2)
+        XCTAssertEqual(Set(received), Set(names))
+    }
+
+    @MainActor
+    func testReadingPreferenceNotificationsApplyEveryModeAsynchronously() async throws {
+        let center = NotificationCenter()
+        let suite = "metadata-notification-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var mode = MetadataReadingMode.automatic
+        let observers = MetadataBackfillService.observeReadingConfigurationChanges(center: center) { name in
+            guard name == UserDefaults.didChangeNotification else { return }
+            mode = MetadataReadingMode.resolve(
+                storedValue: defaults.string(forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey),
+                legacyFastEnabled: false
+            )
+        }
+        defer { observers.forEach(center.removeObserver) }
+
+        for selected in [MetadataReadingMode.fast, .energySaving, .automatic] {
+            defaults.set(selected.rawValue, forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey)
+            await Task.detached {
+                center.post(name: UserDefaults.didChangeNotification, object: nil)
+            }.value
+            let deadline = ContinuousClock.now + .seconds(2)
+            while mode != selected, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            XCTAssertEqual(mode, selected)
+        }
+    }
+
     func testForegroundJoinsSlowPrefetchWithoutOverlappingTrailingFill() async throws {
         let sourceID = "cloud-shared-prefetch-\(UUID().uuidString)"
         let directory = try makeTemporaryDirectory()

@@ -989,25 +989,17 @@ final class MetadataBackfillService {
         // song's metadata in the library is already reset to bare by
         // `MusicLibrary.addSongs`, so `start()` will pick it up next pass.
         readingConfigurationChanged()
-        for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
-            configurationObservers.append(NotificationCenter.default.addObserver(
-                forName: name, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.readingConfigurationChanged() }
-            })
-        }
-        configurationObservers.append(NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+        configurationObservers = Self.observeReadingConfigurationChanges { [weak self] name in
+            guard let self else { return }
+            if name == UserDefaults.didChangeNotification {
                 let mode = MetadataReadingMode.resolve(
                     storedValue: UserDefaults.standard.string(forKey: MetadataBackfillExecutionPolicy.readingModeDefaultsKey),
                     legacyFastEnabled: UserDefaults.standard.bool(forKey: MetadataBackfillExecutionPolicy.highPerformanceAfterScanDefaultsKey)
                 )
-                if mode != self.readingMode { self.readingConfigurationChanged() }
+                guard mode != self.readingMode else { return }
             }
-        })
+            self.readingConfigurationChanged()
+        }
 
         NotificationCenter.default.addObserver(
             forName: .primuseSongContentChanged,
@@ -1062,6 +1054,22 @@ final class MetadataBackfillService {
             guard let self, let id = note.userInfo?["id"] as? String else { return }
             MainActor.assumeIsolated {
                 self.discardWork(forSourceID: id)
+            }
+        }
+    }
+
+    static func observeReadingConfigurationChanges(
+        center: NotificationCenter = .default,
+        didChange: @escaping @MainActor @Sendable (Notification.Name) -> Void
+    ) -> [NSObjectProtocol] {
+        [UserDefaults.didChangeNotification,
+         ProcessInfo.thermalStateDidChangeNotification,
+         Notification.Name.NSProcessInfoPowerStateDidChange].map { name in
+            // MusicKit can post defaults changes while holding a lock needed
+            // by the main thread. A main OperationQueue would synchronously
+            // wait for that thread before our callback could enqueue its Task.
+            center.addObserver(forName: name, object: nil, queue: nil) { _ in
+                Task { @MainActor in didChange(name) }
             }
         }
     }
