@@ -583,7 +583,7 @@ struct MacNowPlayingView: View {
                         foreground: playerSecondaryColor,
                         highlight: playerPrimaryColor
                     )
-                    .font(.system(size: isWindowFullScreen ? 20 : 16))
+                    .font(.system(size: isWindowFullScreen ? 36 : 24))
                     .padding(.top, 6)
                 }
                 if let sourceLabel, !sourceLabel.isEmpty {

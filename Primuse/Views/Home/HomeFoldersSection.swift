@@ -259,16 +259,16 @@ struct HomeFolderBrowser: View {
 
             if let nodeID {
                 let ids = model.index?.directSongIDs(in: nodeID) ?? []
-                if !ids.isEmpty {
+                // 先过滤缺失歌曲，让 List 的每个元素固定生成一行，保留按需加载。
+                let songs = ids.compactMap { library.unobservedVisibleSong(id: $0) }
+                if !songs.isEmpty {
                     Section("tab_songs") {
-                        ForEach(ids, id: \.self) { id in
-                            if let song = library.unobservedVisibleSong(id: id) {
-                                SongRowView(song: song, isPlaying: player.currentSong?.id == id)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        HomeDiscoveryPlayback.play(ids: ids, startingAt: id, library: library, player: player)
-                                    }
-                            }
+                        ForEach(songs) { song in
+                            SongRowView(song: song, isPlaying: player.currentSong?.id == song.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    HomeDiscoveryPlayback.play(ids: ids, startingAt: song.id, library: library, player: player)
+                                }
                         }
                     }
                 }

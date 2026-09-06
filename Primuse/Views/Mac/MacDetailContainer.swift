@@ -18,7 +18,6 @@ struct MacDetailContainer: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
-                .id(route.stableID)
                 .navigationBarBackButtonHidden(true)
                 .transaction { transaction in
                     transaction.animation = nil
@@ -47,20 +46,12 @@ struct MacDetailContainer: View {
                 // 叠出第二条系统 bar (会出现 "搜索歌曲" + 排序按钮悬空在最顶)。
                 .toolbar(.hidden, for: .windowToolbar)
         }
-        .onChange(of: route) { _, _ in
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                path = NavigationPath()
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .primuseDetailGoBack)) { _ in
             if !path.isEmpty { path.removeLast() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseSelectPlaylists)) { _ in
             // 删除当前歌单后跳「歌单」总览。若这张歌单是 push 进来的 (从总览点入),
-            // 选中路由没变, onChange 不触发, 详情栈里还压着它的空详情 — 这里主动
-            // 清栈, 保证回到干净的总览。
+            // 详情栈里可能还压着它的空详情 — 这里主动清栈。
             guard !path.isEmpty else { return }
             var transaction = Transaction()
             transaction.disablesAnimations = true

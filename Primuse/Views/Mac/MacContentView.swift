@@ -8,6 +8,7 @@ import PrimuseKit
 /// `PMTitleBar` 绘制,窗口控制保留 AppKit 原生实现。
 struct MacContentView: View {
     @State private var selection: MacRoute = .home
+    @State private var detailNavigationID = UUID()
     @State private var sidebarCollapsed: Bool = false
     @State private var savedSidebarCollapsed: Bool = false
     @State private var nowPlayingPresented = false
@@ -76,6 +77,7 @@ struct MacContentView: View {
                         onShowSongInLibrary: showSongInLibrary,
                         onOpenLibrarySongs: { selectRoute(.section(.songs)) }
                     )
+                        .id(detailNavigationID)
                         .background(PMColor.bg.ignoresSafeArea())
 
                     if nowPlayingPresented {
@@ -424,6 +426,8 @@ struct MacContentView: View {
         withTransaction(transaction) {
             nowPlayingPresented = false
             selection = route
+            // 直接目标 NavigationLink 的展示状态不在 path 内，侧栏导航需重建整栈。
+            detailNavigationID = UUID()
         }
     }
 
@@ -435,7 +439,7 @@ struct MacContentView: View {
     private func restorePersistedRouteIfNeeded() {
         guard !didRestorePersistedRoute else { return }
         didRestorePersistedRoute = true
-        selection = route(for: persistedRouteID) ?? .home
+        selectRoute(route(for: persistedRouteID) ?? .home)
     }
 
     private func persistenceID(for route: MacRoute) -> String {
