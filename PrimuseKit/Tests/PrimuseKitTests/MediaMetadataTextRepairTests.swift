@@ -3,6 +3,49 @@ import Testing
 @testable import PrimuseKit
 
 @Suite struct AlbumMetadataTextRepairTests {
+    @Test func partiallyRestoresTruncatedAlbumWithoutGuessingItsLastCharacter() throws {
+        let payload = Data("大人的情".utf8) + Data([0xE6, 0xAD]) + Data("?ARTIST=张宇".utf8)
+        let decoded = try #require(TextEncodingRepair.decodeID3Text(payload, encodingByte: 3))
+        #expect(decoded == "澶т汉鐨勬儏姝?ARTIST=寮犲畤")
+        let album = MediaMetadataTextRepair.repairedAlbumTitle(decoded, artist: "张宇")
+        #expect(album == "大人的情\u{FFFD}")
+        #expect(TextEncodingRepair.hasUnrecoverableReplacement(in: try #require(album)))
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(album, artist: "张宇") == album)
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(decoded, artist: "另一位歌手") == decoded)
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(decoded, artist: nil) == decoded)
+    }
+
+    @Test func partiallyRestoresAlbumAfterAParserHasAlreadySplitItsFields() {
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "澶т汉鐨勬儏姝", artist: "张宇"
+        ) == "大人的情\u{FFFD}")
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "澶т汉鐨勬儏姝\0ARTIST=寮犲畤", artist: "张宇"
+        ) == "大人的情\u{FFFD}")
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "大人的情\u{FFFD}\u{FFFD}?ARTIST=张宇", artist: "张宇"
+        ) == "大人的情\u{FFFD}\u{FFFD}")
+    }
+
+    @Test func partialRereadImprovesDamagedAlbumsAndPreservesCompleteAlbums() {
+        for current in ["大人的情歌", "龘歌", "Björk", "大人的情歌?ARTIST=张宇"] {
+            #expect(MediaMetadataTextRepair.preferredAlbumTitle(
+                current: current, incoming: "大人的情\u{FFFD}", artist: "张宇"
+            ) == (current == "大人的情歌?ARTIST=张宇" ? "大人的情歌" : current))
+        }
+        for current in [nil, "", "澶т汉鐨勬儏姝?ARTIST=寮犲畤", "大人的情\u{FFFD}"] {
+            #expect(MediaMetadataTextRepair.preferredAlbumTitle(
+                current: current, incoming: "大人的情\u{FFFD}", artist: "张宇"
+            ) == "大人的情\u{FFFD}")
+        }
+        #expect(MediaMetadataTextRepair.preferredAlbumTitle(
+            current: "大人的情\u{FFFD}", incoming: "大人的情歌", artist: "张宇"
+        ) == "大人的情歌")
+        #expect(MediaMetadataTextRepair.preferredAlbumTitle(
+            current: "已知专辑", incoming: nil, artist: "张宇"
+        ) == "已知专辑")
+    }
+
     @Test(arguments: ["?", "\0", "\u{FFFD}", "\n"])
     func separatesAlbumFromAnIndependentlyVerifiedArtist(separator: String) {
         let album = "闆ㄤ竴鐩翠笅\(separator)ARTIST=寮犲畤"
@@ -34,7 +77,7 @@ import Testing
         ) == "雨一直下?ARTIST=张宇")
         #expect(MediaMetadataTextRepair.repairedAlbumTitle(
             "雨\u{FFFD}?ARTIST=张宇", artist: "张宇"
-        ) == "雨\u{FFFD}?ARTIST=张宇")
+        ) == "雨\u{FFFD}")
     }
 
     @Test func prefersIndependentRawAlbumOverTruncatedOrAppendedText() {

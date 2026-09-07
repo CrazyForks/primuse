@@ -4261,7 +4261,10 @@ final class MetadataBackfillService {
         // 拿它冒充专辑比留着乱码更糟。这里只做取舍不做替换。
         let mergedAlbum = bare.isCueTrack
             ? (bare.albumTitle ?? metadata.albumTitle)
-            : (metadata.albumTitle ?? bare.albumTitle)
+            : MediaMetadataTextRepair.preferredAlbumTitle(
+                current: bare.albumTitle, incoming: metadata.albumTitle,
+                artist: bare.artistName, albumArtist: bare.albumArtistName
+            )
         let mergedAlbumArtist = AlbumGroupingPolicy.resolvedAlbumArtistName(
             albumArtistName: bare.isCueTrack
                 ? (bare.albumArtistName ?? metadata.albumArtist)

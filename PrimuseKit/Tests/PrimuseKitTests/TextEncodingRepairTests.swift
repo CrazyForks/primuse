@@ -151,6 +151,31 @@ private func mojibake(
 
 // MARK: - 不可恢复字符
 
+@Test func partiallyRestoresOnlyStructurallyIncompleteUTF8Tails() throws {
+    let prefix = Data("大人的情".utf8)
+    for tail: [UInt8] in [[0xC2], [0xE6, 0xAD], [0xE0, 0xA0], [0xED, 0x9F],
+                          [0xF0, 0x90], [0xF4, 0x8F, 0xBF]] {
+        let mojibake = try #require(String(data: prefix + Data(tail), encoding: .isoLatin1))
+        #expect(TextEncodingRepair.partiallyRepairedUTF8(mojibake) == "大人的情\u{FFFD}")
+    }
+}
+
+@Test func rejectsInvalidUTF8AndPreservesCompleteTextDuringPartialRepair() throws {
+    let prefix = Data("大人的情".utf8)
+    for tail: [UInt8] in [[0x80], [0xC0], [0xC1], [0xE0, 0x80], [0xED, 0xA0],
+                          [0xF0, 0x80], [0xF4, 0x90], [0xF5, 0x80], [0xE6, 0xAD, 0x8C]] {
+        let mojibake = try #require(String(data: prefix + Data(tail), encoding: .isoLatin1))
+        #expect(TextEncodingRepair.partiallyRepairedUTF8(mojibake) == nil)
+    }
+    let middleDamage = try #require(String(
+        data: Data([0xFF]) + prefix + Data([0xE6, 0xAD]), encoding: .isoLatin1
+    ))
+    #expect(TextEncodingRepair.partiallyRepairedUTF8(middleDamage) == nil)
+    for text in ["大人的情歌", "告白氣球", "龘歌", "Björk", "Music 🎵", "大人的情\u{FFFD}"] {
+        #expect(TextEncodingRepair.partiallyRepairedUTF8(text) == nil)
+    }
+}
+
 @Test func detectsUnrecoverableReplacementAcrossScripts() {
     #expect(TextEncodingRepair.hasUnrecoverableReplacement(in: "对面\u{FFFD}"))
     #expect(TextEncodingRepair.hasUnrecoverableReplacement(in: "对面??"))

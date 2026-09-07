@@ -251,7 +251,9 @@ actor MetadataService {
             sourceArtistNames: embedded.sourceArtistNames?.compactMap {
                 MediaMetadataTextRepair.repaired($0)
             },
-            albumTitle: MediaMetadataTextRepair.repaired(embedded.albumTitle),
+            albumTitle: MediaMetadataTextRepair.repairedAlbumTitle(
+                embedded.albumTitle, artist: embedded.artist, albumArtist: embedded.albumArtist
+            ),
             albumArtist: AlbumGroupingPolicy.resolvedAlbumArtistName(
                 albumArtistName: MediaMetadataTextRepair.repaired(embedded.albumArtist),
                 trackArtistName: MediaMetadataTextRepair.repaired(embedded.artist)

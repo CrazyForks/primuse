@@ -2903,7 +2903,7 @@ final class MusicLibrary {
     @ObservationIgnored private var persistenceBlockedByCorruption = false
     @ObservationIgnored private var derivedIndexSignature: String?
     private static let startupCacheFormatVersion = 1
-    private static let loadedSongMigrationVersion = 5
+    private static let loadedSongMigrationVersion = 6
 
     func updateDisabledSourceIDs(_ ids: Set<String>) {
         guard disabledSourceIDs != ids else { return }

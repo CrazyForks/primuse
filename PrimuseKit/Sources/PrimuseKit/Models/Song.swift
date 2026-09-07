@@ -392,18 +392,38 @@ public enum MediaMetadataTextRepair {
         let value = repairedTagValue(text)
         guard let field = artistField(in: value),
               let independentArtist = field.key == "ARTIST" ? artist : albumArtist else {
-            return value
+            return TextEncodingRepair.partiallyRepairedUTF8(value) ?? value
         }
         let expected = repairedTagValue(independentArtist).trimmingCharacters(in: .whitespacesAndNewlines)
         let embedded = repairedTagValue(field.artist).trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = repairedTagValue(field.prefix).trimmingCharacters(in: .whitespacesAndNewlines)
+        let repairedPrefix = repairedTagValue(field.prefix)
+        let prefix = (TextEncodingRepair.partiallyRepairedUTF8(repairedPrefix) ?? repairedPrefix)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         // A literal question mark is not a field separator. Require the
         // appended value to agree with an independently read artist tag.
         guard !expected.isEmpty, !prefix.isEmpty,
               !TextEncodingRepair.requiresRawByteVerification(expected),
-              !TextEncodingRepair.requiresRawByteVerification(prefix),
               embedded.caseInsensitiveCompare(expected) == .orderedSame else { return value }
         return prefix
+    }
+
+    public static func preferredAlbumTitle(
+        current: String?, incoming: String?, artist: String?, albumArtist: String? = nil
+    ) -> String? {
+        guard let incoming, !incoming.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return current
+        }
+        // A partial reread can improve damaged cached text, but must not
+        // replace a complete album name already known to the library.
+        if TextEncodingRepair.hasUnrecoverableReplacement(in: incoming),
+           let current = repairedAlbumTitle(current, artist: artist, albumArtist: albumArtist),
+           !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !isSuspicious(current),
+           !TextEncodingRepair.hasTruncatedUTF8RewritePrefix(current),
+           artistField(in: current) == nil {
+            return current
+        }
+        return incoming
     }
 
     public static func preferredTagValue(current: String?, raw: String?) -> String? {

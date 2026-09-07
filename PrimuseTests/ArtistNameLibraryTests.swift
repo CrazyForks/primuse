@@ -5,6 +5,45 @@ import XCTest
 
 @MainActor
 final class FileAlbumArtistLibraryTests: XCTestCase {
+    func testTruncatedUTF8AlbumSurvivesLocalAndRemoteMetadataMapping() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TruncatedAlbumTags-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let tags = truncatedAlbumTagFixture()
+        let url = directory.appendingPathComponent("album.mp3")
+        try (tags.head + tags.tail).write(to: url)
+        let service = MetadataService()
+        let local = await service.loadMetadata(
+            for: url, allowOnlineFetch: false, trustedSource: false, discoverSidecars: false
+        )
+        let remote = await service.loadEmbeddedMetadata(
+            from: tags.head, id3TailData: tags.tail, fileExtension: "mp3",
+            fallbackTitle: "File name"
+        )
+        let tailOnly = await service.loadEmbeddedMetadata(
+            from: Data(repeating: 0, count: 128), id3TailData: tags.tail,
+            fileExtension: "mp3", fallbackTitle: "File name"
+        )
+        for metadata in [local, remote, tailOnly] {
+            XCTAssertEqual(metadata.title, "雨一直下")
+            XCTAssertEqual(metadata.artist, "张宇")
+            XCTAssertEqual(metadata.albumTitle, "大人的情\u{FFFD}")
+            XCTAssertTrue(TextEncodingRepair.hasUnrecoverableReplacement(in: metadata.albumTitle ?? ""))
+        }
+    }
+
+    func testLoadedTruncatedAlbumRetainsMissingCharacterEvidence() {
+        for album in ["澶т汉鐨勬儏姝?ARTIST=寮犲畤", "澶т汉鐨勬儏姝"] {
+            var cached = song(id: "truncated-album", metadata: .init(artist: "张宇", albumTitle: album))
+            cached.albumPinyin = "obsolete"
+            XCTAssertTrue(MusicLibrary.repairLegacyChineseMetadataText(in: &cached))
+            XCTAssertEqual(cached.albumTitle, "大人的情\u{FFFD}")
+            XCTAssertNil(cached.albumPinyin)
+            XCTAssertFalse(MusicLibrary.repairLegacyChineseMetadataText(in: &cached))
+        }
+    }
+
     func testAudioPropertiesIgnoreInvalidValuesAndAllowFallback() {
         let invalidValues: [Double] = [
             .nan, .infinity, -.infinity, .greatestFiniteMagnitude,
@@ -416,6 +455,27 @@ final class FileAlbumArtistLibraryTests: XCTestCase {
         }
         let size = Data([21, 14, 7, 0].map { UInt8((body.count >> $0) & 0x7F) })
         return Data([0x49, 0x44, 0x33, 3, 0, 0]) + size + body
+    }
+
+    private func truncatedAlbumTagFixture() -> (head: Data, tail: Data) {
+        let title = Data("雨一直下".utf8)
+        let artist = Data("张宇".utf8)
+        let album = Data("大人的情".utf8) + Data([0xE6, 0xAD]) + Data("?ARTIST=张宇".utf8)
+        func syncSafe(_ size: Int) -> Data {
+            Data([21, 14, 7, 0].map { UInt8((size >> $0) & 0x7F) })
+        }
+        var body = Data()
+        for (key, text) in [("TIT2", title), ("TPE1", artist), ("TALB", album)] {
+            let payload = Data([3]) + text
+            body += Data(key.utf8) + syncSafe(payload.count) + Data([0, 0]) + payload
+        }
+        let head = Data([0x49, 0x44, 0x33, 4, 0, 0]) + syncSafe(body.count) + body
+        var tail = Data("TAG".utf8)
+        for text in [title, artist, album] {
+            tail += text + Data(repeating: 0, count: 30 - text.count)
+        }
+        tail += Data(repeating: 0, count: 35)
+        return (head, tail)
     }
 }
 

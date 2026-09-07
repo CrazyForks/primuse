@@ -352,6 +352,35 @@ public enum TextEncodingRepair {
         .utf8, gb18030, big5, .shiftJIS, eucKR, .isoLatin1, .windowsCP1252,
     ]
 
+    /// Restores only complete UTF-8 characters from a reversible legacy
+    /// rendering. The incomplete final scalar stays explicitly missing.
+    static func partiallyRepairedUTF8(_ text: String) -> String? {
+        guard looksCorrupted(text) else { return nil }
+        let baseline = plausibility(text)
+        var best: (text: String, score: Int)?
+        for encoding in [gb18030, big5, .isoLatin1, .windowsCP1252] {
+            guard let bytes = losslessEncodedData(text, using: encoding),
+                  String(data: bytes, encoding: encoding) == text else { continue }
+            if encoding == gb18030 {
+                let legacyByteCount = text.unicodeScalars.reduce(0) {
+                    $0 + ($1.value < 0x80 ? 1 : 2)
+                }
+                guard bytes.count == legacyByteCount else { continue }
+            }
+            guard let prefix = truncatedUTF8Prefix(in: bytes),
+                  prefix.unicodeScalars.filter({ isCJKScript($0.value) }).count >= 2,
+                  !prefix.unicodeScalars.contains(where: {
+                      $0.value == 0xFFFD || isDisallowedControl($0.value)
+                  }) else { continue }
+            let score = plausibility(prefix)
+            guard score >= baseline + selfValidatingMargin else { continue }
+            if best == nil || score > best!.score {
+                best = (prefix + "\u{FFFD}", score)
+            }
+        }
+        return best?.text
+    }
+
     static func hasTruncatedUTF8RewritePrefix(_ text: String) -> Bool {
         for encoding in [gb18030, big5] {
             guard let bytes = losslessEncodedData(text, using: encoding),
@@ -359,20 +388,22 @@ public enum TextEncodingRepair {
                   String(data: bytes, encoding: .utf8) == nil else {
                 continue
             }
-            let maximumSuffix = min(3, bytes.count - 1)
-            for suffixCount in 1...maximumSuffix {
-                let split = bytes.count - suffixCount
-                let prefixData = Data(bytes.prefix(split))
-                let suffixData = Data(bytes.suffix(suffixCount))
-                guard let prefix = String(data: prefixData, encoding: .utf8),
-                      prefix.unicodeScalars.contains(where: { isCJKScript($0.value) }),
-                      isIncompleteUTF8Scalar(suffixData) else {
-                    continue
-                }
+            if truncatedUTF8Prefix(in: bytes) != nil {
                 return true
             }
         }
         return false
+    }
+
+    private static func truncatedUTF8Prefix(in data: Data) -> String? {
+        guard data.count >= 4 else { return nil }
+        for suffixCount in 1...min(3, data.count - 1) {
+            guard isIncompleteUTF8Scalar(Data(data.suffix(suffixCount))),
+                  let prefix = String(data: data.dropLast(suffixCount), encoding: .utf8),
+                  prefix.unicodeScalars.contains(where: { isCJKScript($0.value) }) else { continue }
+            return prefix
+        }
+        return nil
     }
 
     private static func isIncompleteUTF8Scalar(_ data: Data) -> Bool {
@@ -389,7 +420,18 @@ public enum TextEncodingRepair {
             return false
         }
         guard data.count < expectedCount else { return false }
-        return data.dropFirst().allSatisfy { (0x80...0xBF).contains($0) }
+        guard data.dropFirst().allSatisfy({ (0x80...0xBF).contains($0) }) else { return false }
+        if data.count > 1 {
+            let second = data[data.startIndex + 1]
+            switch first {
+            case 0xE0: return second >= 0xA0
+            case 0xED: return second <= 0x9F
+            case 0xF0: return second >= 0x90
+            case 0xF4: return second <= 0x8F
+            default: break
+            }
+        }
+        return true
     }
 
     // MARK: - 手动修正
