@@ -7,6 +7,43 @@ import UIKit
 import AppKit
 #endif
 
+@MainActor
+@Observable
+final class ScrapeOptionsTask {
+    private var operationID: UUID?
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    var isRunning: Bool { operationID != nil }
+
+    @discardableResult
+    func start(_ operation: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        cancel()
+        let id = UUID()
+        operationID = id
+        let task = Task { @MainActor [weak self] in
+            defer {
+                // A cancelled request may finish after its replacement has started.
+                if self?.operationID == id { self?.finish() }
+            }
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
+        self.task = task
+        return task
+    }
+
+    func cancel() {
+        let pendingTask = task
+        finish()
+        pendingTask?.cancel()
+    }
+
+    func finish() {
+        operationID = nil
+        task = nil
+    }
+}
+
 /// 平台无关的 systemGray / systemGray2 替身 ── iOS 走 UIColor.systemGray*,
 /// macOS 走 NSColor.secondaryLabelColor / tertiaryLabelColor (视觉接近)。
 private extension Color {
@@ -33,7 +70,6 @@ struct ScrapeOptionsView: View {
     /// `@Environment(\.dismiss)` 关不掉那个窗口。传一个回调让 view 主动通知
     /// controller 收起窗口。iOS 路径不传, 走 `dismiss()`。
     var onCloseRequest: (() -> Void)? = nil
-    var onApplyStateChanged: ((Bool) -> Void)? = nil
 
     @Environment(MusicLibrary.self) private var library
     @Environment(MusicScraperService.self) private var scraperService
@@ -43,6 +79,7 @@ struct ScrapeOptionsView: View {
 
     /// 取消按钮 / 完成时的统一收尾。优先走 onCloseRequest, 没传就走 dismiss。
     private func closeView() {
+        cancelViewTasks()
         if let onCloseRequest {
             onCloseRequest()
         } else {
@@ -60,7 +97,8 @@ struct ScrapeOptionsView: View {
     @State private var searchResults: [SearchResultItem] = []
     @State private var isSearching = false
     @State private var errorMessage: String?
-    @State private var isApplyingChanges = false
+    @State private var previewTask = ScrapeOptionsTask()
+    @State private var applyTask = ScrapeOptionsTask()
     @State private var applyErrorMessage: String?
     @State private var manualSearchQuery = ""
     @State private var manualMatchTitle = ""
@@ -105,7 +143,26 @@ struct ScrapeOptionsView: View {
     }
 
     private var isScrapeActionUnavailable: Bool {
-        isLocalScraping || scraperService.isSingleScraping || scraperService.isScraping
+        isApplyingChanges || isLocalScraping || scraperService.isSingleScraping || scraperService.isScraping
+    }
+
+    private var isApplyingChanges: Bool { applyTask.isRunning }
+
+    private func cancelPreviewTask() {
+        previewTask.cancel()
+        isSearching = false
+        isLocalScraping = false
+        loadingItemID = nil
+    }
+
+    private func cancelViewTasks() {
+        cancelPreviewTask()
+        applyTask.cancel()
+    }
+
+    private func returnTo(_ destination: ScrapeMode) {
+        cancelViewTasks()
+        mode = destination
     }
 
     #if os(macOS)
@@ -175,6 +232,7 @@ struct ScrapeOptionsView: View {
     var body: some View {
         #if os(macOS)
         macBody
+            .onDisappear { cancelViewTasks() }
             .alert("scrape_song_failed", isPresented: applyErrorPresented) {
                 Button("ok", role: .cancel) {}
             } message: {
@@ -196,11 +254,10 @@ struct ScrapeOptionsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("cancel") { closeView() }
-                        .disabled(isApplyingChanges)
                 }
             }
         }
-        .interactiveDismissDisabled(isApplyingChanges)
+        .onDisappear { cancelViewTasks() }
         .alert("scrape_song_failed", isPresented: applyErrorPresented) {
             Button("ok", role: .cancel) {}
         } message: {
@@ -241,7 +298,7 @@ struct ScrapeOptionsView: View {
             // 用户回到窗口 / view 重建不重复联网。
             guard !macDidInitialLoad else { return }
             macDidInitialLoad = true
-            await macInitialLoad()
+            previewTask.start { await macInitialLoad() }
         }
     }
 
@@ -349,7 +406,7 @@ struct ScrapeOptionsView: View {
             TextField("", text: $manualSearchQuery, prompt: Text("scrape_candidates_search_prompt"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
-                .onSubmit { Task { await macRunSearch() } }
+                .onSubmit { startManualTask { await macRunSearch() } }
             if !manualSearchQuery.isEmpty {
                 Button { manualSearchQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -383,7 +440,7 @@ struct ScrapeOptionsView: View {
         let isSelected = item.id == selectedItemID
         return Button {
             selectedItemID = item.id
-            Task { await selectManualResult(item) }
+            startManualTask { await selectManualResult(item) }
         } label: {
             HStack(spacing: 10) {
                 ScraperCoverThumbnail(
@@ -870,7 +927,6 @@ struct ScrapeOptionsView: View {
                 .frame(height: 28)
                 .background(PMColor.glassBtn, in: .rect(cornerRadius: 6))
                 .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(PMColor.cardBorder, lineWidth: 0.5) }
-                .disabled(isApplyingChanges)
 
             Button("apply_changes") { applySelectedChanges() }
                 .buttonStyle(.plain)
@@ -894,6 +950,7 @@ struct ScrapeOptionsView: View {
         let sidecarBaseName = await scraperService.suggestedSidecarBaseName(for: song)
         let usesMediaServerWriteback = await sourceManager.supportsMediaServerWriteback(for: song)
         let supportsSidecarWriteback = await sourceManager.supportsSidecarWriting(for: song)
+        guard !Task.isCancelled else { return }
         macDisplayTitle = title
         macSidecarBaseNameOverride = sidecarBaseName
         macUsesMediaServerWriteback = usesMediaServerWriteback
@@ -908,6 +965,7 @@ struct ScrapeOptionsView: View {
     /// 搜一遍候选, 然后自动选中匹配度最高 (排序后第一个) 的候选并拉详情。
     private func macRunSearch() async {
         await performManualSearch()
+        guard !Task.isCancelled else { return }
         if let first = searchResults.first {
             selectedItemID = first.id
             await selectManualResult(first)
@@ -964,7 +1022,7 @@ struct ScrapeOptionsView: View {
 
                 // Manual search
                 Button {
-                    Task { await manualSearch() }
+                    startManualTask { await manualSearch() }
                 } label: {
                     HStack {
                         Label("manual_scrape", systemImage: "magnifyingglass")
@@ -1099,18 +1157,23 @@ struct ScrapeOptionsView: View {
 
                 Section {
                     if previewSource == .manual {
-                        Button { mode = .manual } label: {
+                        Button { returnTo(.manual) } label: {
                             Text(String(localized: "back_to_results"))
                         }
                     }
-                    Button { mode = .options } label: { Text("back_to_options") }
+                    Button { returnTo(.options) } label: { Text("back_to_options") }
                 }
             }
         }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("apply_changes") {
+                Button {
                     applySelectedChanges()
+                } label: {
+                    HStack {
+                        if isApplyingChanges { ProgressView() }
+                        Text("apply_changes")
+                    }
                 }
                 .fontWeight(.semibold)
                 .disabled(!hasAnySelectedChange || isApplyingChanges)
@@ -1194,7 +1257,7 @@ struct ScrapeOptionsView: View {
             } else {
                 ForEach(searchResults) { item in
                     Button {
-                        Task { await selectManualResult(item) }
+                        startManualTask { await selectManualResult(item) }
                     } label: {
                         HStack(spacing: 10) {
                             // Cover art thumbnail — overlay a spinner once tapped so
@@ -1259,7 +1322,7 @@ struct ScrapeOptionsView: View {
         }
         .searchable(text: $manualSearchQuery, prompt: Text("search_query"))
         .onSubmit(of: .search) {
-            Task { await performManualSearch() }
+            startManualTask { await performManualSearch() }
         }
         .overlay {
             if isSearching {
@@ -1268,21 +1331,29 @@ struct ScrapeOptionsView: View {
         }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("back_to_options") { mode = .options }
+                Button("back_to_options") { returnTo(.options) }
             }
         }
         .onChange(of: searchLimit) { _, _ in
             // 用户在选项页改了 limit 后回来再搜,自动用新值;此处保险:已搜过
             // 的话立刻重搜让结果数量同步。
             if !manualSearchQuery.isEmpty {
-                Task { await performManualSearch() }
+                startManualTask { await performManualSearch() }
             }
         }
     }
 
     // MARK: - Logic
 
+    private func startManualTask(_ operation: @escaping @MainActor () async -> Void) {
+        guard !isApplyingChanges else { return }
+        cancelPreviewTask()
+        previewTask.start(operation)
+    }
+
     private func startAutomaticPreview() {
+        guard !isApplyingChanges else { return }
+        cancelPreviewTask()
         errorMessage = nil
 
         let startResult = isAppleMusicSong
@@ -1349,10 +1420,12 @@ struct ScrapeOptionsView: View {
 
     private func manualSearch() async {
         let title = await scraperService.suggestedScrapeTitle(for: song)
+        guard !Task.isCancelled else { return }
         #if os(macOS)
         let sidecarBaseName = await scraperService.suggestedSidecarBaseName(for: song)
         let usesMediaServerWriteback = await sourceManager.supportsMediaServerWriteback(for: song)
         let supportsSidecarWriteback = await sourceManager.supportsSidecarWriting(for: song)
+        guard !Task.isCancelled else { return }
         macDisplayTitle = title
         macSidecarBaseNameOverride = sidecarBaseName
         macUsesMediaServerWriteback = usesMediaServerWriteback
@@ -1367,7 +1440,11 @@ struct ScrapeOptionsView: View {
     }
 
     private func performManualSearch() async {
+        guard !Task.isCancelled else { return }
         isSearching = true
+        defer {
+            if !Task.isCancelled { isSearching = false }
+        }
         searchResults = []
         errorMessage = nil
         var aggregatedResults: [SearchResultItem] = []
@@ -1376,12 +1453,14 @@ struct ScrapeOptionsView: View {
         plog("🔍 Manual search query='\(manualSearchQuery)' enabled sources: \(settings.enabledSources.map { $0.type.rawValue })")
 
         for config in settings.enabledSources {
+            guard !Task.isCancelled else { return }
             guard canUseSourceInManualSearch(config) else { continue }
             do {
                 let scraper = MusicScraperFactory.create(for: config)
                 let result = try await scraper.search(
                     query: manualSearchQuery, artist: nil, album: nil, limit: searchLimit
                 )
+                guard !Task.isCancelled else { return }
                 for item in result.items {
                     plog("🔍 Search result: \(config.type.rawValue) '\(item.title)' coverUrl=\(item.coverUrl ?? "nil")")
                     let targetDurationMs = song.duration.sanitizedDuration > 0
@@ -1419,6 +1498,7 @@ struct ScrapeOptionsView: View {
                     ))
                 }
             } catch {
+                guard !Task.isCancelled else { return }
                 plog("⚠️ Search failed for \(config.type.rawValue): \(ConfigurableScraper.describeNetworkError(error))")
             }
         }
@@ -1437,20 +1517,26 @@ struct ScrapeOptionsView: View {
         }
 
         searchResults = aggregatedResults
-        isSearching = false
         mode = .manual
     }
 
     private func selectManualResult(_ item: SearchResultItem) async {
+        guard !Task.isCancelled else { return }
         isLocalScraping = true
         loadingItemID = item.id
-        defer { loadingItemID = nil }
+        defer {
+            if !Task.isCancelled {
+                isLocalScraping = false
+                loadingItemID = nil
+            }
+        }
 
         plog("👉 selectManualResult: src=\(item.sourceConfig.type.rawValue) title='\(item.title)' externalId=\(item.externalId.prefix(60))")
 
         do {
             let scraper = MusicScraperFactory.create(for: item.sourceConfig)
             let detail = try await scraper.getDetail(externalId: item.externalId)
+            try Task.checkCancellation()
             plog("👉 detail returned: title='\(detail?.title ?? "nil")' artist='\(detail?.artist ?? "nil")'")
 
             let candidateTitle = firstNonEmptyText(detail?.title, item.title) ?? song.title
@@ -1488,6 +1574,7 @@ struct ScrapeOptionsView: View {
                 coverData = data
                 hasCover = true
             }
+            try Task.checkCancellation()
 
             // Lyrics are independent from the selected metadata candidate's
             // source. iTunes/MusicBrainz candidates do not expose lyrics, so
@@ -1502,12 +1589,12 @@ struct ScrapeOptionsView: View {
                 album: candidateAlbum,
                 duration: lyricsDuration
             )
+            try Task.checkCancellation()
             let lyricsLines = fetchedLyrics.flatMap { $0.isEmpty ? nil : $0 }
             let hasLyrics = lyricsLines != nil
             let lyricsCount = lyricsLines?.count ?? 0
             plog("👉 Dedicated lyrics scrape returned: hasLyrics=\(hasLyrics) lines=\(lyricsCount)")
 
-            isLocalScraping = false
             let coverPx = coverData.flatMap { coverPixelSize(from: $0) }
 
             previewResult = ScrapePreview(
@@ -1536,7 +1623,7 @@ struct ScrapeOptionsView: View {
             previewSource = .manual
             mode = .preview
         } catch {
-            isLocalScraping = false
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -1545,8 +1632,7 @@ struct ScrapeOptionsView: View {
         guard !isApplyingChanges else { return }
         guard let preview = previewResult else { return }
         applyErrorMessage = nil
-        isApplyingChanges = true
-        onApplyStateChanged?(true)
+        cancelPreviewTask()
         let u = preview.updatedSong
         let allowsMetadataAndCover = !isAppleMusicSong
 
@@ -1562,8 +1648,7 @@ struct ScrapeOptionsView: View {
         let coverData = preview.coverData
         let lyricsLines = preview.lyricsLines
 
-        // Compute the cover filename synchronously; lyrics are committed by
-        // the writeback transaction after dismissal.
+        // Lyrics are committed separately through their source/cache transaction.
         let coverFileName: String? = needsCover && coverData != nil
             ? MetadataAssetStore.shared.expectedCoverFileName(for: song.id)
             : song.coverArtFileName
@@ -1591,17 +1676,13 @@ struct ScrapeOptionsView: View {
         // authoritative source share the editor's compare/write transaction.
         final.lyricsFileName = song.lyricsFileName
 
-        // 先 dismiss, 把 replaceSong (rebuildIndex/persistSnapshot/...)
-        // 和 sidecar 网络写都挪到 sheet 关闭之后, 避免主线程阻塞导致用户
-        // 觉得"应用修改卡死"。Sidecar Task 在后台跑 NAS 登录时若被 iOS
-        // 强杀, 进程级清理会终结它, 不会留下半成品。
         let lib = library
         let sm = sourceManager
         let store = sourcesStore
         let songID = song.id
         let onCompleteRef = onComplete
 
-        Task { @MainActor in
+        applyTask.start {
             var appliedFinal = final
             // Persist assets to disk (atomic, fast)
             if needsCover, let data = coverData {
@@ -1637,15 +1718,30 @@ struct ScrapeOptionsView: View {
             if needsLyrics, let lines = lyricsLines {
                 let wordLevel = lines.filter { $0.isWordLevel }.count
                 plog("👉 ScrapeOptionsView.apply lyrics=\(lines.count) wordLevelLines=\(wordLevel) firstSyllables=\(lines.first?.syllables?.count ?? -1)")
-                let payload = await LyricsWriteback.loadEditablePayload(
-                    for: appliedFinal,
-                    sourceManager: sm
-                )
-                let writebackMode = await LyricsWriteback.resolveMode(
-                    for: appliedFinal,
-                    sourceManager: sm,
-                    sourcesStore: store
-                )
+                let lyricsSong = appliedFinal
+                let payload: LyricsWriteback.EditablePayload
+                let writebackMode: LyricsWriteback.Mode
+                do {
+                    (payload, writebackMode) = try await AsyncOperationTimeout.run(seconds: 30) {
+                        let payload = await LyricsWriteback.loadEditablePayload(
+                            for: lyricsSong,
+                            sourceManager: sm
+                        )
+                        try Task.checkCancellation()
+                        let mode = await LyricsWriteback.resolveMode(
+                            for: lyricsSong,
+                            sourceManager: sm,
+                            sourcesStore: store
+                        )
+                        try Task.checkCancellation()
+                        return (payload, mode)
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    applyErrorMessage = error.localizedDescription
+                    return
+                }
+                guard !Task.isCancelled else { return }
                 let outcome = await LyricsWriteback.save(
                     text: LyricsContentParser.serialize(lines),
                     for: appliedFinal,
@@ -1657,20 +1753,19 @@ struct ScrapeOptionsView: View {
                     sourceManager: sm,
                     library: lib
                 )
+                guard !Task.isCancelled else { return }
                 if outcome.succeeded {
                     appliedFinal = outcome.updatedSong
                 } else {
                     let message = outcome.errorMessage ?? String(localized: "scrape_song_failed")
                     plog("⚠️ ScrapeOptionsView.apply lyrics writeback failed: \(message)")
-                    isApplyingChanges = false
-                    onApplyStateChanged?(false)
                     applyErrorMessage = message
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
             onCompleteRef?(appliedFinal)
-            isApplyingChanges = false
-            onApplyStateChanged?(false)
+            applyTask.finish()
             closeView()
 
             let usesMediaServerWriteback = await sm.supportsMediaServerWriteback(for: appliedFinal)

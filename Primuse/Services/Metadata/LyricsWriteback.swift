@@ -41,7 +41,7 @@ private actor LyricsWritebackMutationGate {
 enum LyricsWriteback {
     private static let mutationGate = LyricsWritebackMutationGate()
     /// 这首歌的歌词能写到哪。决定保存时走哪条路，也决定 UI 上那行状态提示。
-    enum Mode: Equatable {
+    enum Mode: Equatable, Sendable {
         /// 还在探测。
         case checking
         /// 写同目录的歌词 sidecar 文件（新文件默认 LRC，已有 TTML 保持 TTML）。
@@ -382,6 +382,7 @@ enum LyricsWriteback {
         sourceManager: SourceManager,
         library: MusicLibrary
     ) async -> SaveOutcome {
+        guard !Task.isCancelled else { return cancelledSave(for: song, mode: mode) }
         let mutationKey = mutationKey(for: song, mode: mode)
         await mutationGate.acquire(mutationKey)
         let outcome = await performSave(
@@ -397,6 +398,14 @@ enum LyricsWriteback {
         )
         await mutationGate.release(mutationKey)
         return outcome
+    }
+
+    private static func cancelledSave(for song: Song, mode: Mode) -> SaveOutcome {
+        SaveOutcome(
+            updatedSong: song,
+            errorMessage: URLError(.cancelled).localizedDescription,
+            persistence: persistence(for: mode)
+        )
     }
 
     private static func mutationKey(for song: Song, mode: Mode) -> String {
@@ -421,6 +430,7 @@ enum LyricsWriteback {
         sourceManager: SourceManager,
         library: MusicLibrary
     ) async -> SaveOutcome {
+        guard !Task.isCancelled else { return cancelledSave(for: song, mode: mode) }
         var updated = song
         let content = normalized(text)
         let requestedPersistence = persistence(for: mode)
@@ -470,6 +480,7 @@ enum LyricsWriteback {
                 )
             }
             let externalMutationToken: UUID?
+            guard !Task.isCancelled else { return cancelledSave(for: song, mode: mode) }
             switch mode {
             case .sidecar, .mediaServer:
                 externalMutationToken = await MetadataAssetStore.shared.beginLyricsMutation(
@@ -485,6 +496,15 @@ enum LyricsWriteback {
                 }
             case .checking, .localOnly, .unavailable:
                 externalMutationToken = nil
+            }
+            if Task.isCancelled {
+                if let externalMutationToken {
+                    await MetadataAssetStore.shared.cancelLyricsMutation(
+                        forSongID: song.id,
+                        token: externalMutationToken
+                    )
+                }
+                return cancelledSave(for: song, mode: mode)
             }
             if let error = await remove(for: updated, mode: mode, sourceManager: sourceManager) {
                 if let externalMutationToken {
@@ -569,6 +589,7 @@ enum LyricsWriteback {
                     persistence: requestedPersistence
                 )
             }
+            guard !Task.isCancelled else { return cancelledSave(for: song, mode: mode) }
             var writebackLines = staysLocal
                 ? validatedLines
                 : linesForPersistence(validatedLines, mode: mode)
@@ -604,6 +625,17 @@ enum LyricsWriteback {
                         persistence: requestedPersistence
                     )
                 }
+                if Task.isCancelled {
+                    if let externalMutationToken {
+                        await MetadataAssetStore.shared.cancelLyricsMutation(
+                            forSongID: song.id,
+                            token: externalMutationToken
+                        )
+                    }
+                    return cancelledSave(for: song, mode: mode)
+                }
+                // Once the source write starts, finish its cache transaction
+                // even if the presenting view has since been dismissed.
                 if let error = await write(
                     writebackLines,
                     content: persistenceContent(
