@@ -158,6 +158,7 @@ final class MusicLibraryMetadataReplacementTests: XCTestCase {
 
         let collectionRevision = library.visibleSongCollectionRevision
         let replacementToken = library.songReplacementToken
+        let invalidationRevision = library.songListSnapshotInvalidationRevision
         var updated = first
         updated.duration = 193
         updated.bitRate = 320
@@ -173,7 +174,7 @@ final class MusicLibraryMetadataReplacementTests: XCTestCase {
         XCTAssertEqual(library.visibleSongCollectionRevision, collectionRevision)
         XCTAssertNotEqual(library.songReplacementToken, replacementToken)
         XCTAssertEqual(library.lastReplacedSongIDs, [first.id])
-        XCTAssertFalse(library.lastReplacementRequiresSongListSnapshot)
+        XCTAssertEqual(library.songListSnapshotInvalidationRevision, invalidationRevision)
         XCTAssertEqual(library.songs.map(\.id), ["song-1", "song-2"])
 
         guard case .success = await library.persistNowAndWait() else {
@@ -190,11 +191,15 @@ final class MusicLibraryMetadataReplacementTests: XCTestCase {
         var song = makeSong(id: "playable", path: "")
         library.addSongs([song], affectedSourceIDs: [song.sourceID])
 
+        let invalidationRevision = library.songListSnapshotInvalidationRevision
         song.duration = 193
         await library.replaceSongsPreparedOffMain([song], maintenance: .deferred)
 
         XCTAssertTrue(library.unobservedVisibleSong(id: song.id)?.isPlayable == true)
-        XCTAssertTrue(library.lastReplacementRequiresSongListSnapshot)
+        XCTAssertEqual(
+            library.songListSnapshotInvalidationRevision,
+            invalidationRevision + 1
+        )
         guard case .success = await library.persistNowAndWait() else {
             return XCTFail("The playability replacement did not finish persistence")
         }
@@ -208,13 +213,43 @@ final class MusicLibraryMetadataReplacementTests: XCTestCase {
         var song = makeSong(id: "moved", path: "/music/moved.mp3")
         library.addSongs([song], affectedSourceIDs: [song.sourceID])
 
+        let invalidationRevision = library.songListSnapshotInvalidationRevision
         song.sourceID = "source-2"
         library.replaceSong(song)
 
         XCTAssertEqual(library.unobservedVisibleSong(id: song.id)?.sourceID, "source-2")
-        XCTAssertTrue(library.lastReplacementRequiresSongListSnapshot)
+        XCTAssertEqual(
+            library.songListSnapshotInvalidationRevision,
+            invalidationRevision + 1
+        )
         guard case .success = await library.persistNowAndWait() else {
             return XCTFail("The source replacement did not finish persistence")
+        }
+    }
+
+    func testStructuralInvalidationSurvivesFollowingMetadataReplacement() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimuseReplacementInvalidation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = MusicLibrary(storageDirectory: directory)
+        var song = makeSong(id: "sequence", path: "/music/sequence.mp3")
+        library.addSongs([song], affectedSourceIDs: [song.sourceID])
+        let initialRevision = library.songListSnapshotInvalidationRevision
+
+        song.sourceID = "source-2"
+        library.replaceSong(song)
+        var metadataOnly = song
+        metadataOnly.albumTitle = "Updated"
+        library.replaceSong(metadataOnly)
+
+        XCTAssertEqual(
+            library.songListSnapshotInvalidationRevision,
+            initialRevision + 1,
+            "A later metadata replacement must not erase structural invalidation"
+        )
+        XCTAssertEqual(library.song(id: song.id)?.albumTitle, "Updated")
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("The sequential replacements did not finish persistence")
         }
     }
 

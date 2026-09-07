@@ -36,6 +36,7 @@ private struct MacSongLocationScrollRequest: Equatable {
 private struct MacSongScrollWindowMetrics: Equatable {
     let firstVisibleRow: Int
     let viewportHeight: Int
+    let viewportWidth: Int
 }
 
 /// Scrolling invalidates only the bounded row window. The page header and
@@ -50,6 +51,7 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
     @ViewBuilder let rowContent: (Int) -> RowContent
 
     @State private var firstVisibleRow = 0
+    @State private var viewportWidth: CGFloat = 0
 
     var body: some View {
         let range = SongListScrollWindow.range(
@@ -58,9 +60,11 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
             viewportHeight: Double(viewportHeight),
             rowHeight: Double(rowHeight)
         )
+        let rowWidth = max(0, viewportWidth - PMSpace.xxxl * 2)
         ScrollView(axes, showsIndicators: axes.contains(.horizontal)) {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                    .frame(minWidth: viewportWidth, alignment: .leading)
                     .onGeometryChange(for: CGFloat.self) { proxy in
                         proxy.size.height
                     } action: { height in
@@ -70,18 +74,22 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
 
                 Color.clear
                     .frame(height: CGFloat(range.lowerBound) * rowHeight)
+                    .frame(minWidth: viewportWidth, alignment: .leading)
                     .accessibilityHidden(true)
 
                 ForEach(range, id: \.self) { position in
                     rowContent(position)
+                        .frame(minWidth: rowWidth, alignment: .leading)
                         .frame(height: rowHeight)
                         .padding(.horizontal, PMSpace.xxxl)
                 }
 
                 Color.clear
                     .frame(height: CGFloat(rowCount - range.upperBound) * rowHeight + 112)
+                    .frame(minWidth: viewportWidth, alignment: .leading)
                     .accessibilityHidden(true)
             }
+            .frame(minWidth: viewportWidth, alignment: .leading)
         }
         .scrollIndicators(.hidden, axes: .vertical)
         .scrollIndicators(axes.contains(.horizontal) ? .visible : .hidden, axes: .horizontal)
@@ -91,7 +99,8 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
             let stride = SongListScrollWindow.rowStride
             return MacSongScrollWindowMetrics(
                 firstVisibleRow: row / stride * stride,
-                viewportHeight: Int(geometry.containerSize.height.rounded())
+                viewportHeight: Int(geometry.containerSize.height.rounded()),
+                viewportWidth: Int(geometry.containerSize.width.rounded())
             )
         } action: { _, metrics in
             var transaction = Transaction(animation: nil)
@@ -100,6 +109,9 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
                 firstVisibleRow = metrics.firstVisibleRow
                 if viewportHeight != CGFloat(metrics.viewportHeight) {
                     viewportHeight = CGFloat(metrics.viewportHeight)
+                }
+                if viewportWidth != CGFloat(metrics.viewportWidth) {
+                    viewportWidth = CGFloat(metrics.viewportWidth)
                 }
             }
         }
@@ -1137,14 +1149,20 @@ struct SongListView: View {
                 }
                 if listCache.isEmpty
                     || shouldRetryPendingSort
-                    || technicalOrderNeedsRefresh
-                    || library.lastReplacementRequiresSongListSnapshot {
+                    || technicalOrderNeedsRefresh {
                     scheduleSortedRecompute(
                         delay: .milliseconds(80),
                         pruneRowModels: false,
                         isExplicitSort: activeSortIsExplicit
                     )
                 }
+            }
+            .onChange(of: library.songListSnapshotInvalidationRevision) { _, _ in
+                scheduleSortedRecompute(
+                    delay: .milliseconds(80),
+                    pruneRowModels: false,
+                    isExplicitSort: activeSortIsExplicit
+                )
             }
             .background {
                 SongSelectionActivationObserver(selection: selection) {

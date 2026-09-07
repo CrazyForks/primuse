@@ -3471,7 +3471,6 @@ final class MusicLibrary {
         promotePreferredArtworkSongIfNeeded(updatedSong)
         lastReplacedSong = updatedSong
         lastReplacedSongIDs = [songID]
-        lastReplacementRequiresSongListSnapshot = false
         songReplacementToken = UUID()
         if oldCoverRef != updatedSong.coverArtFileName {
             postArtworkInvalidation(songID: songID, oldRef: oldCoverRef, newRef: updatedSong.coverArtFileName)
@@ -3499,7 +3498,6 @@ final class MusicLibrary {
         visibleSongByID[songID] = updatedSong
         lastReplacedSong = updatedSong
         lastReplacedSongIDs = [songID]
-        lastReplacementRequiresSongListSnapshot = false
         songReplacementToken = UUID()
         persistSongChanges(upserts: [updatedSong])
     }
@@ -3766,7 +3764,9 @@ final class MusicLibrary {
             lastReplacedSong = replacementIDs.count == 1
                 ? replacementIDs.first.flatMap { song(id: $0) }
                 : nil
-            lastReplacementRequiresSongListSnapshot = songListSnapshotChanged
+            if songListSnapshotChanged {
+                songListSnapshotInvalidationRevision &+= 1
+            }
             songReplacementToken = UUID()
         }
 
@@ -4311,7 +4311,6 @@ final class MusicLibrary {
         rebuildVisibleCache()
         lastReplacedSong = changedSongs.count == 1 ? changedSongs.first : nil
         lastReplacedSongIDs = Set(changedSongs.map(\.id))
-        lastReplacementRequiresSongListSnapshot = false
         songReplacementToken = UUID()
         requestLibraryIndexMaintenance(.immediate)
         persistSongChanges(upserts: changedSongs)
@@ -5816,9 +5815,11 @@ final class MusicLibrary {
     /// player) use this to sync currentSong/queue when a backfilled
     /// song happened to NOT be the last one in a batch.
     private(set) var lastReplacedSongIDs: Set<String> = []
-    /// True when a replacement changed visible membership, source grouping,
-    /// or playability used by immutable song-list snapshots.
-    private(set) var lastReplacementRequiresSongListSnapshot = false
+    /// Advances when a replacement changes source grouping or playability
+    /// used by immutable song-list snapshots. Unlike a latest-value Boolean,
+    /// this cannot be cleared by a later metadata-only replacement before UI
+    /// observation delivers the change.
+    private(set) var songListSnapshotInvalidationRevision: UInt64 = 0
     private(set) var songReplacementToken = UUID()
 
     func replaceSong(_ updatedSong: Song) {
@@ -5838,9 +5839,10 @@ final class MusicLibrary {
         rebuildVisibleCache()
         lastReplacedSong = s
         lastReplacedSongIDs = [s.id]
-        lastReplacementRequiresSongListSnapshot =
-            previousSong.sourceID != s.sourceID
-            || previousSong.isPlayable != s.isPlayable
+        if previousSong.sourceID != s.sourceID
+            || previousSong.isPlayable != s.isPlayable {
+            songListSnapshotInvalidationRevision &+= 1
+        }
         songReplacementToken = UUID()
         if oldCoverRef != s.coverArtFileName {
             postArtworkInvalidation(songID: s.id, oldRef: oldCoverRef, newRef: s.coverArtFileName)
@@ -5943,7 +5945,9 @@ final class MusicLibrary {
         }
         lastReplacedSong = lastApplied
         lastReplacedSongIDs = appliedIDs
-        lastReplacementRequiresSongListSnapshot = songListSnapshotChanged
+        if songListSnapshotChanged {
+            songListSnapshotInvalidationRevision &+= 1
+        }
         songReplacementToken = UUID()
         if !artworkChanges.isEmpty {
             postArtworkInvalidations(artworkChanges)
@@ -6218,7 +6222,9 @@ final class MusicLibrary {
 
         lastReplacedSong = prepared.lastApplied
         lastReplacedSongIDs = prepared.appliedIDs
-        lastReplacementRequiresSongListSnapshot = prepared.songListSnapshotChanged
+        if prepared.songListSnapshotChanged {
+            songListSnapshotInvalidationRevision &+= 1
+        }
         songReplacementToken = UUID()
         if !prepared.artworkChanges.isEmpty {
             postArtworkInvalidations(

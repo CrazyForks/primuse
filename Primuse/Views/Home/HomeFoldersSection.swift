@@ -293,6 +293,9 @@ struct HomeFolderBrowser: View {
             }
         }
         .navigationBarBackButtonHidden(nodeID != nil || showsInlineBack)
+        .onChange(of: model.revision) { _, _ in
+            refreshMacSearchContext()
+        }
         #else
         folderList
         #endif
@@ -547,6 +550,7 @@ struct HomeFolderBrowser: View {
                         macSectionHeader(HomeDiscoveryText.string("folders"))
                     }
                 }
+                    .frame(width: width, alignment: .leading)
                     .padding(.horizontal, PMSpace.xxxl)
                     .padding(.vertical, 8)
             }
@@ -568,13 +572,16 @@ struct HomeFolderBrowser: View {
                     }
                     Spacer(minLength: 0)
                 }
+                .frame(width: width, alignment: .leading)
             } else if hasSongSection && position == folderRows {
                 MacFolderSongColumnsHeader(columns: columns)
+                    .frame(width: width, alignment: .leading)
             } else {
                 let songID = songIDs[position - songStart]
                 MacHomeFolderSongRow(songID: songID, orderedSongIDs: songIDs, position: position - songStart + 1, columns: columns) { song, action in
                     macSongAction = SongRowActionRequest(song: song, action: action)
                 }
+                    .frame(width: width, alignment: .leading)
                     .id(songID)
             }
         }
@@ -620,10 +627,11 @@ struct HomeFolderBrowser: View {
                     macSearchControls(context: context)
                 } else {
                     Button {
-                        let context = LibrarySearchScope(
-                            title: HomeDiscoveryText.folderTitle(node),
-                            songIDs: Set(model.index?.songIDs(in: node.id, scope: .descendants) ?? []),
-                            includesSubfolders: true
+                        guard let index = model.index else { return }
+                        let context = LibrarySearchScope.folder(
+                            node: node,
+                            index: index,
+                            title: HomeDiscoveryText.folderTitle
                         )
                         macSearchScope = context
                         macSearchContext = context
@@ -721,13 +729,27 @@ struct HomeFolderBrowser: View {
             SearchScopeSwitchButton(scope: $macSearchScope, context: context)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
-                .help(macSearchScope == nil ? String(localized: "search_current_scope") : String(localized: "search_global"))
             Button { closeMacSearch() } label: {
                 Image(systemName: "xmark").frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("close")
         }
+    }
+
+    private func refreshMacSearchContext() {
+        guard macSearchContext != nil,
+              let node,
+              let index = model.index else { return }
+        let context = LibrarySearchScope.folder(
+            node: node,
+            index: index,
+            title: HomeDiscoveryText.folderTitle
+        )
+        if macSearchScope != nil {
+            macSearchScope = context
+        }
+        macSearchContext = context
     }
 
     private func closeMacSearch() {

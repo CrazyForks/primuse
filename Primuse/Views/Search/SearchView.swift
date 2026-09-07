@@ -154,28 +154,49 @@ extension View {
 #endif
 
 struct SearchScopeSwitchButton: View {
+    private enum Selection: Hashable {
+        case global
+        case current
+    }
+
     @Binding var scope: LibrarySearchScope?
     let context: LibrarySearchScope
 
+    private var selection: Binding<Selection> {
+        Binding(
+            get: { scope == nil ? .global : .current },
+            set: { selection in
+                scope = selection == .global ? nil : context
+            }
+        )
+    }
+
     var body: some View {
-        Button {
-            scope = scope == nil ? context : nil
+        Menu {
+            Picker("search_scope", selection: selection) {
+                Label("search_global", systemImage: "globe")
+                    .tag(Selection.global)
+                Label {
+                    Text(verbatim: context.title)
+                } icon: {
+                    Image(systemName: context.kind.systemImage)
+                }
+                .tag(Selection.current)
+            }
+            .pickerStyle(.inline)
         } label: {
-            #if os(iOS)
-            Label("search_scope", systemImage: "scope")
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-            #else
-            Label(
-                scope == nil ? String(localized: "search_current_scope") : String(localized: "search_global"),
-                systemImage: scope == nil ? (context.includesSubfolders ? "folder" : "music.note.list") : "globe"
-            )
+            Label {
+                Text(verbatim: scope?.title ?? String(localized: "search_global"))
+            } icon: {
+                Image(systemName: scope?.kind.systemImage ?? "globe")
+            }
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
-            #endif
         }
+        .help(scope?.title ?? String(localized: "search_global"))
+        .accessibilityLabel(Text("search_scope"))
         .accessibilityValue(Text(scope?.title ?? String(localized: "search_global")))
-        .accessibilityIdentifier("search.scope.toggle")
+        .accessibilityIdentifier("search.scope.menu")
     }
 }
 
