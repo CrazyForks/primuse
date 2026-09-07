@@ -3471,6 +3471,7 @@ final class MusicLibrary {
         promotePreferredArtworkSongIfNeeded(updatedSong)
         lastReplacedSong = updatedSong
         lastReplacedSongIDs = [songID]
+        lastReplacementRequiresSongListSnapshot = false
         songReplacementToken = UUID()
         if oldCoverRef != updatedSong.coverArtFileName {
             postArtworkInvalidation(songID: songID, oldRef: oldCoverRef, newRef: updatedSong.coverArtFileName)
@@ -3498,6 +3499,7 @@ final class MusicLibrary {
         visibleSongByID[songID] = updatedSong
         lastReplacedSong = updatedSong
         lastReplacedSongIDs = [songID]
+        lastReplacementRequiresSongListSnapshot = false
         songReplacementToken = UUID()
         persistSongChanges(upserts: [updatedSong])
     }
@@ -3615,6 +3617,7 @@ final class MusicLibrary {
         var contentChanged: [Song] = []
         var previousLocationsByID: [String: Song] = [:]
         var replacementIDs: Set<String> = []
+        var songListSnapshotChanged = false
         var persistedSongIDs: Set<String> = []
 
         func recordPersistence(_ song: Song) {
@@ -3654,6 +3657,10 @@ final class MusicLibrary {
                     mergedSongs[idx] = newSong
                     contentChanged.append(newSong)
                     replacementIDs.insert(newSong.id)
+                    if existing.sourceID != newSong.sourceID
+                        || existing.isPlayable != newSong.isPlayable {
+                        songListSnapshotChanged = true
+                    }
                     recordPersistence(newSong)
                     continue
                 }
@@ -3707,6 +3714,10 @@ final class MusicLibrary {
                     }
                     if Self.songPresentationChanged(from: existing, to: merged) {
                         replacementIDs.insert(newSong.id)
+                        if existing.sourceID != merged.sourceID
+                            || existing.isPlayable != merged.isPlayable {
+                            songListSnapshotChanged = true
+                        }
                     }
                 } else {
                     if newSong != existing {
@@ -3715,6 +3726,10 @@ final class MusicLibrary {
                     }
                     if Self.songPresentationChanged(from: existing, to: newSong) {
                         replacementIDs.insert(newSong.id)
+                        if existing.sourceID != newSong.sourceID
+                            || existing.isPlayable != newSong.isPlayable {
+                            songListSnapshotChanged = true
+                        }
                     }
                 }
             } else {
@@ -3751,6 +3766,7 @@ final class MusicLibrary {
             lastReplacedSong = replacementIDs.count == 1
                 ? replacementIDs.first.flatMap { song(id: $0) }
                 : nil
+            lastReplacementRequiresSongListSnapshot = songListSnapshotChanged
             songReplacementToken = UUID()
         }
 
@@ -4295,6 +4311,7 @@ final class MusicLibrary {
         rebuildVisibleCache()
         lastReplacedSong = changedSongs.count == 1 ? changedSongs.first : nil
         lastReplacedSongIDs = Set(changedSongs.map(\.id))
+        lastReplacementRequiresSongListSnapshot = false
         songReplacementToken = UUID()
         requestLibraryIndexMaintenance(.immediate)
         persistSongChanges(upserts: changedSongs)
@@ -5799,6 +5816,9 @@ final class MusicLibrary {
     /// player) use this to sync currentSong/queue when a backfilled
     /// song happened to NOT be the last one in a batch.
     private(set) var lastReplacedSongIDs: Set<String> = []
+    /// True when a replacement changed visible membership, source grouping,
+    /// or playability used by immutable song-list snapshots.
+    private(set) var lastReplacementRequiresSongListSnapshot = false
     private(set) var songReplacementToken = UUID()
 
     func replaceSong(_ updatedSong: Song) {
@@ -5818,6 +5838,9 @@ final class MusicLibrary {
         rebuildVisibleCache()
         lastReplacedSong = s
         lastReplacedSongIDs = [s.id]
+        lastReplacementRequiresSongListSnapshot =
+            previousSong.sourceID != s.sourceID
+            || previousSong.isPlayable != s.isPlayable
         songReplacementToken = UUID()
         if oldCoverRef != s.coverArtFileName {
             postArtworkInvalidation(songID: s.id, oldRef: oldCoverRef, newRef: s.coverArtFileName)
@@ -5855,6 +5878,7 @@ final class MusicLibrary {
         var missedIDs: [String] = []
         var artworkChanges: [(songID: String, oldRef: String?, newRef: String?)] = []
         var derivedCollectionsChanged = false
+        var songListSnapshotChanged = false
         var repairedIndexLookup = false
         for updated in updatedSongs {
             var index = idToIndex[updated.id]
@@ -5887,6 +5911,10 @@ final class MusicLibrary {
             ) {
                 derivedCollectionsChanged = true
             }
+            if previousSong.sourceID != s.sourceID
+                || previousSong.isPlayable != s.isPlayable {
+                songListSnapshotChanged = true
+            }
             nextSongs[index] = s
             lastApplied = s
             appliedIDs.insert(s.id)
@@ -5915,6 +5943,7 @@ final class MusicLibrary {
         }
         lastReplacedSong = lastApplied
         lastReplacedSongIDs = appliedIDs
+        lastReplacementRequiresSongListSnapshot = songListSnapshotChanged
         songReplacementToken = UUID()
         if !artworkChanges.isEmpty {
             postArtworkInvalidations(artworkChanges)
@@ -5977,6 +6006,7 @@ final class MusicLibrary {
         let sourceUpdates: [String: StableSourceSongReplacement]
         let artworkChanges: [StableArtworkReplacement]
         let derivedCollectionsChanged: Bool
+        let songListSnapshotChanged: Bool
     }
 
     /// Metadata backfill retains song IDs, order, source membership, and
@@ -6042,6 +6072,7 @@ final class MusicLibrary {
         var missedIDs: [String] = []
         var artworkChanges: [StableArtworkReplacement] = []
         var derivedCollectionsChanged = false
+        var songListSnapshotChanged = false
 
         for updated in request.updatedSongs {
             var index = idToIndex[updated.id]
@@ -6075,6 +6106,10 @@ final class MusicLibrary {
                 to: song
             ) {
                 derivedCollectionsChanged = true
+            }
+            if previousSong.sourceID != song.sourceID
+                || previousSong.isPlayable != song.isPlayable {
+                songListSnapshotChanged = true
             }
             nextSongs[index] = song
             lastApplied = song
@@ -6157,7 +6192,8 @@ final class MusicLibrary {
             visibleUpdates: visibleUpdates,
             sourceUpdates: sourceUpdates,
             artworkChanges: artworkChanges,
-            derivedCollectionsChanged: derivedCollectionsChanged
+            derivedCollectionsChanged: derivedCollectionsChanged,
+            songListSnapshotChanged: songListSnapshotChanged
         )
     }
 
@@ -6182,6 +6218,7 @@ final class MusicLibrary {
 
         lastReplacedSong = prepared.lastApplied
         lastReplacedSongIDs = prepared.appliedIDs
+        lastReplacementRequiresSongListSnapshot = prepared.songListSnapshotChanged
         songReplacementToken = UUID()
         if !prepared.artworkChanges.isEmpty {
             postArtworkInvalidations(

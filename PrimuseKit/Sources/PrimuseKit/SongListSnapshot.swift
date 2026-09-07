@@ -546,10 +546,24 @@ public struct SongListRowIdentity: Identifiable, Hashable, Sendable {
 /// Immutable, reference-backed result that can be built away from the main
 /// actor and published to the UI with a single identity assignment.
 public final class SongListSnapshot: Sendable {
+    public struct SourcePartition: Sendable {
+        public let rows: [SongListRowIdentity]
+        public let playableCount: Int
+
+        public init(
+            rows: [SongListRowIdentity],
+            playableCount: Int
+        ) {
+            self.rows = rows
+            self.playableCount = playableCount
+        }
+    }
+
     public let rows: [SongListRowIdentity]
     public let orderedSongIDs: [String]
     public let songIDs: Set<String>
     public let sourceCounts: [String: Int]
+    public let sourcePartitionsByID: [String: SourcePartition]
     public let playableCount: Int
     public let totalDuration: TimeInterval
     public let sectionIndexEntries: [SongListSectionIndexEntry]
@@ -559,6 +573,7 @@ public final class SongListSnapshot: Sendable {
         orderedSongIDs: [String],
         songIDs: Set<String>,
         sourceCounts: [String: Int],
+        sourcePartitionsByID: [String: SourcePartition] = [:],
         playableCount: Int,
         totalDuration: TimeInterval,
         sectionIndexEntries: [SongListSectionIndexEntry] = []
@@ -567,9 +582,14 @@ public final class SongListSnapshot: Sendable {
         self.orderedSongIDs = orderedSongIDs
         self.songIDs = songIDs
         self.sourceCounts = sourceCounts
+        self.sourcePartitionsByID = sourcePartitionsByID
         self.playableCount = playableCount
         self.totalDuration = totalDuration
         self.sectionIndexEntries = sectionIndexEntries
+    }
+
+    public func sourcePartition(forSourceID sourceID: String) -> SourcePartition? {
+        sourcePartitionsByID[sourceID]
     }
 }
 
@@ -630,6 +650,8 @@ public enum SongListSnapshotBuilder {
             var orderedSongIDs: [String] = []
             var songIDs: Set<String> = []
             var sourceCounts: [String: Int] = [:]
+            var sourceRowsByID: [String: [SongListRowIdentity]] = [:]
+            var sourcePlayableCounts: [String: Int] = [:]
             var sectionOffsets: [String: Int] = [:]
             var playableCount = 0
             var totalDuration: TimeInterval = 0
@@ -642,10 +664,15 @@ public enum SongListSnapshotBuilder {
                     try checkCancellation()
                 }
                 let song = songs[songIndex]
-                rows.append(SongListRowIdentity(id: song.id, offset: offset))
+                let row = SongListRowIdentity(id: song.id, offset: offset)
+                rows.append(row)
                 orderedSongIDs.append(song.id)
                 songIDs.insert(song.id)
                 sourceCounts[song.sourceID, default: 0] += 1
+                let sourceOffset = sourceRowsByID[song.sourceID, default: []].count
+                sourceRowsByID[song.sourceID, default: []].append(
+                    SongListRowIdentity(id: song.id, offset: sourceOffset)
+                )
                 if let indexValue = sectionIndexValue(
                     for: song,
                     order: order,
@@ -657,17 +684,27 @@ public enum SongListSnapshotBuilder {
                 }
                 if song.isPlayable {
                     playableCount += 1
+                    sourcePlayableCounts[song.sourceID, default: 0] += 1
                 }
                 if song.duration.isFinite {
                     totalDuration += max(0, song.duration)
                 }
             }
 
+            let sourcePartitionsByID = sourceRowsByID.reduce(
+                into: [String: SongListSnapshot.SourcePartition]()
+            ) { partitions, entry in
+                partitions[entry.key] = SongListSnapshot.SourcePartition(
+                    rows: entry.value,
+                    playableCount: sourcePlayableCounts[entry.key, default: 0]
+                )
+            }
             let snapshot = SongListSnapshot(
                 rows: rows,
                 orderedSongIDs: orderedSongIDs,
                 songIDs: songIDs,
                 sourceCounts: sourceCounts,
+                sourcePartitionsByID: sourcePartitionsByID,
                 playableCount: playableCount,
                 totalDuration: totalDuration,
                 sectionIndexEntries: sectionIndexEntries(

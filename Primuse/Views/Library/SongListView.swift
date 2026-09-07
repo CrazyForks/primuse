@@ -41,6 +41,7 @@ private struct MacSongScrollWindowMetrics: Equatable {
 /// Scrolling invalidates only the bounded row window. The page header and
 /// library observers keep their existing view values while the window moves.
 struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
+    let axes: Axis.Set
     let rowCount: Int
     let rowHeight: CGFloat
     @Binding var chromeHeight: CGFloat
@@ -57,7 +58,7 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
             viewportHeight: Double(viewportHeight),
             rowHeight: Double(rowHeight)
         )
-        ScrollView([.vertical, .horizontal], showsIndicators: true) {
+        ScrollView(axes, showsIndicators: axes.contains(.horizontal)) {
             VStack(alignment: .leading, spacing: 0) {
                 header
                     .onGeometryChange(for: CGFloat.self) { proxy in
@@ -83,7 +84,7 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
             }
         }
         .scrollIndicators(.hidden, axes: .vertical)
-        .scrollIndicators(.visible, axes: .horizontal)
+        .scrollIndicators(axes.contains(.horizontal) ? .visible : .hidden, axes: .horizontal)
         .onScrollGeometryChange(for: MacSongScrollWindowMetrics.self) { geometry in
             let offset = max(0, geometry.visibleRect.minY - chromeHeight)
             let row = Int(offset / max(1, rowHeight))
@@ -319,8 +320,23 @@ private final class SongListCache {
     ) -> SongListProjection {
         _ = rowOrderRevision
         guard let snapshot else { return .empty }
-        guard sourceID != nil || !query.isEmpty || includedSongIDs != nil else {
-            return SongListProjection(rows: snapshot.rows, orderedSongIDs: snapshot.orderedSongIDs)
+        let candidates: (
+            rows: [SongListRowIdentity],
+            playableCount: Int
+        )
+        if let sourceID {
+            guard let partition = snapshot.sourcePartition(forSourceID: sourceID) else {
+                return .empty
+            }
+            candidates = (partition.rows, partition.playableCount)
+        } else {
+            candidates = (snapshot.rows, snapshot.playableCount)
+        }
+        guard !query.isEmpty || includedSongIDs != nil else {
+            return SongListProjection(
+                rows: candidates.rows,
+                playableCount: candidates.playableCount
+            )
         }
 
         let key = ProjectionKey(
@@ -337,16 +353,14 @@ private final class SongListCache {
 
         let interval = SongListPerformanceSignpost.signposter.beginInterval(
             "FilteredProjection",
-            "count: \(snapshot.rows.count, privacy: .public), hasSource: \(sourceID != nil, privacy: .public), downloaded: \(includedSongIDs != nil, privacy: .public), queryLength: \(query.count, privacy: .public)"
+            "count: \(candidates.rows.count, privacy: .public), hasSource: \(sourceID != nil, privacy: .public), downloaded: \(includedSongIDs != nil, privacy: .public), queryLength: \(query.count, privacy: .public)"
         )
         var rows: [SongListRowIdentity] = []
-        var ids: [String] = []
-        rows.reserveCapacity(snapshot.rows.count)
-        ids.reserveCapacity(snapshot.rows.count)
-        for row in snapshot.rows {
+        var playableCount = 0
+        rows.reserveCapacity(candidates.rows.count)
+        for row in candidates.rows {
             if let includedSongIDs, !includedSongIDs.contains(row.id) { continue }
             guard let song = resolve(row.id) else { continue }
-            if let sourceID, song.sourceID != sourceID { continue }
             if !query.isEmpty,
                !song.title.localizedCaseInsensitiveContains(query),
                !(song.artistName?.localizedCaseInsensitiveContains(query) ?? false),
@@ -358,9 +372,14 @@ private final class SongListCache {
             }
             let id = row.id
             rows.append(SongListRowIdentity(id: id, offset: rows.count))
-            ids.append(id)
+            if song.isPlayable {
+                playableCount += 1
+            }
         }
-        let value = SongListProjection(rows: rows, orderedSongIDs: ids)
+        let value = SongListProjection(
+            rows: rows,
+            playableCount: playableCount
+        )
         projectionEntry = ProjectionEntry(key: key, value: value)
         SongListPerformanceSignpost.signposter.endInterval(
             "FilteredProjection",
@@ -455,9 +474,11 @@ private final class LibraryFolderBrowserCache {
 
 private struct SongListProjection {
     let rows: [SongListRowIdentity]
-    let orderedSongIDs: [String]
+    let playableCount: Int
 
-    static let empty = SongListProjection(rows: [], orderedSongIDs: [])
+    var orderedSongIDs: [String] { rows.map(\.id) }
+
+    static let empty = SongListProjection(rows: [], playableCount: 0)
 }
 
 /// Keeps progress-only mutations below the song-list observation boundary.
@@ -1114,7 +1135,10 @@ struct SongListView: View {
                 case .title, .artist, .album, .format, .playCount, .source, .downloaded:
                     false
                 }
-                if listCache.isEmpty || shouldRetryPendingSort || technicalOrderNeedsRefresh {
+                if listCache.isEmpty
+                    || shouldRetryPendingSort
+                    || technicalOrderNeedsRefresh
+                    || library.lastReplacementRequiresSongListSnapshot {
                     scheduleSortedRecompute(
                         delay: .milliseconds(80),
                         pruneRowModels: false,
@@ -1555,7 +1579,6 @@ struct SongListView: View {
         }()
         let scrollResetKey = [
             scope.snapshotCacheKey,
-            selectedSourceID ?? "*",
             songFilter.rawValue,
             searchText,
             browseMode.rawValue,
@@ -1564,10 +1587,10 @@ struct SongListView: View {
         ].joined(separator: "\u{1F}")
 
         return Group {
-            if !showsFolderBrowser, !rows.isEmpty {
-                macVirtualizedSongList(rows: rows)
-            } else {
+            if showsFolderBrowser || macViewMode == .grid {
                 macScrollableSongList(rows: rows)
+            } else {
+                macVirtualizedSongList(rows: rows)
             }
         }
         .onScrollPhaseChange { _, newPhase in
@@ -1619,12 +1642,13 @@ struct SongListView: View {
 
     private func macWindowedSongList(rows: [SongListRowIdentity]) -> some View {
         MacWindowedSongScrollView(
+            axes: macViewMode == .list ? [.vertical, .horizontal] : .vertical,
             rowCount: rows.count,
             rowHeight: macVirtualRowHeight,
             chromeHeight: $macSongListChromeHeight,
             viewportHeight: $macSongListViewportHeight
         ) {
-            macVirtualizedSongListChrome
+            macVirtualizedSongListChrome(isEmpty: rows.isEmpty)
         } rowContent: { position in
             let row = rows[position]
             if let song = library.unobservedVisibleSong(id: row.id) {
@@ -1650,7 +1674,7 @@ struct SongListView: View {
         }
     }
 
-    private var macVirtualizedSongListChrome: some View {
+    private func macVirtualizedSongListChrome(isEmpty: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             macSongListHeader
 
@@ -1672,9 +1696,28 @@ struct SongListView: View {
                 case .grid:
                     Color.clear.frame(height: 12)
                 }
+
+                if isEmpty {
+                    macSongListEmptyState
+                }
             }
             .padding(.horizontal, PMSpace.xxxl)
             .padding(.top, PMSpace.m14)
+        }
+    }
+
+    @ViewBuilder
+    private var macSongListEmptyState: some View {
+        if songFilter == .downloaded {
+            ContentUnavailableView(
+                "filter_downloaded",
+                systemImage: "arrow.down.circle",
+                description: Text("filter_downloaded_empty_desc")
+            )
+            .padding(.top, 48)
+        } else {
+            ContentUnavailableView.search(text: searchText)
+                .padding(.top, 48)
         }
     }
 
@@ -1728,6 +1771,7 @@ struct SongListView: View {
                 }
                 .padding(.horizontal, PMSpace.xxxl)
                 .padding(.top, PMSpace.m14)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.bottom, 112)
         }
@@ -1742,7 +1786,7 @@ struct SongListView: View {
             coverSong: songs.first(where: { $0.coverArtFileName?.isEmpty == false }),
             onPlay: { playLibrary(shuffled: false) },
             onShuffle: { playLibrary(shuffled: true) },
-            moreMenu: listMoreMenu
+            makeMoreMenu: { listMoreMenu }
         )
     }
 
@@ -2639,16 +2683,9 @@ struct SongListView: View {
         // Header/menu construction is part of every macOS body update. Keep it
         // on lightweight IDs; materialize 10K Song values only after the user
         // actually invokes an action.
-        let visibleIDs = filteredSongIDs
-        let playableCount: Int
-        if selectedSourceID == nil,
-           searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            playableCount = listCache.playableCount
-        } else {
-            playableCount = visibleIDs.reduce(into: 0) { count, songID in
-                if library.unobservedVisibleSong(id: songID)?.isPlayable == true { count += 1 }
-            }
-        }
+        let projection = filteredProjection
+        let visibleIDs = projection.orderedSongIDs
+        let playableCount = projection.playableCount
 
         func materializeVisible() -> [Song] {
             visibleIDs.compactMap { library.unobservedVisibleSong(id: $0) }

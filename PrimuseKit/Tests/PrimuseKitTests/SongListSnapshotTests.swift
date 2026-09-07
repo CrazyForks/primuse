@@ -50,7 +50,10 @@ struct SongListSnapshotTests {
         let songs = [
             song(id: "b", title: "Beta", sourceID: "nas", duration: 120),
             song(id: "a", title: "Alpha", sourceID: "local", duration: 60),
-            song(id: "c", title: "Gamma", sourceID: "nas", duration: -Double.infinity),
+            song(
+                id: "c", title: "Gamma", sourceID: "nas",
+                duration: -Double.infinity, filePath: ""
+            ),
         ]
 
         let snapshot = SongListSnapshotBuilder.build(songs: songs, order: .title)
@@ -59,8 +62,35 @@ struct SongListSnapshotTests {
         #expect(snapshot.rows.map(\.offset) == [0, 1, 2])
         #expect(snapshot.songIDs == ["a", "b", "c"])
         #expect(snapshot.sourceCounts == ["local": 1, "nas": 2])
-        #expect(snapshot.playableCount == 3)
+        #expect(snapshot.playableCount == 2)
         #expect(snapshot.totalDuration == 180)
+
+        let local = snapshot.sourcePartition(forSourceID: "local")
+        #expect(local?.rows.map(\.id) == ["a"])
+        #expect(local?.rows.map(\.offset) == [0])
+        #expect(local?.playableCount == 1)
+
+        let nas = snapshot.sourcePartition(forSourceID: "nas")
+        #expect(nas?.rows.map(\.id) == ["b", "c"])
+        #expect(nas?.rows.map(\.offset) == [0, 1])
+        #expect(nas?.playableCount == 1)
+        #expect(snapshot.sourcePartition(forSourceID: "missing") == nil)
+    }
+
+    @Test("Source partitions preserve descending snapshot order")
+    func sourcePartitionsPreserveDescendingOrder() {
+        let songs = [
+            song(id: "a", title: "Alpha", sourceID: "nas"),
+            song(id: "c", title: "Gamma", sourceID: "nas"),
+            song(id: "b", title: "Beta", sourceID: "local"),
+        ]
+
+        let snapshot = SongListSnapshotBuilder.build(songs: songs, order: .titleDescending)
+
+        #expect(snapshot.rows.map(\.id) == ["c", "b", "a"])
+        #expect(snapshot.sourcePartition(forSourceID: "nas")?.rows.map(\.id) == ["c", "a"])
+        #expect(snapshot.sourcePartition(forSourceID: "nas")?.rows.map(\.offset) == [0, 1])
+        #expect(snapshot.sourcePartition(forSourceID: "local")?.rows.map(\.id) == ["b"])
     }
 
     @Test("Date sorting is newest first with deterministic ties")
@@ -419,8 +449,12 @@ struct SongListSnapshotTests {
 
         #expect(empty.rows.isEmpty)
         #expect(empty.songIDs.isEmpty)
+        #expect(empty.sourcePartitionsByID.isEmpty)
         #expect(single.rows.map(\.id) == ["only"])
         #expect(single.orderedSongIDs == ["only"])
+        #expect(single.sourcePartition(forSourceID: "source")?.rows.map(\.id) == ["only"])
+        #expect(single.sourcePartition(forSourceID: "source")?.rows.map(\.offset) == [0])
+        #expect(single.sourcePartition(forSourceID: "source")?.playableCount == 1)
     }
 
     @Test("Repeated selection of the active order is a no-op")
@@ -652,6 +686,7 @@ struct SongListSnapshotTests {
         albumTitle: String? = nil,
         sourceID: String = "source",
         duration: TimeInterval = 180,
+        filePath: String? = nil,
         lastModified: Date? = nil,
         dateAdded: Date = Date(timeIntervalSince1970: 0),
         serverPlayCount: Int? = nil,
@@ -667,7 +702,7 @@ struct SongListSnapshotTests {
             artistName: artistName,
             duration: duration,
             fileFormat: fileFormat,
-            filePath: "/Music/\(id).\(fileFormat.rawValue)",
+            filePath: filePath ?? "/Music/\(id).\(fileFormat.rawValue)",
             sourceID: sourceID,
             bitRate: bitRate,
             bitDepth: bitDepth,

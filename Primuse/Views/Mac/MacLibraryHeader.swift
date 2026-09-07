@@ -21,6 +21,7 @@ struct MacLibraryHeader: View {
     var onShuffle: () -> Void = {}
     var onMore: () -> Void = {}
     var moreMenu: AnyView? = nil
+    var makeMoreMenu: (() -> AnyView)? = nil
     var showsMoreButton = true
 
     @State private var showMoreMenu = false
@@ -82,7 +83,7 @@ struct MacLibraryHeader: View {
 
                     if showsMoreButton {
                         Button {
-                            if moreMenu != nil {
+                            if moreMenu != nil || makeMoreMenu != nil {
                                 showMoreMenu.toggle()
                             } else {
                                 onMore()
@@ -99,6 +100,8 @@ struct MacLibraryHeader: View {
                         .popover(isPresented: $showMoreMenu, arrowEdge: .bottom) {
                             if let moreMenu {
                                 moreMenu
+                            } else if let makeMoreMenu {
+                                makeMoreMenu()
                             }
                         }
                     }

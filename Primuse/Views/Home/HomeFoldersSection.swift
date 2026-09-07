@@ -533,6 +533,7 @@ struct HomeFolderBrowser: View {
         let columns = MacFolderSongColumns(width: width)
 
         return MacWindowedSongScrollView(
+            axes: .vertical,
             rowCount: songStart + songIDs.count,
             rowHeight: songIDs.isEmpty ? 80 : 52,
             chromeHeight: $macListChromeHeight,

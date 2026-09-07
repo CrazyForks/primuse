@@ -173,11 +173,48 @@ final class MusicLibraryMetadataReplacementTests: XCTestCase {
         XCTAssertEqual(library.visibleSongCollectionRevision, collectionRevision)
         XCTAssertNotEqual(library.songReplacementToken, replacementToken)
         XCTAssertEqual(library.lastReplacedSongIDs, [first.id])
+        XCTAssertFalse(library.lastReplacementRequiresSongListSnapshot)
         XCTAssertEqual(library.songs.map(\.id), ["song-1", "song-2"])
 
         guard case .success = await library.persistNowAndWait() else {
             XCTFail("The isolated library did not finish persistence")
             return
+        }
+    }
+
+    func testPreparedReplacementMarksPlayabilitySnapshotChange() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimusePlayabilityReplacement-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = MusicLibrary(storageDirectory: directory)
+        var song = makeSong(id: "playable", path: "")
+        library.addSongs([song], affectedSourceIDs: [song.sourceID])
+
+        song.duration = 193
+        await library.replaceSongsPreparedOffMain([song], maintenance: .deferred)
+
+        XCTAssertTrue(library.unobservedVisibleSong(id: song.id)?.isPlayable == true)
+        XCTAssertTrue(library.lastReplacementRequiresSongListSnapshot)
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("The playability replacement did not finish persistence")
+        }
+    }
+
+    func testSourceReplacementMarksMembershipSnapshotChange() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimuseSourceReplacement-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = MusicLibrary(storageDirectory: directory)
+        var song = makeSong(id: "moved", path: "/music/moved.mp3")
+        library.addSongs([song], affectedSourceIDs: [song.sourceID])
+
+        song.sourceID = "source-2"
+        library.replaceSong(song)
+
+        XCTAssertEqual(library.unobservedVisibleSong(id: song.id)?.sourceID, "source-2")
+        XCTAssertTrue(library.lastReplacementRequiresSongListSnapshot)
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("The source replacement did not finish persistence")
         }
     }
 
