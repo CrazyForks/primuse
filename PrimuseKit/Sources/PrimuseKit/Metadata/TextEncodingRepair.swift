@@ -352,7 +352,7 @@ public enum TextEncodingRepair {
         .utf8, gb18030, big5, .shiftJIS, eucKR, .isoLatin1, .windowsCP1252,
     ]
 
-    private static func hasTruncatedUTF8RewritePrefix(_ text: String) -> Bool {
+    static func hasTruncatedUTF8RewritePrefix(_ text: String) -> Bool {
         for encoding in [gb18030, big5] {
             guard let bytes = losslessEncodedData(text, using: encoding),
                   bytes.count >= 4,

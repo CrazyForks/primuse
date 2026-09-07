@@ -2,6 +2,15 @@ import Foundation
 import Testing
 @testable import PrimuseKit
 
+@Test func keepsSerializedArtistSuffixOutsideTheID3AlbumValue() {
+    let metadata = ID3TextMetadataParser.parse(makeID3v24Tag([
+        textFrameV24("TALB", "闆ㄤ竴鐩翠笅\0ARTIST=寮犲"),
+        textFrameV24("TPE1", "张宇"),
+    ]))
+    #expect(metadata?.albumTitle == "雨一直下")
+    #expect(metadata?.artist == "张宇")
+}
+
 @Test(arguments: [2, 3, 4], [UInt8(0), 1, 2, 3])
 func parsesAlbumArtistSeparatelyFromTrackArtist(version: Int, encoding: UInt8) throws {
     let metadata = try #require(ID3TextMetadataParser.parse(albumArtistTag(

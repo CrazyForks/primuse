@@ -30,6 +30,12 @@ enum FileMetadataReader {
         var languageTaggedLyrics: [String: String] = [:]
         var languageTaggedTranslations: [String: String] = [:]
 
+        mutating func repairAlbumTitle() {
+            albumTitle = MediaMetadataTextRepair.repairedAlbumTitle(
+                albumTitle, artist: artist, albumArtist: albumArtist
+            )
+        }
+
         var hasDescriptiveMetadata: Bool {
             func hasText(_ value: String?) -> Bool {
                 value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -285,6 +291,7 @@ enum FileMetadataReader {
         // 这里要保持 metadata.title == nil 真实反映「文件里没有 TIT2」。
         // 否则 cache 内 sanitized 文件名 (如 "_music_xxx") 会被当成嵌入标题,
         // 污染 scrape 查询和 UI 预览。
+        metadata.repairAlbumTitle()
         return metadata
     }
 
@@ -408,6 +415,7 @@ enum FileMetadataReader {
               let bitDepth = flac.bitDepth, (4...32).contains(bitDepth) else { return nil }
         var metadata = Metadata()
         applyFLACFallback(to: &metadata, parsed: flac)
+        metadata.repairAlbumTitle()
         return metadata
     }
 
@@ -443,6 +451,7 @@ enum FileMetadataReader {
         applyMPEGFrameFallback(to: &metadata, data: data, fileExtension: fileExtension)
         applyContainerTagFallback(to: &metadata, headData: data, tailData: id3TailData,
                                   fileExtension: fileExtension)
+        metadata.repairAlbumTitle()
         return metadata
     }
 
@@ -678,6 +687,7 @@ enum FileMetadataReader {
             }
         }
 
+        metadata.repairAlbumTitle()
         return metadata
     }
 
@@ -1004,11 +1014,7 @@ enum FileMetadataReader {
     }
 
     private static func preferredMetadataText(current: String?, rawID3: String?) -> String? {
-        guard let rawID3, !MediaMetadataTextRepair.isSuspicious(rawID3) else {
-            return current
-        }
-        guard let current else { return rawID3 }
-        return MediaMetadataTextRepair.isSuspicious(current) ? rawID3 : current
+        MediaMetadataTextRepair.preferredTagValue(current: current, raw: rawID3)
     }
 
     private static func applyMPEGFrameFallback(
@@ -1956,8 +1962,7 @@ enum FileMetadataReader {
     }
 
     static func repairLegacyChineseMojibake(_ text: String) -> String {
-        let normalized = text.replacingOccurrences(of: "\0", with: "")
-        return TextEncodingRepair.repaired(normalized) ?? normalized
+        MediaMetadataTextRepair.repairedTagValue(text)
     }
 }
 

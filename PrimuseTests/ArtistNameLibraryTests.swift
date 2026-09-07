@@ -5,6 +5,48 @@ import XCTest
 
 @MainActor
 final class FileAlbumArtistLibraryTests: XCTestCase {
+    func testRepairsAlbumWithAppendedArtistInLocalAndRangeTags() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AlbumTextTags-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for format in ["mp3", "flac"] {
+            for separator in ["?", "\0", "\u{FFFD}"] {
+                let data = tagFixture(
+                    format: format, key: format == "mp3" ? "TPE2" : "ALBUMARTIST",
+                    singer: "张宇", album: "闆ㄤ竴鐩翠笅\(separator)ARTIST=寮犲畤"
+                )
+                let url = directory.appendingPathComponent("album.\(format)")
+                try data.write(to: url)
+                let local = await FileMetadataReader.read(from: url)
+                let range = await FileMetadataReader.read(from: data, fileExtension: format)
+                for metadata in [local, range] {
+                    XCTAssertEqual(metadata.albumTitle, "雨一直下")
+                    XCTAssertEqual(metadata.artist, "张宇")
+                    XCTAssertEqual(metadata.albumArtist, "Various Artists")
+                }
+            }
+        }
+    }
+
+    func testLoadedAlbumRepairInvalidatesSearchTextAndPreservesUserEdits() {
+        var original = song(id: "damaged-album", metadata: .init(
+            artist: "张宇", albumTitle: "闆ㄤ竴鐩翠笅?ARTIST=寮犲畤"
+        ))
+        original.albumPinyin = "obsolete"
+        var repaired = original
+        XCTAssertTrue(MusicLibrary.repairLegacyChineseMetadataText(in: &repaired))
+        XCTAssertEqual(repaired.albumTitle, "雨一直下")
+        XCTAssertNil(repaired.albumPinyin)
+        XCTAssertFalse(MusicLibrary.repairLegacyChineseMetadataText(in: &repaired))
+
+        var edited = original
+        edited.userMetadataEditedAt = Date()
+        let snapshot = edited
+        XCTAssertFalse(MusicLibrary.repairLegacyChineseMetadataText(in: &edited))
+        XCTAssertEqual(edited, snapshot)
+    }
+
     func testLocalAndRangeTagsGroupDifferentSingersIntoOneAlbum() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("AlbumArtistTags-\(UUID().uuidString)", isDirectory: true)
@@ -293,14 +335,15 @@ final class FileAlbumArtistLibraryTests: XCTestCase {
     }
 
     private func tagFixture(
-        format: String, key: String, singer: String, albumArtist: String = "Various Artists"
+        format: String, key: String, singer: String, albumArtist: String = "Various Artists",
+        album: String = "Compilation"
     ) -> Data {
         func uint32(_ value: Int, littleEndian: Bool = false) -> Data {
             let shifts = littleEndian ? [0, 8, 16, 24] : [24, 16, 8, 0]
             return Data(shifts.map { UInt8((value >> $0) & 0xFF) })
         }
         if format == "flac" {
-            let comments = ["TITLE=Track", "ARTIST=\(singer)", "ALBUM=Compilation", "\(key)=\(albumArtist)"]
+            let comments = ["TITLE=Track", "ARTIST=\(singer)", "ALBUM=\(album)", "\(key)=\(albumArtist)"]
             var block = uint32(6, littleEndian: true) + Data("Mp3tag".utf8)
             block.append(uint32(comments.count, littleEndian: true))
             for comment in comments {
@@ -317,7 +360,7 @@ final class FileAlbumArtistLibraryTests: XCTestCase {
             file.append(block)
             return file
         }
-        let fields = [("TIT2", "Track"), ("TPE1", singer), ("TALB", "Compilation"),
+        let fields = [("TIT2", "Track"), ("TPE1", singer), ("TALB", album),
                       (key == "TPE2" ? "TPE2" : "TXXX", key == "TPE2" ? albumArtist : "\(key)\0\(albumArtist)")]
         var body = Data()
         for (id, value) in fields {

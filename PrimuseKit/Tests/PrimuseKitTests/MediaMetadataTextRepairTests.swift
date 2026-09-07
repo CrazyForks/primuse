@@ -1,5 +1,66 @@
+import Foundation
 import Testing
 @testable import PrimuseKit
+
+@Suite struct AlbumMetadataTextRepairTests {
+    @Test(arguments: ["?", "\0", "\u{FFFD}", "\n"])
+    func separatesAlbumFromAnIndependentlyVerifiedArtist(separator: String) {
+        let album = "闆ㄤ竴鐩翠笅\(separator)ARTIST=寮犲畤"
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(album, artist: "张宇") == "雨一直下")
+    }
+
+    @Test func repairsNullDelimitedValueBeforeRemovingPadding() {
+        #expect(MediaMetadataTextRepair.repairedTagValue("闆ㄤ竴鐩翠笅\0ARTIST=寮犲") == "雨一直下")
+        #expect(MediaMetadataTextRepair.repairedTagValue("\0Björk\0") == "Björk")
+    }
+
+    @Test func usesAlbumArtistOnlyForAnAlbumArtistField() {
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "合集?ALBUMARTIST=群星", artist: "张宇", albumArtist: "群星"
+        ) == "合集")
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "合集?ARTIST=群星", artist: "张宇", albumArtist: "群星"
+        ) == "合集?ARTIST=群星")
+    }
+
+    @Test func preservesLiteralOrUnverifiableArtistText() {
+        for album in ["Who?", "ARTIST=张宇", "Who? ARTIST=张宇",
+                      "Album ARTIST=张宇", "Album?ARTIST=另一位歌手",
+                      "?ARTIST=张宇", "Album?ARTIST=", "雨一直下?ARTIST=寮犲"] {
+            #expect(MediaMetadataTextRepair.repairedAlbumTitle(album, artist: "张宇") == album)
+        }
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "雨一直下?ARTIST=张宇", artist: nil
+        ) == "雨一直下?ARTIST=张宇")
+        #expect(MediaMetadataTextRepair.repairedAlbumTitle(
+            "雨\u{FFFD}?ARTIST=张宇", artist: "张宇"
+        ) == "雨\u{FFFD}?ARTIST=张宇")
+    }
+
+    @Test func prefersIndependentRawAlbumOverTruncatedOrAppendedText() {
+        for current in ["闆ㄤ竴鐩翠笅?ARTIST=寮犲",
+                        "雨一直下?ARTIST=寮犲", "雨一直下?ARTIST=张宇"] {
+            #expect(MediaMetadataTextRepair.preferredTagValue(
+                current: current, raw: "雨一直下"
+            ) == "雨一直下")
+        }
+    }
+
+    @Test func preservesCleanTagAndDamagedEvidenceWithoutACleanAlternative() {
+        for current in ["Björk", "告白氣球", "龘歌", "Who?ARTIST=Someone"] {
+            #expect(MediaMetadataTextRepair.preferredTagValue(
+                current: current, raw: "另一张专辑"
+            ) == current)
+        }
+        let damaged = "闆ㄤ竴鐩翠笅?ARTIST=寮犲"
+        for raw in [nil, "", " \0", "雨\u{FFFD}", "雨一直下?ARTIST=张宇"] {
+            #expect(MediaMetadataTextRepair.preferredTagValue(current: damaged, raw: raw) == damaged)
+        }
+        #expect(MediaMetadataTextRepair.preferredTagValue(
+            current: nil, raw: "雨一直下?ARTIST=张宇"
+        ) == "雨一直下?ARTIST=张宇")
+    }
+}
 
 @Test func rejectsPlexQuestionMarkReplacementInChineseTitle() {
     #expect(MediaMetadataTextRepair.repaired("对面??") == nil)

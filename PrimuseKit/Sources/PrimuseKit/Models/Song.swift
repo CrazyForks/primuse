@@ -349,6 +349,84 @@ public enum MediaMetadataTextRepair {
             || legacyChineseCandidate(for: trimmed) != nil
     }
 
+    private static let appendedArtistField = try! NSRegularExpression(
+        pattern: #"[\x00\r\n?\uFFFD](ARTIST|ALBUMARTIST|ALBUM ARTIST)=(.+)$"#,
+        options: [.caseInsensitive, .dotMatchesLineSeparators]
+    )
+
+    private static func artistField(in text: String) -> (
+        prefix: String, key: String, artist: String, nullDelimited: Bool
+    )? {
+        guard text.contains("="),
+              let match = appendedArtistField.firstMatch(
+                in: text, range: NSRange(text.startIndex..., in: text)
+              ),
+              let boundary = Range(match.range, in: text),
+              let key = Range(match.range(at: 1), in: text),
+              let artist = Range(match.range(at: 2), in: text) else { return nil }
+        return (
+            String(text[..<boundary.lowerBound]),
+            String(text[key]).uppercased(),
+            String(text[artist]),
+            text[boundary.lowerBound] == "\0"
+        )
+    }
+
+    /// Preserve the boundary before removing padding: deleting NUL first can
+    /// turn a following serialized Artist field into part of the album name.
+    public static func repairedTagValue(_ text: String) -> String {
+        let value: String
+        if let field = artistField(in: text), field.nullDelimited {
+            value = field.prefix
+        } else {
+            value = text
+        }
+        let normalized = value.replacingOccurrences(of: "\0", with: "")
+        return TextEncodingRepair.repaired(normalized) ?? normalized
+    }
+
+    public static func repairedAlbumTitle(
+        _ text: String?, artist: String?, albumArtist: String? = nil
+    ) -> String? {
+        guard let text else { return nil }
+        let value = repairedTagValue(text)
+        guard let field = artistField(in: value),
+              let independentArtist = field.key == "ARTIST" ? artist : albumArtist else {
+            return value
+        }
+        let expected = repairedTagValue(independentArtist).trimmingCharacters(in: .whitespacesAndNewlines)
+        let embedded = repairedTagValue(field.artist).trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = repairedTagValue(field.prefix).trimmingCharacters(in: .whitespacesAndNewlines)
+        // A literal question mark is not a field separator. Require the
+        // appended value to agree with an independently read artist tag.
+        guard !expected.isEmpty, !prefix.isEmpty,
+              !TextEncodingRepair.requiresRawByteVerification(expected),
+              !TextEncodingRepair.requiresRawByteVerification(prefix),
+              embedded.caseInsensitiveCompare(expected) == .orderedSame else { return value }
+        return prefix
+    }
+
+    public static func preferredTagValue(current: String?, raw: String?) -> String? {
+        guard let raw else { return current }
+        let recovered = repairedTagValue(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !recovered.isEmpty else { return current }
+        guard let current, !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return recovered
+        }
+        if current == recovered { return current }
+        guard !isSuspicious(recovered), artistField(in: recovered) == nil else { return current }
+        // Rare Han characters alone can be legitimate names. Only replace
+        // existing text for reversible corruption or an incomplete UTF-8 tail.
+        if isSuspicious(current) || TextEncodingRepair.hasTruncatedUTF8RewritePrefix(current) {
+            return recovered
+        }
+        if let field = artistField(in: current),
+           repairedTagValue(field.prefix).trimmingCharacters(in: .whitespacesAndNewlines) == recovered {
+            return recovered
+        }
+        return current
+    }
+
     public static func fileNameTitle(from path: String?) -> String? {
         guard let baseName = fileBaseName(from: path) else { return nil }
         if let numberedTitle = numberedTrackTitle(baseName) { return numberedTitle }

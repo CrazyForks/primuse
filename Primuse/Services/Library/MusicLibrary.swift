@@ -2903,7 +2903,7 @@ final class MusicLibrary {
     @ObservationIgnored private var persistenceBlockedByCorruption = false
     @ObservationIgnored private var derivedIndexSignature: String?
     private static let startupCacheFormatVersion = 1
-    private static let loadedSongMigrationVersion = 4
+    private static let loadedSongMigrationVersion = 5
 
     func updateDisabledSourceIDs(_ ids: Set<String>) {
         guard disabledSourceIDs != ids else { return }
@@ -6923,7 +6923,11 @@ final class MusicLibrary {
         ).map { ($0, nil) }
     }
 
-    private static func repairLegacyChineseMetadataText(in song: inout Song) -> Bool {
+    static func repairLegacyChineseMetadataText(in song: inout Song) -> Bool {
+        guard song.userMetadataEditedAt == nil else { return false }
+        let originalTitle = song.title
+        let originalArtist = song.artistName
+        let originalAlbum = song.albumTitle
         var changed = false
         changed = repairLegacyChineseText(&song.title) || changed
         changed = repairLegacyChineseText(&song.artistName) || changed
@@ -6939,6 +6943,15 @@ final class MusicLibrary {
             changed = true
         }
         changed = repairLegacyChineseText(&song.albumTitle) || changed
+        song.albumTitle = MediaMetadataTextRepair.repairedAlbumTitle(
+            song.albumTitle, artist: song.artistName, albumArtist: song.albumArtistName
+        )
+        if song.albumTitle != originalAlbum {
+            song.albumPinyin = nil
+            changed = true
+        }
+        if song.title != originalTitle { song.titlePinyin = nil }
+        if song.artistName != originalArtist { song.artistPinyin = nil }
         changed = repairLegacyChineseText(&song.genre) || changed
         return changed
     }
