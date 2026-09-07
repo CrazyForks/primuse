@@ -54,6 +54,30 @@ struct LibraryGenreIndexTests {
         #expect(genre?.representativeSongIDs == ["same-album", "older", "blank"])
     }
 
+    @Test("Large categories preserve song order and first-seen albums")
+    func indexesLargeCategory() {
+        let songs = (0..<18_810).map { index in
+            song(
+                String(format: "%05d", index),
+                genre: index.isMultiple(of: 2) ? " Pop " : "ＰＯＰ",
+                albumID: "album-\(index % 240)",
+                year: 2000 + index % 25,
+                artwork: index.isMultiple(of: 10) ? "cover.jpg" : nil
+            )
+        }
+        let started = ContinuousClock.now
+        let index = LibraryGenreIndexBuilder.build(from: songs)
+        print("Large genre index: \(started.duration(to: .now))")
+
+        #expect(index.genres.count == 1)
+        #expect(index.genres.first?.name == "Pop")
+        #expect(index.genres.first?.songCount == songs.count)
+        #expect(index.genres.first?.albumCount == 240)
+        #expect(index.songIDsByGenreID["pop"] == songs.map(\.id))
+        #expect(index.albumIDsByGenreID["pop"] == (0..<240).map { "album-\($0)" })
+        #expect(index.genres.first?.representativeSongIDs == ["00020", "00070", "00120"])
+    }
+
     private func song(
         _ id: String,
         genre: String?,

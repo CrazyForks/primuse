@@ -2971,22 +2971,22 @@ final class MusicLibrary {
         disabledSourceIDs: Set<String>,
         previousVisibleSongs: [Song]
     ) -> PreparedVisibleCache {
-        let nextVisibleSongs: [Song]
+        let nextVisibleSongs = disabledSourceIDs.isEmpty
+            ? songs
+            : songs.filter { !disabledSourceIDs.contains($0.sourceID) }
+        let lookups = makeVisibleLookups(
+            songs: nextVisibleSongs,
+            artistNameConfiguration: artistNameConfiguration
+        )
         let nextVisibleAlbums: [Album]
         let candidateVisibleArtists: [Artist]
         if disabledSourceIDs.isEmpty {
-            nextVisibleSongs = songs
             nextVisibleAlbums = albums
             candidateVisibleArtists = artists
         } else {
-            nextVisibleSongs = songs.filter { !disabledSourceIDs.contains($0.sourceID) }
             let visibleAlbumIDs = Set(nextVisibleSongs.compactMap(\.albumID))
             nextVisibleAlbums = albums.filter { visibleAlbumIDs.contains($0.id) }
-            let visibleArtistIDs = Set(nextVisibleSongs.flatMap {
-                resolvedArtistNames(for: $0, configuration: artistNameConfiguration)
-                    .map { hashID($0.lowercased()) }
-            })
-            candidateVisibleArtists = artists.filter { visibleArtistIDs.contains($0.id) }
+            candidateVisibleArtists = artists.filter { lookups.songIDsByArtistID[$0.id] != nil }
         }
         // Older derived-index caches may contain two display-name variants
         // that resolve to the same stable artist ID. Keep launch resilient
@@ -2997,10 +2997,6 @@ final class MusicLibrary {
             artistByID[artist.id] = artist
             return true
         }
-        let lookups = makeVisibleLookups(
-            songs: nextVisibleSongs,
-            artistNameConfiguration: artistNameConfiguration
-        )
         let allCounts = disabledSourceIDs.isEmpty
             ? lookups.countBySourceID
             : makeSongCountsBySourceID(songs)

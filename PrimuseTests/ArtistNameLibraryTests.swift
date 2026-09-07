@@ -634,6 +634,7 @@ final class ArtistNameLibraryTests: XCTestCase {
         let expectedGuestSongIDs = ["duet", "solo", "legacy-native-value"]
         XCTAssertEqual(library.songs(forArtist: guestID).map(\.id), expectedGuestSongIDs)
         XCTAssertEqual(library.songs(forArtist: guestID).map(\.id), expectedGuestSongIDs)
+        XCTAssertEqual(Set(library.visibleArtists.map(\.name)), ["Host", "Guest", "Legacy"])
 
         let guestOwner = LibraryArtworkOwner(kind: .artist, id: guestID)
         XCTAssertTrue(library.setArtwork(for: guestOwner, to: duet))
@@ -646,10 +647,23 @@ final class ArtistNameLibraryTests: XCTestCase {
             library.songs(forArtist: guestID).map(\.id),
             ["solo", "legacy-native-value"]
         )
+        XCTAssertEqual(Set(library.visibleArtists.map(\.name)), ["Guest", "Legacy"])
 
         library.updateDisabledSourceIDs([])
         XCTAssertEqual(library.songs(forArtist: guestID).map(\.id), expectedGuestSongIDs)
+        XCTAssertEqual(Set(library.visibleArtists.map(\.name)), ["Host", "Guest", "Legacy"])
         _ = await library.persistNowAndWait()
+
+        let restored = MusicLibrary(
+            disabledSourceIDs: [duet.sourceID],
+            storageDirectory: storageDirectory,
+            artistNameConfiguration: .defaultValue
+        )
+        XCTAssertEqual(restored.songs.count, 3)
+        XCTAssertEqual(restored.visibleSongs.map(\.id), ["solo", "legacy-native-value"])
+        XCTAssertEqual(restored.songs(forArtist: guestID).map(\.id), ["solo", "legacy-native-value"])
+        XCTAssertEqual(Set(restored.visibleArtists.map(\.name)), ["Guest", "Legacy"])
+        XCTAssertTrue(restored.songs(forArtist: MusicLibrary.hashID("host")).isEmpty)
     }
 
     func testMetadataSearchFindsSecondaryNativeArtist() {

@@ -44,6 +44,15 @@ public enum LibraryGenreIndexBuilder {
         var songs: [Song] = []
         var albumIDs: [String] = []
         var seenAlbumIDs: Set<String> = []
+
+        mutating func append(_ song: Song) {
+            songs.append(song)
+            if let albumID = song.albumID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !albumID.isEmpty,
+               seenAlbumIDs.insert(albumID).inserted {
+                albumIDs.append(albumID)
+            }
+        }
     }
 
     public static func build(from songs: [Song]) -> LibraryGenreIndex {
@@ -54,14 +63,9 @@ public enum LibraryGenreIndexBuilder {
             let genreID = normalizedID(for: displayName)
             guard !genreID.isEmpty else { continue }
 
-            var group = groups[genreID] ?? Group(displayName: displayName)
-            group.songs.append(song)
-            if let albumID = song.albumID?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !albumID.isEmpty,
-               group.seenAlbumIDs.insert(albumID).inserted {
-                group.albumIDs.append(albumID)
-            }
-            groups[genreID] = group
+            // Keep each group's buffers uniquely owned while appending;
+            // copying it out of the dictionary copies a growing array per song.
+            groups[genreID, default: Group(displayName: displayName)].append(song)
         }
 
         let orderedIDs = groups.keys.sorted()
