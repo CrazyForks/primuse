@@ -2397,6 +2397,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             year: year,
             lastModified: item.dateCreated,
             dateAdded: dateAdded,
+            serverPlayCount: item.userData?.playCount,
             coverArtFileName: coverArtFileName,
             artistArtworkFileName: artistArtworkFileName
         )
@@ -2443,6 +2444,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             sampleRate: audioStream?.samplingRate,
             genre: genres?.isEmpty == false ? genres?.joined(separator: ", ") : nil,
             year: item.year,
+            serverPlayCount: item.viewCount,
             coverArtFileName: coverArtURL(for: item)?.absoluteString,
             artistArtworkFileName: artistArtworkReference(for: item, artistName: artist)
         )

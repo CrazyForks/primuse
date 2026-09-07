@@ -136,6 +136,40 @@ struct SongListSnapshotTests {
         #expect(sortedIDs(songs, by: .formatDescending) == ["b", "a"])
     }
 
+    @Test("Sorts table metrics, server counters, and downloaded state in both directions")
+    func sortsMacTableColumns() {
+        let songs = [
+            song(
+                id: "a", title: "A", sourceID: "z-source", duration: 60,
+                serverPlayCount: 2, year: 2020, bitRate: 320, bitDepth: 24
+            ),
+            song(
+                id: "b", title: "B", sourceID: "a-source", duration: 180,
+                serverPlayCount: 10, year: 2024, bitRate: 1_411, bitDepth: 16
+            ),
+            song(id: "c", title: "C", sourceID: "z-source", duration: 120),
+        ]
+        let values = SongListSortValues(
+            playCountsBySongID: ["a": 4, "b": 1, "c": 7],
+            downloadedSongIDs: ["b"],
+            sourceNamesByID: ["a-source": "Alpha", "z-source": "Zulu"]
+        )
+
+        #expect(sortedIDs(songs, by: .duration, values: values) == ["a", "c", "b"])
+        #expect(sortedIDs(songs, by: .durationDescending, values: values) == ["b", "c", "a"])
+        #expect(sortedIDs(songs, by: .playCount, values: values) == ["b", "a", "c"])
+        #expect(sortedIDs(songs, by: .playCountDescending, values: values) == ["c", "a", "b"])
+        #expect(sortedIDs(songs, by: .serverPlayCount, values: values) == ["a", "b", "c"])
+        #expect(sortedIDs(songs, by: .serverPlayCountDescending, values: values) == ["b", "a", "c"])
+        #expect(sortedIDs(songs, by: .source, values: values) == ["b", "a", "c"])
+        #expect(sortedIDs(songs, by: .sourceDescending, values: values) == ["a", "c", "b"])
+        #expect(sortedIDs(songs, by: .yearDescending, values: values) == ["b", "a", "c"])
+        #expect(sortedIDs(songs, by: .bitRate, values: values) == ["a", "b", "c"])
+        #expect(sortedIDs(songs, by: .bitDepthDescending, values: values) == ["a", "b", "c"])
+        #expect(sortedIDs(songs, by: .downloadedFirst, values: values) == ["b", "a", "c"])
+        #expect(sortedIDs(songs, by: .downloaded, values: values) == ["a", "c", "b"])
+    }
+
     @Test("Caches every visited order for the current scope version")
     func cachesEveryVisitedOrder() async {
         let store = SongListSnapshotStore()
@@ -216,6 +250,90 @@ struct SongListSnapshotTests {
         }
 
         #expect(first !== rebuilt)
+    }
+
+    @Test("Supplemental updates preserve unrelated in-flight sort versions")
+    func isolatesSupplementalSortVersions() {
+        var current = SongListSortValuesVersion()
+        let requested = current
+        current.invalidate(.downloaded)
+
+        for order in LibrarySongSortOrder.allCases {
+            if order.criterion == .downloaded {
+                #expect(current.revision(for: order) != requested.revision(for: order))
+            } else {
+                #expect(current.revision(for: order) == requested.revision(for: order))
+            }
+        }
+        #expect(current.revision(for: .downloaded) == current.revision(for: .downloadedFirst))
+        #expect(current.revision(for: .title) == nil)
+    }
+
+    @Test("Refreshing one supplemental column preserves other cached orders", arguments: [
+        LibrarySongSortCriterion.playCount, .downloaded, .source,
+    ])
+    func refreshesOnlyChangedSupplementalColumn(_ changed: LibrarySongSortCriterion) async throws {
+        let store = SongListSnapshotStore()
+        let version = SongListSnapshotVersion(collectionRevision: 1, replacementToken: UUID())
+        var valuesVersion = SongListSortValuesVersion()
+        let songs = [
+            song(id: "a", title: "Alpha", sourceID: "first"),
+            song(id: "b", title: "Beta", sourceID: "second"),
+        ]
+        let initial = SongListSortValues(
+            playCountsBySongID: ["a": 5, "b": 1],
+            downloadedSongIDs: ["a"],
+            sourceNamesByID: ["first": "Alpha", "second": "Zulu"]
+        )
+        let orders: [LibrarySongSortOrder] = [.title, .playCountDescending, .downloadedFirst, .source]
+        var cached: [LibrarySongSortOrder: SongListSnapshot] = [:]
+        for order in orders {
+            cached[order] = try #require(await store.snapshot(
+                scopeKey: "library", version: version, order: order, songs: songs,
+                sortValues: initial, sortValuesVersion: valuesVersion
+            ))
+            #expect(cached[order]?.orderedSongIDs == ["a", "b"])
+        }
+
+        valuesVersion.invalidate(changed)
+        let updated = SongListSortValues(
+            playCountsBySongID: changed == .playCount ? ["a": 1, "b": 5] : initial.playCountsBySongID,
+            downloadedSongIDs: changed == .downloaded ? ["b"] : initial.downloadedSongIDs,
+            sourceNamesByID: changed == .source
+                ? ["first": "Zulu", "second": "Alpha"] : initial.sourceNamesByID
+        )
+        for order in orders {
+            let rebuilt = try #require(await store.snapshot(
+                scopeKey: "library", version: version, order: order, songs: songs,
+                sortValues: updated, sortValuesVersion: valuesVersion
+            ))
+            if order.criterion == changed {
+                #expect(rebuilt !== cached[order])
+                #expect(rebuilt.orderedSongIDs == ["b", "a"])
+            } else {
+                #expect(rebuilt === cached[order])
+                #expect(rebuilt.orderedSongIDs == ["a", "b"])
+            }
+        }
+    }
+
+    @Test("Recreated views cannot reuse another view's supplemental values")
+    func isolatesRecreatedViewSortValues() async throws {
+        let store = SongListSnapshotStore()
+        let version = SongListSnapshotVersion(collectionRevision: 1, replacementToken: UUID())
+        let songs = [song(id: "a", title: "Alpha"), song(id: "b", title: "Beta")]
+        let first = try #require(await store.snapshot(
+            scopeKey: "library", version: version, order: .downloadedFirst, songs: songs,
+            sortValues: SongListSortValues(downloadedSongIDs: ["a"]),
+            sortValuesVersion: SongListSortValuesVersion()
+        ))
+        let reopened = try #require(await store.snapshot(
+            scopeKey: "library", version: version, order: .downloadedFirst, songs: songs,
+            sortValues: SongListSortValues(downloadedSongIDs: ["b"]),
+            sortValuesVersion: SongListSortValuesVersion()
+        ))
+        #expect(first.orderedSongIDs == ["a", "b"])
+        #expect(reopened.orderedSongIDs == ["b", "a"])
     }
 
     @Test("Handles a large library without embedding songs in row identity")
@@ -325,6 +443,10 @@ struct SongListSnapshotTests {
         #expect(LibrarySongSortOrder.sourceDate.selecting(.sourceDate) == .sourceDateOldest)
         #expect(LibrarySongSortOrder.sourceDateOldest.selecting(.sourceDate) == .sourceDate)
         #expect(LibrarySongSortOrder.dateAddedOldest.selecting(.artist) == .artist)
+        #expect(LibrarySongSortOrder.title.selecting(.playCount) == .playCountDescending)
+        #expect(LibrarySongSortOrder.playCountDescending.selecting(.playCount) == .playCount)
+        #expect(LibrarySongSortOrder.title.selecting(.downloaded) == .downloadedFirst)
+        #expect(LibrarySongSortOrder.downloadedFirst.selecting(.downloaded) == .downloaded)
     }
 
     @Test("Sort preference defaults safely and repairs unknown values")
@@ -532,6 +654,10 @@ struct SongListSnapshotTests {
         duration: TimeInterval = 180,
         lastModified: Date? = nil,
         dateAdded: Date = Date(timeIntervalSince1970: 0),
+        serverPlayCount: Int? = nil,
+        year: Int? = nil,
+        bitRate: Int? = nil,
+        bitDepth: Int? = nil,
         fileFormat: AudioFormat = .flac
     ) -> Song {
         Song(
@@ -543,15 +669,24 @@ struct SongListSnapshotTests {
             fileFormat: fileFormat,
             filePath: "/Music/\(id).\(fileFormat.rawValue)",
             sourceID: sourceID,
+            bitRate: bitRate,
+            bitDepth: bitDepth,
+            year: year,
             lastModified: lastModified,
-            dateAdded: dateAdded
+            dateAdded: dateAdded,
+            serverPlayCount: serverPlayCount
         )
     }
 
     private func sortedIDs(
         _ songs: [Song],
-        by order: LibrarySongSortOrder
+        by order: LibrarySongSortOrder,
+        values: SongListSortValues = .empty
     ) -> [String] {
-        SongListSnapshotBuilder.build(songs: songs, order: order).rows.map(\.id)
+        SongListSnapshotBuilder.build(
+            songs: songs,
+            order: order,
+            sortValues: values
+        ).rows.map(\.id)
     }
 }

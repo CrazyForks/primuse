@@ -21,6 +21,22 @@ public enum LibrarySongSortOrder: String, CaseIterable, Hashable, Sendable {
     case sourceDateOldest
     case format
     case formatDescending
+    case duration
+    case durationDescending
+    case playCount
+    case playCountDescending
+    case serverPlayCount
+    case serverPlayCountDescending
+    case source
+    case sourceDescending
+    case year
+    case yearDescending
+    case bitRate
+    case bitRateDescending
+    case bitDepth
+    case bitDepthDescending
+    case downloaded
+    case downloadedFirst
 }
 
 public enum LibrarySongSortCriterion: String, CaseIterable, Hashable, Sendable {
@@ -30,6 +46,14 @@ public enum LibrarySongSortCriterion: String, CaseIterable, Hashable, Sendable {
     case dateAdded
     case sourceDate
     case format
+    case duration
+    case playCount
+    case serverPlayCount
+    case source
+    case year
+    case bitRate
+    case bitDepth
+    case downloaded
 }
 
 public extension LibrarySongSortOrder {
@@ -41,15 +65,28 @@ public extension LibrarySongSortOrder {
         case .dateAdded, .dateAddedOldest: return .dateAdded
         case .sourceDate, .sourceDateOldest: return .sourceDate
         case .format, .formatDescending: return .format
+        case .duration, .durationDescending: return .duration
+        case .playCount, .playCountDescending: return .playCount
+        case .serverPlayCount, .serverPlayCountDescending: return .serverPlayCount
+        case .source, .sourceDescending: return .source
+        case .year, .yearDescending: return .year
+        case .bitRate, .bitRateDescending: return .bitRate
+        case .bitDepth, .bitDepthDescending: return .bitDepth
+        case .downloaded, .downloadedFirst: return .downloaded
         }
     }
 
     var isAscending: Bool {
         switch self {
-        case .title, .artist, .album, .dateAddedOldest, .sourceDateOldest, .format:
+        case .title, .artist, .album, .dateAddedOldest, .sourceDateOldest, .format,
+                .duration, .playCount, .serverPlayCount, .source, .year, .bitRate,
+                .bitDepth, .downloaded:
             return true
         case .titleDescending, .artistDescending, .albumDescending, .dateAdded,
-                .sourceDate, .formatDescending:
+                .sourceDate, .formatDescending, .durationDescending,
+                .playCountDescending, .serverPlayCountDescending, .sourceDescending,
+                .yearDescending, .bitRateDescending, .bitDepthDescending,
+                .downloadedFirst:
             return false
         }
     }
@@ -68,6 +105,22 @@ public extension LibrarySongSortOrder {
         case .sourceDateOldest: return .sourceDate
         case .format: return .formatDescending
         case .formatDescending: return .format
+        case .duration: return .durationDescending
+        case .durationDescending: return .duration
+        case .playCount: return .playCountDescending
+        case .playCountDescending: return .playCount
+        case .serverPlayCount: return .serverPlayCountDescending
+        case .serverPlayCountDescending: return .serverPlayCount
+        case .source: return .sourceDescending
+        case .sourceDescending: return .source
+        case .year: return .yearDescending
+        case .yearDescending: return .year
+        case .bitRate: return .bitRateDescending
+        case .bitRateDescending: return .bitRate
+        case .bitDepth: return .bitDepthDescending
+        case .bitDepthDescending: return .bitDepth
+        case .downloaded: return .downloadedFirst
+        case .downloadedFirst: return .downloaded
         }
     }
 
@@ -79,11 +132,59 @@ public extension LibrarySongSortOrder {
         case .dateAdded: return .dateAdded
         case .sourceDate: return .sourceDate
         case .format: return .format
+        case .duration: return .durationDescending
+        case .playCount: return .playCountDescending
+        case .serverPlayCount: return .serverPlayCountDescending
+        case .source: return .source
+        case .year: return .yearDescending
+        case .bitRate: return .bitRateDescending
+        case .bitDepth: return .bitDepthDescending
+        case .downloaded: return .downloadedFirst
         }
     }
 
     func selecting(_ criterion: LibrarySongSortCriterion) -> LibrarySongSortOrder {
         self.criterion == criterion ? reversed : Self.defaultOrder(for: criterion)
+    }
+}
+
+/// Values that belong to the current device or presentation context rather
+/// than the persisted `Song` row. Keeping them beside the snapshot request
+/// lets the large-list worker sort these columns without doing per-row I/O.
+public struct SongListSortValues: Sendable {
+    public static let empty = SongListSortValues()
+
+    public let playCountsBySongID: [String: Int]
+    public let downloadedSongIDs: Set<String>
+    public let sourceNamesByID: [String: String]
+
+    public init(
+        playCountsBySongID: [String: Int] = [:],
+        downloadedSongIDs: Set<String> = [],
+        sourceNamesByID: [String: String] = [:]
+    ) {
+        self.playCountsBySongID = playCountsBySongID
+        self.downloadedSongIDs = downloadedSongIDs
+        self.sourceNamesByID = sourceNamesByID
+    }
+}
+
+public struct SongListSortValuesVersion: Sendable {
+    private var revisions: [LibrarySongSortCriterion: UUID] = [
+        .playCount: UUID(),
+        .downloaded: UUID(),
+        .source: UUID(),
+    ]
+
+    public init() {}
+
+    public func revision(for order: LibrarySongSortOrder) -> UUID? {
+        revisions[order.criterion]
+    }
+
+    public mutating func invalidate(_ criterion: LibrarySongSortCriterion) {
+        guard revisions[criterion] != nil else { return }
+        revisions[criterion] = UUID()
     }
 }
 
@@ -292,6 +393,7 @@ public actor SongListSnapshotStore {
         let scopeKey: String
         let version: SongListSnapshotVersion
         let order: LibrarySongSortOrder
+        let sortValuesRevision: UUID?
     }
 
     private struct PendingEntry: Sendable {
@@ -314,11 +416,19 @@ public actor SongListSnapshotStore {
         version: SongListSnapshotVersion,
         order: LibrarySongSortOrder,
         songs: [Song],
+        sortValues: SongListSortValues = .empty,
+        sortValuesVersion: SongListSortValuesVersion = .init(),
         cancelSuperseded: Bool = false
     ) async -> SongListSnapshot? {
         prepareScope(scopeKey, for: version)
 
-        let key = Key(scopeKey: scopeKey, version: version, order: order)
+        let key = Key(
+            scopeKey: scopeKey,
+            version: version,
+            order: order,
+            sortValuesRevision: sortValuesVersion.revision(for: order)
+        )
+        invalidateObsoleteSortValues(for: key)
         if cancelSuperseded {
             cancelPending(in: scopeKey, except: key)
         }
@@ -344,7 +454,11 @@ public actor SongListSnapshotStore {
         let token = UUID()
         let task = Task.detached(priority: .userInitiated) { () -> SongListSnapshot? in
             do {
-                return try SongListSnapshotBuilder.buildCancellable(songs: songs, order: order)
+                return try SongListSnapshotBuilder.buildCancellable(
+                    songs: songs,
+                    order: order,
+                    sortValues: sortValues
+                )
             } catch is CancellationError {
                 return nil
             } catch {
@@ -398,6 +512,22 @@ public actor SongListSnapshotStore {
             )
         }
     }
+
+    private func invalidateObsoleteSortValues(for key: Key) {
+        // Device values can change while an unrelated metadata sort is running.
+        // Keep that work and its cache valid, and retire both directions of only
+        // the changed column instead of retaining every historical revision.
+        func isObsolete(_ existing: Key) -> Bool {
+            existing.scopeKey == key.scopeKey
+                && existing.order.criterion == key.order.criterion
+                && existing.sortValuesRevision != key.sortValuesRevision
+        }
+        cachedByKey = cachedByKey.filter { !isObsolete($0.key) }
+        let obsoleteKeys = pendingByKey.keys.filter(isObsolete)
+        for obsoleteKey in obsoleteKeys {
+            pendingByKey.removeValue(forKey: obsoleteKey)?.task.cancel()
+        }
+    }
 }
 
 /// Lightweight identity consumed by large song lists. Keeping `Song` values
@@ -449,22 +579,30 @@ public enum SongListSnapshotBuilder {
     /// immutable reference on the main actor.
     public static func build(
         songs: [Song],
-        order: LibrarySongSortOrder
+        order: LibrarySongSortOrder,
+        sortValues: SongListSortValues = .empty
     ) -> SongListSnapshot {
         // The non-throwing entry point remains useful for deterministic unit
         // construction. Store workers use the cancellable variant below.
-        try! build(songs: songs, order: order, checkCancellation: {})
+        try! build(
+            songs: songs,
+            order: order,
+            sortValues: sortValues,
+            checkCancellation: {}
+        )
     }
 
     /// A cooperative merge sort lets a rapid order switch stop obsolete CPU
     /// work. Swift's standard `sort` has no cancellation points once started.
     public static func buildCancellable(
         songs: [Song],
-        order: LibrarySongSortOrder
+        order: LibrarySongSortOrder,
+        sortValues: SongListSortValues = .empty
     ) throws -> SongListSnapshot {
         try build(
             songs: songs,
             order: order,
+            sortValues: sortValues,
             checkCancellation: { try Task.checkCancellation() }
         )
     }
@@ -472,6 +610,7 @@ public enum SongListSnapshotBuilder {
     private static func build(
         songs: [Song],
         order: LibrarySongSortOrder,
+        sortValues: SongListSortValues,
         checkCancellation: () throws -> Void
     ) throws -> SongListSnapshot {
         let interval = SongListSnapshotPerformance.signposter.beginInterval(
@@ -483,6 +622,7 @@ public enum SongListSnapshotBuilder {
             let orderedIndices = try sortedIndices(
                 songs: songs,
                 order: order,
+                sortValues: sortValues,
                 checkCancellation: checkCancellation
             )
 
@@ -506,7 +646,11 @@ public enum SongListSnapshotBuilder {
                 orderedSongIDs.append(song.id)
                 songIDs.insert(song.id)
                 sourceCounts[song.sourceID, default: 0] += 1
-                if let indexValue = sectionIndexValue(for: song, order: order),
+                if let indexValue = sectionIndexValue(
+                    for: song,
+                    order: order,
+                    sortValues: sortValues
+                ),
                    let label = sectionIndexLabel(for: indexValue),
                    sectionOffsets[label] == nil {
                     sectionOffsets[label] = offset
@@ -552,7 +696,8 @@ public enum SongListSnapshotBuilder {
 
     private static func sectionIndexValue(
         for song: Song,
-        order: LibrarySongSortOrder
+        order: LibrarySongSortOrder,
+        sortValues: SongListSortValues
     ) -> String? {
         switch order.criterion {
         case .title:
@@ -565,6 +710,11 @@ public enum SongListSnapshotBuilder {
             return nil
         case .format:
             return song.fileFormat.displayName
+        case .source:
+            return sortValues.sourceNamesByID[song.sourceID] ?? song.sourceID
+        case .duration, .playCount, .serverPlayCount, .year, .bitRate,
+                .bitDepth, .downloaded:
+            return nil
         }
     }
 
@@ -595,8 +745,12 @@ public enum SongListSnapshotBuilder {
         from sectionOffsets: [String: Int],
         order: LibrarySongSortOrder
     ) -> [SongListSectionIndexEntry] {
-        guard order.criterion != .dateAdded,
-              order.criterion != .sourceDate else { return [] }
+        let supportsSectionIndex: Bool = switch order.criterion {
+        case .title, .artist, .album, .format, .source: true
+        case .dateAdded, .sourceDate, .duration, .playCount, .serverPlayCount,
+                .year, .bitRate, .bitDepth, .downloaded: false
+        }
+        guard supportsSectionIndex else { return [] }
 
         let orderedLabels = order.isAscending
             ? latinSectionLabels
@@ -640,6 +794,7 @@ public enum SongListSnapshotBuilder {
     private static func sortedIndices(
         songs: [Song],
         order: LibrarySongSortOrder,
+        sortValues: SongListSortValues,
         checkCancellation: () throws -> Void
     ) throws -> [Int] {
         guard songs.count > 1 else { return Array(songs.indices) }
@@ -673,7 +828,8 @@ public enum SongListSnapshotBuilder {
                         source[right],
                         source[left],
                         songs: songs,
-                        order: order
+                        order: order,
+                        sortValues: sortValues
                     ) {
                         destination[destinationIndex] = source[right]
                         right += 1
@@ -694,7 +850,8 @@ public enum SongListSnapshotBuilder {
         _ lhsIndex: Int,
         _ rhsIndex: Int,
         songs: [Song],
-        order: LibrarySongSortOrder
+        order: LibrarySongSortOrder,
+        sortValues: SongListSortValues
     ) -> Bool {
         let lhs = songs[lhsIndex]
         let rhs = songs[rhsIndex]
@@ -729,6 +886,67 @@ public enum SongListSnapshotBuilder {
             }
         case .format, .formatDescending:
             comparison = lhs.fileFormat.displayName.compare(rhs.fileFormat.displayName)
+        case .duration, .durationDescending:
+            let lhsDuration = lhs.duration.isFinite ? max(0, lhs.duration) : 0
+            let rhsDuration = rhs.duration.isFinite ? max(0, rhs.duration) : 0
+            if lhsDuration != rhsDuration {
+                return order.isAscending ? lhsDuration < rhsDuration : lhsDuration > rhsDuration
+            }
+            comparison = .orderedSame
+        case .playCount, .playCountDescending:
+            let lhsCount = sortValues.playCountsBySongID[lhs.id, default: 0]
+            let rhsCount = sortValues.playCountsBySongID[rhs.id, default: 0]
+            if lhsCount != rhsCount {
+                return order.isAscending ? lhsCount < rhsCount : lhsCount > rhsCount
+            }
+            comparison = .orderedSame
+        case .serverPlayCount, .serverPlayCountDescending:
+            if let result = optionalValueOrder(
+                lhs.serverPlayCount,
+                rhs.serverPlayCount,
+                ascending: order.isAscending
+            ) {
+                return result
+            }
+            comparison = .orderedSame
+        case .source, .sourceDescending:
+            let lhsName = sortValues.sourceNamesByID[lhs.sourceID] ?? lhs.sourceID
+            let rhsName = sortValues.sourceNamesByID[rhs.sourceID] ?? rhs.sourceID
+            comparison = lhsName.localizedCompare(rhsName)
+        case .year, .yearDescending:
+            if let result = optionalValueOrder(
+                lhs.year,
+                rhs.year,
+                ascending: order.isAscending
+            ) {
+                return result
+            }
+            comparison = .orderedSame
+        case .bitRate, .bitRateDescending:
+            if let result = optionalValueOrder(
+                lhs.bitRate,
+                rhs.bitRate,
+                ascending: order.isAscending
+            ) {
+                return result
+            }
+            comparison = .orderedSame
+        case .bitDepth, .bitDepthDescending:
+            if let result = optionalValueOrder(
+                lhs.bitDepth,
+                rhs.bitDepth,
+                ascending: order.isAscending
+            ) {
+                return result
+            }
+            comparison = .orderedSame
+        case .downloaded, .downloadedFirst:
+            let lhsDownloaded = sortValues.downloadedSongIDs.contains(lhs.id)
+            let rhsDownloaded = sortValues.downloadedSongIDs.contains(rhs.id)
+            if lhsDownloaded != rhsDownloaded {
+                return order.isAscending ? !lhsDownloaded : lhsDownloaded
+            }
+            comparison = .orderedSame
         }
 
         if comparison == .orderedSame {
@@ -736,11 +954,36 @@ public enum SongListSnapshotBuilder {
         }
         switch order {
         case .titleDescending, .artistDescending, .albumDescending, .sourceDate,
-                .formatDescending:
+                .formatDescending, .sourceDescending:
             return comparison == .orderedDescending
         case .title, .artist, .album, .dateAdded, .dateAddedOldest,
-                .sourceDateOldest, .format:
+                .sourceDateOldest, .format, .source:
             return comparison == .orderedAscending
+        case .duration, .durationDescending, .playCount, .playCountDescending,
+                .serverPlayCount, .serverPlayCountDescending, .year, .yearDescending,
+                .bitRate, .bitRateDescending, .bitDepth, .bitDepthDescending,
+                .downloaded, .downloadedFirst:
+            return false
+        }
+    }
+
+    /// Missing provider metadata always stays after known values, independent
+    /// of direction. A nil return means the values are equal and the stable ID
+    /// tie-breaker should decide their order.
+    private static func optionalValueOrder<Value: Comparable>(
+        _ lhs: Value?,
+        _ rhs: Value?,
+        ascending: Bool
+    ) -> Bool? {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?) where lhs != rhs:
+            return ascending ? lhs < rhs : lhs > rhs
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            return nil
         }
     }
 }
