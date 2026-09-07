@@ -4042,9 +4042,10 @@ final class AudioPlayerService {
         updatePlaybackState()
     }
 
-    func setPlaybackVolume(_ value: Float) {
+    func setPlaybackVolume(_ value: Float, persist: Bool = true) {
+        guard value.isFinite else { return }
         let clamped = min(max(value, 0), 1)
-        audioEngine.volume = clamped
+        audioEngine.setVolume(clamped, persist: persist)
         radioPlaybackController.setVolume(clamped)
         activeSystemMediaPlayer?.volume = clamped
     }

@@ -14,7 +14,6 @@ struct MacBottomBar: View {
     var onFullScreen: () -> Void = {}
 
     @Environment(AudioPlayerService.self) private var player
-    @Environment(AudioEngine.self) private var engine
     @Environment(MusicLibrary.self) private var library
     @Environment(\.pmAppearance) private var mode
     @AppStorage(FullscreenPlayerEffect.storageKey)
@@ -314,7 +313,7 @@ struct MacBottomBar: View {
     private var volumeControl: some View {
         HStack(spacing: 5) {
             Button { airPlayShown.toggle() } label: {
-                Image(systemName: volumeSymbol)
+                PMVolumeSymbol()
                     .font(.system(size: 12))
                     .foregroundStyle(PMColor.textMuted)
                     .frame(width: 18)
@@ -327,30 +326,12 @@ struct MacBottomBar: View {
             }
 
             if showsPlayerVolumeBar {
-                // AppKit slider opts out of window-background dragging, so volume
-                // drags do not move the hidden-titlebar window.
-                PMVolumeSlider(value: Binding(
-                    get: { Double(engine.volume) },
-                    set: { player.setPlaybackVolume(Float($0)) }
-                ), isEnabled: player.isLiveRadio || player.playbackSettings.outputMode == .effects,
-                   accessibilityHelp: !player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity
-                       ? String(localized: "volume_high_fidelity_system_hint")
-                       : nil)
+                PMPlaybackVolumeSlider()
                 .frame(width: 72)
-                .help(!player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity
-                    ? Text("volume_high_fidelity_system_hint")
-                    : Text("volume"))
             }
         }
     }
 
-    private var volumeSymbol: String {
-        let v = engine.volume
-        if v <= 0.001 { return "speaker.slash.fill" }
-        if v < 0.4 { return "speaker.wave.1.fill" }
-        if v < 0.75 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
-    }
 }
 
 /// 把 `currentTime` 的高频观察限制在进度条内，避免每次播放器 tick 都重算

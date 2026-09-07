@@ -14,7 +14,6 @@ struct MacMiniPlayerView: View {
 
     @Environment(AudioPlayerService.self) private var player
     @Environment(MusicLibrary.self) private var library
-    @Environment(AudioEngine.self) private var engine
     @Environment(SourceManager.self) private var sourceManager
     @Environment(SourcesStore.self) private var sourcesStore
     @Environment(ThemeService.self) private var theme
@@ -316,17 +315,13 @@ struct MacMiniPlayerView: View {
             if showsPlayerVolumeBar {
                 Spacer(minLength: 6)
 
-                Image(systemName: volumeSymbol)
+                PMVolumeSymbol()
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(PMColor.textMuted)
                     .frame(width: 14)
 
-                PMVolumeSlider(value: Binding(
-                    get: { Double(engine.volume) },
-                    set: { player.setPlaybackVolume(Float($0)) }
-                ), isEnabled: true)
+                PMPlaybackVolumeSlider()
                 .frame(width: 92)
-                .help(Text("volume"))
             }
         }
         .frame(maxWidth: .infinity)
@@ -378,24 +373,13 @@ struct MacMiniPlayerView: View {
             if showsPlayerVolumeBar {
                 Spacer(minLength: 8)
 
-                Image(systemName: volumeSymbol)
+                PMVolumeSymbol()
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(PMColor.textMuted)
                     .frame(width: 14)
 
-                // AppKit slider opts out of window-background dragging, so volume
-                // drags stay on the control in this borderless panel.
-                PMVolumeSlider(value: Binding(
-                    get: { Double(engine.volume) },
-                    set: { player.setPlaybackVolume(Float($0)) }
-                ), isEnabled: player.playbackSettings.outputMode == .effects,
-                   accessibilityHelp: player.playbackSettings.outputMode == .highFidelity
-                       ? String(localized: "volume_high_fidelity_system_hint")
-                       : nil)
+                PMPlaybackVolumeSlider()
                 .frame(width: 64)
-                .help(player.playbackSettings.outputMode == .highFidelity
-                    ? Text("volume_high_fidelity_system_hint")
-                    : Text("volume"))
             }
 
             PlayerMoreMenu {
@@ -412,14 +396,6 @@ struct MacMiniPlayerView: View {
         .overlay(alignment: .top) {
             Rectangle().fill(PMColor.divider).frame(height: 0.5)
         }
-    }
-
-    private var volumeSymbol: String {
-        let v = engine.volume
-        if v <= 0.001 { return "speaker.slash.fill" }
-        if v < 0.4 { return "speaker.wave.1.fill" }
-        if v < 0.75 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
     }
 
     private func miniIcon(_ symbol: String, tint: Color = .secondary) -> some View {

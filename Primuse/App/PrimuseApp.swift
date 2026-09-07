@@ -617,15 +617,15 @@ final class PrimuseAppDelegate: NSObject, NSApplicationDelegate {
             case .one: services.playerService.repeatMode = .off
             }
         case .volumeUp:
-            services.playerService.audioEngine.volume = min(
+            services.playerService.setPlaybackVolume(min(
                 1,
                 services.playerService.audioEngine.volume + 0.05
-            )
+            ))
         case .volumeDown:
-            services.playerService.audioEngine.volume = max(
+            services.playerService.setPlaybackVolume(max(
                 0,
                 services.playerService.audioEngine.volume - 0.05
-            )
+            ))
         case .focusSearch:
             focusSearchFromShortcut()
         case .showMiniPlayer:
@@ -1699,13 +1699,13 @@ struct PrimuseApp: App {
                 Divider()
 
                 Button("volume_up") {
-                    let engine = AppServices.shared.playerService.audioEngine
-                    engine.volume = min(1.0, engine.volume + 0.05)
+                    let player = AppServices.shared.playerService
+                    player.setPlaybackVolume(player.audioEngine.volume + 0.05)
                 }
 
                 Button("volume_down") {
-                    let engine = AppServices.shared.playerService.audioEngine
-                    engine.volume = max(0.0, engine.volume - 0.05)
+                    let player = AppServices.shared.playerService
+                    player.setPlaybackVolume(player.audioEngine.volume - 0.05)
                 }
             }
         }

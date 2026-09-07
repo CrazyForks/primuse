@@ -36,6 +36,15 @@ enum FileMetadataReader {
             )
         }
 
+        mutating func applyAudioProperties(sampleRate: Double? = nil, bitRateKbps: Double? = nil) {
+            if let rate = sampleRate?.finiteInt(), rate > 0 {
+                self.sampleRate = rate
+            }
+            if let rate = bitRateKbps?.finiteInt(), rate > 0 {
+                bitRate = rate
+            }
+        }
+
         var hasDescriptiveMetadata: Bool {
             func hasText(_ value: String?) -> Bool {
                 value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -674,14 +683,14 @@ enum FileMetadataReader {
                         for desc in formatDescriptions {
                             let basicDescription = CMAudioFormatDescriptionGetStreamBasicDescription(desc)
                             if let basic = basicDescription?.pointee {
-                                metadata.sampleRate = Int(basic.mSampleRate)
+                                metadata.applyAudioProperties(sampleRate: basic.mSampleRate)
                                 metadata.bitDepth = Int(basic.mBitsPerChannel)
                             }
                         }
                     }
 
                     if let bitRate = try? await track.load(.estimatedDataRate) {
-                        metadata.bitRate = Int(bitRate / 1000) // kbps
+                        metadata.applyAudioProperties(bitRateKbps: Double(bitRate / 1000))
                     }
                 }
             }
@@ -824,7 +833,7 @@ enum FileMetadataReader {
         let frontCover = tags.attachedPictures(ofType: .frontCover).first?.imageData
         let anyCover = tags.attachedPictures.first?.imageData
 
-        let fallback = Metadata(
+        var fallback = Metadata(
             title: tags.title,
             artist: tags.artist,
             albumTitle: tags.albumTitle,
@@ -835,14 +844,16 @@ enum FileMetadataReader {
             genre: tags.genre,
             duration: properties.duration,
             coverArtData: frontCover ?? anyCover,
-            sampleRate: properties.sampleRate.map(Int.init),
-            bitRate: properties.bitrate.map(Int.init),
             bitDepth: properties.bitDepth,
             replayGainTrackGain: tags.replayGainTrackGain,
             replayGainTrackPeak: tags.replayGainTrackPeak,
             replayGainAlbumGain: tags.replayGainAlbumGain,
             replayGainAlbumPeak: tags.replayGainAlbumPeak,
             lyricsText: tags.lyrics
+        )
+        fallback.applyAudioProperties(
+            sampleRate: properties.sampleRate,
+            bitRateKbps: properties.bitrate
         )
         metadata.fillMissing(from: fallback)
     }

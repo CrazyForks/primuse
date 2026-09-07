@@ -9,7 +9,6 @@ struct MenuBarPlayerView: View {
     var onOpenMainWindow: () -> Void = {}
     @Environment(AudioPlayerService.self) private var player
     @Environment(MusicLibrary.self) private var library
-    @Environment(AudioEngine.self) private var engine
 
     @AppStorage("desktopLyricsLocked") private var desktopLyricsLocked: Bool = false
     @AppStorage("desktopLyricsVisible") private var desktopLyricsVisible: Bool = false
@@ -200,21 +199,12 @@ struct MenuBarPlayerView: View {
 
     private var volume: some View {
         HStack(spacing: 8) {
-            Image(systemName: volumeSymbol)
+            PMVolumeSymbol()
                 .font(.system(size: 12))
                 .foregroundStyle(PMColor.textMuted)
                 .frame(width: 14)
-            Slider(
-                value: Binding(
-                    get: { Double(engine.volume) },
-                    set: { player.setPlaybackVolume(Float($0)) }
-                ),
-                in: 0...1
-            )
-            .controlSize(.mini)
-            .tint(PMColor.text.opacity(0.7))
-            .disabled(!player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity)
-            Text(String(format: "%d", Double(engine.volume * 100).finiteInt()))
+            PMPlaybackVolumeSlider()
+            PMVolumePercentage()
                 .font(.system(size: 10, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(PMColor.textFaint)
@@ -223,14 +213,6 @@ struct MenuBarPlayerView: View {
         .help(!player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity
             ? Text("volume_high_fidelity_system_hint")
             : Text("volume"))
-    }
-
-    private var volumeSymbol: String {
-        let v = engine.volume
-        if v <= 0.001 { return "speaker.slash.fill" }
-        if v < 0.4 { return "speaker.wave.1.fill" }
-        if v < 0.75 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
     }
 
     // MARK: - Menu rows

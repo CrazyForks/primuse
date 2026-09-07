@@ -24,7 +24,6 @@ struct MacNowPlayingView: View {
     var onTranscribeAudio: () -> Void
     var onToggleQueue: () -> Void
     @Environment(AudioPlayerService.self) private var player
-    @Environment(AudioEngine.self) private var engine
     @Environment(MusicLibrary.self) private var library
     @Environment(SourceManager.self) private var sourceManager
     @Environment(SourcesStore.self) private var sourcesStore
@@ -1119,22 +1118,15 @@ struct MacNowPlayingView: View {
 
     private var fullscreenVolumeControl: some View {
         HStack(spacing: 8) {
-            Image(systemName: volumeSymbol)
+            PMVolumeSymbol()
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(playerPrimaryColor.opacity(0.82))
                 .frame(width: 18)
 
-            PMVolumeSlider(value: Binding(
-                get: { Double(engine.volume) },
-                set: { player.setPlaybackVolume(Float($0)) }
-            ), isEnabled: player.isLiveRadio || player.playbackSettings.outputMode == .effects,
-               accessibilityLabel: String(localized: "volume"),
-               accessibilityHelp: !player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity
-                   ? String(localized: "volume_high_fidelity_system_hint")
-                   : nil)
+            PMPlaybackVolumeSlider()
             .frame(width: 118)
 
-            Text(verbatim: "\((engine.volume * 100).rounded().finiteInt())")
+            PMVolumePercentage()
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(playerSecondaryColor)
@@ -1150,14 +1142,6 @@ struct MacNowPlayingView: View {
         .help(!player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity
             ? Text("volume_high_fidelity_system_hint")
             : Text("volume"))
-    }
-
-    private var volumeSymbol: String {
-        let v = engine.volume
-        if v <= 0.001 { return "speaker.slash.fill" }
-        if v < 0.4 { return "speaker.wave.1.fill" }
-        if v < 0.75 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
     }
 
     /// 关键: 把 36×36 frame + contentShape 放在 Button 的 label 内部

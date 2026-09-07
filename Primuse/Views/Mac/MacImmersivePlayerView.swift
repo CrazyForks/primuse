@@ -16,7 +16,6 @@ struct MacImmersivePlayerView: View {
     #endif
 
     @Environment(AudioPlayerService.self) private var player
-    @Environment(AudioEngine.self) private var engine
     @Environment(AudioVisualizerService.self) private var visualizer
     @Environment(MusicLibrary.self) private var library
     @Environment(CoverTintProvider.self) private var coverTintProvider
@@ -592,21 +591,11 @@ struct MacImmersivePlayerView: View {
 
     private var volumeControl: some View {
         HStack(spacing: 8) {
-            Image(systemName: volumeSymbol)
+            PMVolumeSymbol()
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(chromeInk.opacity(0.70))
                 .frame(width: 18)
-            PMVolumeSlider(
-                value: Binding(
-                    get: { Double(engine.volume) },
-                    set: { player.setPlaybackVolume(Float($0)) }
-                ),
-                isEnabled: player.isLiveRadio || player.playbackSettings.outputMode == .effects,
-                accessibilityLabel: String(localized: "volume"),
-                accessibilityHelp: !player.isLiveRadio && player.playbackSettings.outputMode == .highFidelity
-                    ? String(localized: "volume_high_fidelity_system_hint")
-                    : nil
-            )
+            PMPlaybackVolumeSlider()
             .frame(width: 118)
         }
         .frame(height: 44)
@@ -650,14 +639,6 @@ struct MacImmersivePlayerView: View {
 
     private var seekTint: Color {
         artworkPalette.primary
-    }
-
-    private var volumeSymbol: String {
-        let volume = engine.volume
-        if volume <= 0.001 { return "speaker.slash.fill" }
-        if volume < 0.4 { return "speaker.wave.1.fill" }
-        if volume < 0.75 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
     }
 
     // MARK: - 数据

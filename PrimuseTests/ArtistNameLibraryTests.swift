@@ -5,6 +5,50 @@ import XCTest
 
 @MainActor
 final class FileAlbumArtistLibraryTests: XCTestCase {
+    func testAudioPropertiesIgnoreInvalidValuesAndAllowFallback() {
+        let invalidValues: [Double] = [
+            .nan, .infinity, -.infinity, .greatestFiniteMagnitude,
+            -.greatestFiniteMagnitude, Double(Int.max), Double(Int.min),
+            Double(Float.nan), Double(Float.infinity), Double(Float.greatestFiniteMagnitude),
+            0, -1, 0.5,
+        ]
+        for value in invalidValues {
+            var metadata = FileMetadataReader.Metadata(title: "Track", duration: 180)
+            metadata.applyAudioProperties(sampleRate: value, bitRateKbps: value)
+            XCTAssertNil(metadata.sampleRate, "\(value)")
+            XCTAssertNil(metadata.bitRate, "\(value)")
+            XCTAssertEqual(metadata.title, "Track")
+            XCTAssertEqual(metadata.duration, 180)
+
+            metadata.fillMissing(from: .init(sampleRate: 44_100, bitRate: 320))
+            XCTAssertEqual(metadata.sampleRate, 44_100)
+            XCTAssertEqual(metadata.bitRate, 320)
+        }
+    }
+
+    func testAudioPropertiesPreserveValidFieldsAndTruncateFractionalValues() {
+        var metadata = FileMetadataReader.Metadata()
+        metadata.applyAudioProperties(
+            sampleRate: 44_100.9,
+            bitRateKbps: Double(Float(320_999) / 1000)
+        )
+        XCTAssertEqual(metadata.sampleRate, 44_100)
+        XCTAssertEqual(metadata.bitRate, 320)
+
+        metadata.applyAudioProperties(sampleRate: .nan, bitRateKbps: .infinity)
+        metadata.applyAudioProperties(sampleRate: 0, bitRateKbps: -1)
+        metadata.applyAudioProperties()
+        XCTAssertEqual(metadata.sampleRate, 44_100)
+        XCTAssertEqual(metadata.bitRate, 320)
+
+        metadata.applyAudioProperties(sampleRate: 192_000, bitRateKbps: .nan)
+        XCTAssertEqual(metadata.sampleRate, 192_000)
+        XCTAssertEqual(metadata.bitRate, 320)
+        metadata.applyAudioProperties(sampleRate: .infinity, bitRateKbps: 1_411.2)
+        XCTAssertEqual(metadata.sampleRate, 192_000)
+        XCTAssertEqual(metadata.bitRate, 1_411)
+    }
+
     func testRepairsAlbumWithAppendedArtistInLocalAndRangeTags() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("AlbumTextTags-\(UUID().uuidString)", isDirectory: true)

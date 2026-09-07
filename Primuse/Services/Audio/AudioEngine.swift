@@ -1156,13 +1156,26 @@ final class AudioEngine {
         // The control must retain its value before playback prepares a graph
         // and while an output-device change replaces that graph.
         get { outputMode == .highFidelity ? 1 : requestedVolume }
-        set {
-            guard newValue.isFinite else { return }
-            requestedVolume = min(max(newValue, 0), 1)
-            volumeDefaults.set(requestedVolume, forKey: Self.volumeKey)
-            guard outputMode == .effects else { return }
-            engine?.mainMixerNode.outputVolume = requestedVolume
+        set { setVolume(newValue) }
+    }
+
+    func setVolume(_ value: Float, persist: Bool = true) {
+        guard value.isFinite else { return }
+        let clamped = min(max(value, 0), 1)
+        if requestedVolume != clamped {
+            requestedVolume = clamped
+            if outputMode == .effects {
+                engine?.mainMixerNode.outputVolume = clamped
+            }
         }
+        if persist { persistVolume() }
+    }
+
+    /// Continuous slider tracking must not broadcast preference changes on
+    /// every pointer event. Commit the latest audible value when tracking ends.
+    func persistVolume() {
+        guard volumeDefaults.object(forKey: Self.volumeKey) as? Float != requestedVolume else { return }
+        volumeDefaults.set(requestedVolume, forKey: Self.volumeKey)
     }
 
     /// Restore saved volume on setup
