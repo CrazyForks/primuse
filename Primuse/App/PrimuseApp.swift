@@ -1548,6 +1548,13 @@ struct PrimuseApp: App {
                             metadataBackfill.setExecutionMode(.standard)
                         }
                         musicLibrary.suspendPendingIdentityResolution()
+                        scanService.resumePendingScans(
+                            context: .foregroundResume,
+                            sourceManager: sourceManager,
+                            library: musicLibrary,
+                            sourceStore: sourcesStore,
+                            scraperService: scraperService
+                        )
                         scanService.scheduleBackgroundResumeIfNeeded(
                             backfillPending: metadataBackfill.hasPendingWork,
                             backfillRequiresNetworkConnectivity: metadataBackfill.backgroundWakeRequiresNetworkConnectivity,
