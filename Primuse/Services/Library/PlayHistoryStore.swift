@@ -19,7 +19,7 @@ import PrimuseKit
 @Observable
 final class PlayHistoryStore {
     /// 单条播放事件 — 当用户听歌超过阈值时由 AudioPlayerService 触发记入。
-    struct Entry: Codable, Identifiable, Hashable {
+    struct Entry: Codable, Identifiable, Hashable, Sendable {
         var id: String { "\(songID)-\(Int64(playedAt.timeIntervalSince1970))" }
         let songID: String
         let songTitle: String
@@ -164,7 +164,7 @@ final class PlayHistoryStore {
 
     // MARK: - 查询 / 聚合
 
-    enum Range: String, CaseIterable, Identifiable {
+    enum Range: String, CaseIterable, Identifiable, Sendable {
         case week, month, year, all
         var id: String { rawValue }
         var localizationKey: String {
@@ -234,7 +234,7 @@ final class PlayHistoryStore {
         return SongPlaybackStats(playCount: count, lastPlayedAt: lastPlayedAt)
     }
 
-    struct RankedItem: Identifiable, Hashable {
+    struct RankedItem: Identifiable, Hashable, Sendable {
         let id: String
         let title: String
         let subtitle: String
@@ -254,7 +254,7 @@ final class PlayHistoryStore {
         Self.rankedItems(from: entries(in: range), category: .albums, limit: limit)
     }
 
-    static func rankedItems(from entries: [Entry], category: HomeListeningCategory, limit: Int) -> [RankedItem] {
+    nonisolated static func rankedItems(from entries: [Entry], category: HomeListeningCategory, limit: Int) -> [RankedItem] {
         HomeListeningRanking.ranks(
             events: entries.map(\.listeningEvent), songs: [:], folders: nil,
             period: .all, category: category
@@ -300,7 +300,7 @@ final class PlayHistoryStore {
     }
 
     /// 总览数字 (顶部摘要卡用)。
-    struct Summary {
+    struct Summary: Sendable {
         let totalPlays: Int
         let totalSec: TimeInterval
         let activeDays: Int
@@ -315,7 +315,7 @@ final class PlayHistoryStore {
         Self.summary(for: statisticsEntries(in: range))
     }
 
-    static func summary(for entries: [Entry], calendar: Calendar = ListeningCalendar.current) -> Summary {
+    nonisolated static func summary(for entries: [Entry], calendar: Calendar = ListeningCalendar.current) -> Summary {
         Summary(
             totalPlays: entries.count,
             totalSec: entries.reduce(0) { $0 + ($1.listenedSec.isFinite ? max(0, $1.listenedSec) : 0) },

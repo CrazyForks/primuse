@@ -16,6 +16,8 @@ struct ListeningStatsView: View {
     #if os(macOS)
     @State private var range: PlayHistoryStore.Range = .year
     @State private var heatmapWidth: CGFloat = 0
+    @State private var statsRefreshGeneration = 0
+    private let model: Model
     #else
     @State private var range: PlayHistoryStore.Range = .month
     @State private var activityChart: MobileActivityChart = .duration
@@ -25,21 +27,31 @@ struct ListeningStatsView: View {
     @State private var heatmapYear: Int?
     @State private var rankTab: RankTab = .songs
     @State private var showClearConfirm = false
-    private let store = PlayHistoryStore.shared
+    private var store: PlayHistoryStore { .shared }
 
+    #if os(macOS)
+    init(
+        initialRange: PlayHistoryStore.Range? = nil,
+        initiallyShowsLocalHistory: Bool = false,
+        usesInlineSourcePicker: Bool = false,
+        model: Model = Model()
+    ) {
+        self.usesInlineSourcePicker = usesInlineSourcePicker
+        _range = State(initialValue: initialRange ?? .year)
+        _prefersLocalSource = State(initialValue: initiallyShowsLocalHistory)
+        self.model = model
+    }
+    #else
     init(
         initialRange: PlayHistoryStore.Range? = nil,
         initiallyShowsLocalHistory: Bool = false,
         usesInlineSourcePicker: Bool = false
     ) {
         self.usesInlineSourcePicker = usesInlineSourcePicker
-        #if os(macOS)
-        _range = State(initialValue: initialRange ?? .year)
-        #else
         _range = State(initialValue: initialRange ?? .month)
-        #endif
         _prefersLocalSource = State(initialValue: initiallyShowsLocalHistory)
     }
+    #endif
 
     enum RankTab: String, CaseIterable {
         case songs, artists, albums
@@ -212,18 +224,22 @@ struct ListeningStatsView: View {
 
     #if os(macOS)
     private var macBody: some View {
-        let snapshot = makeStatsSnapshot()
+        let snapshot = visibleMacSnapshot
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
                 macStatsHeader(snapshot: snapshot)
 
-                if store.entries.isEmpty {
-                    macEmptyState
+                if let snapshot {
+                    if snapshot.hasHistory {
+                        macSummarySection(snapshot: snapshot)
+                        macHeatmapCard(timeline: snapshot.timeline)
+                        macActivityCharts(timeline: snapshot.timeline)
+                        macTopCards(snapshot: snapshot)
+                    } else {
+                        macEmptyState
+                    }
                 } else {
-                    macSummarySection(snapshot: snapshot)
-                    macHeatmapCard(timeline: snapshot.timeline)
-                    macActivityCharts(timeline: snapshot.timeline)
-                    macTopCards(snapshot: snapshot)
+                    macLoadingState
                 }
             }
             .padding(.horizontal, 36)
@@ -233,10 +249,18 @@ struct ListeningStatsView: View {
         }
         .background(PMColor.bg.ignoresSafeArea())
         .navigationTitle("stats_title")
-        .task(id: range) { logHeatmapStats() }
+        .task(id: macRefreshTrigger) {
+            await refreshMacSnapshot(trigger: macRefreshTrigger)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
+            statsRefreshGeneration &+= 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            statsRefreshGeneration &+= 1
+        }
     }
 
-    private func macStatsHeader(snapshot: StatsSnapshot) -> some View {
+    private func macStatsHeader(snapshot: StatsSnapshot?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .bottom, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -273,9 +297,13 @@ struct ListeningStatsView: View {
                     }
                 }
             }
-            Text(statsRangeSubtitle(days: snapshot.dailyStats))
-                .font(.system(size: 13))
-                .foregroundStyle(PMColor.textMuted)
+            if let snapshot {
+                Text(statsRangeSubtitle(days: snapshot.dailyStats))
+                    .font(.system(size: 13))
+                    .foregroundStyle(PMColor.textMuted)
+            } else {
+                statsSkeletonBlock(width: 220, height: 13)
+            }
         }
     }
 
@@ -308,6 +336,45 @@ struct ListeningStatsView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 96)
         .background(PMColor.card.opacity(0.60), in: .rect(cornerRadius: 12))
+    }
+
+    private var macLoadingState: some View {
+        LoadingSkeletonGroup {
+            VStack(alignment: .leading, spacing: 18) {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 4),
+                    spacing: 14
+                ) {
+                    ForEach(0..<4, id: \.self) { index in
+                        VStack(alignment: .leading, spacing: 9) {
+                            statsSkeletonBlock(width: 96 + CGFloat(index * 10), height: 28)
+                            statsSkeletonBlock(width: 80, height: 11)
+                            statsSkeletonBlock(width: 118, height: 9)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(18)
+                        .background(PMColor.card.opacity(0.78), in: .rect(cornerRadius: 12))
+                    }
+                }
+
+                statsSkeletonBlock(height: 230, cornerRadius: 12)
+
+                HStack(spacing: 14) {
+                    statsSkeletonBlock(height: 210, cornerRadius: 12)
+                    statsSkeletonBlock(height: 210, cornerRadius: 12)
+                }
+            }
+        }
+    }
+
+    private func statsSkeletonBlock(
+        width: CGFloat? = nil,
+        height: CGFloat,
+        cornerRadius: CGFloat = 5
+    ) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(PMColor.glassBtn)
+            .frame(width: width, height: height)
     }
 
     // MARK: 摘要四卡 (STATS-04)
@@ -793,7 +860,8 @@ struct ListeningStatsView: View {
     }
     #endif
 
-    private struct StatsSnapshot {
+    struct StatsSnapshot: Sendable {
+        let hasHistory: Bool
         let summary: PlayHistoryStore.Summary
         let timeline: ListeningActivityTimeline
         var dailyStats: [ListeningActivityTimeline.Day] { timeline.dailyStats }
@@ -804,15 +872,118 @@ struct ListeningStatsView: View {
         let topAlbums: [PlayHistoryStore.RankedItem]
     }
 
+    #if os(macOS)
+    @MainActor
+    @Observable
+    final class Model {
+        fileprivate var snapshot: StatsSnapshot?
+        @ObservationIgnored fileprivate var request: StatsSnapshotRequest?
+    }
+
+    fileprivate struct StatsPresentationKey: Equatable, Sendable {
+        let range: PlayHistoryStore.Range
+        let displayYear: Int?
+        let day: Date
+        let localeIdentifier: String
+        let timeZoneIdentifier: String
+    }
+
+    fileprivate struct StatsRefreshTrigger: Equatable {
+        let presentation: StatsPresentationKey
+        let generation: Int
+    }
+
+    fileprivate struct StatsSnapshotRequest: Equatable, Sendable {
+        let presentation: StatsPresentationKey
+        let historyRevision: Int
+    }
+
+    private var macPresentationKey: StatsPresentationKey {
+        StatsPresentationKey(
+            range: range,
+            displayYear: heatmapYear,
+            day: statsCalendar.startOfDay(for: Date()),
+            localeIdentifier: statsCalendar.locale?.identifier ?? Locale.current.identifier,
+            timeZoneIdentifier: statsCalendar.timeZone.identifier
+        )
+    }
+
+    private var macRefreshTrigger: StatsRefreshTrigger {
+        StatsRefreshTrigger(
+            presentation: macPresentationKey,
+            generation: statsRefreshGeneration
+        )
+    }
+
+    private var visibleMacSnapshot: StatsSnapshot? {
+        guard model.request?.presentation == macPresentationKey else { return nil }
+        return model.snapshot
+    }
+
+    private func refreshMacSnapshot(trigger: StatsRefreshTrigger) async {
+        await Task.yield()
+        guard !Task.isCancelled, trigger == macRefreshTrigger else { return }
+
+        let store = PlayHistoryStore.shared
+        let request = StatsSnapshotRequest(
+            presentation: trigger.presentation,
+            historyRevision: store.revision
+        )
+        guard model.request != request || model.snapshot == nil else { return }
+
+        let entries = store.entries
+        let calendar = statsCalendar
+        let now = Date()
+        let snapshot = await Task.detached(priority: .userInitiated) {
+            Self.makeStatsSnapshot(
+                entries: entries,
+                range: trigger.presentation.range,
+                displayYear: trigger.presentation.displayYear,
+                now: now,
+                calendar: calendar
+            )
+        }.value
+
+        guard !Task.isCancelled,
+              trigger == macRefreshTrigger,
+              store.revision == request.historyRevision else { return }
+        model.request = request
+        model.snapshot = snapshot
+        logHeatmapStats(snapshot: snapshot, range: trigger.presentation.range)
+    }
+    #endif
+
     /// 同一次 SwiftUI 渲染共享统计结果，避免标题、摘要、热力图和三个榜单
     /// 分别再次过滤完整播放历史。
     private func makeStatsSnapshot(rankLimit: Int = 6) -> StatsSnapshot {
-        let now = Date()
-        let currentStart = statsRangeStartDate(now: now)
-        let previousInterval = statsPreviousRangeInterval(now: now, currentStart: currentStart)
+        Self.makeStatsSnapshot(
+            entries: store.entries,
+            range: range,
+            displayYear: heatmapYear,
+            now: Date(),
+            calendar: statsCalendar,
+            rankLimit: rankLimit
+        )
+    }
+
+    nonisolated static func makeStatsSnapshot(
+        entries: [PlayHistoryStore.Entry],
+        range: PlayHistoryStore.Range,
+        displayYear: Int?,
+        now: Date,
+        calendar: Calendar,
+        rankLimit: Int = 6
+    ) -> StatsSnapshot {
+        let currentStart = range.statisticsStartDate(now: now, calendar: calendar)
+        let previousInterval = statsPreviousRangeInterval(
+            range: range,
+            now: now,
+            currentStart: currentStart,
+            calendar: calendar
+        )
         var scopedEntries: [PlayHistoryStore.Entry] = []
         var previousPlayCount = 0
-        for entry in store.entries {
+        for entry in entries {
             if entry.playedAt >= currentStart, entry.playedAt <= now {
                 scopedEntries.append(entry)
             } else if let previousInterval, entry.playedAt >= previousInterval.start, entry.playedAt < previousInterval.end {
@@ -820,11 +991,10 @@ struct ListeningStatsView: View {
             }
         }
 
-        let calendar = statsCalendar
         let timeline = ListeningActivityTimeline(
-            events: store.entries.map { .init(date: $0.playedAt, seconds: $0.listenedSec) },
+            events: entries.map { .init(date: $0.playedAt, seconds: $0.listenedSec) },
             selectedStart: range == .all ? nil : currentStart,
-            displayYear: heatmapYear,
+            displayYear: displayYear,
             now: now,
             calendar: calendar
         )
@@ -832,6 +1002,7 @@ struct ListeningStatsView: View {
         let summary = PlayHistoryStore.summary(for: scopedEntries, calendar: calendar)
 
         return StatsSnapshot(
+            hasHistory: !entries.isEmpty,
             summary: summary,
             timeline: timeline,
             previousPlayCount: range == .all ? nil : previousPlayCount,
@@ -842,12 +1013,12 @@ struct ListeningStatsView: View {
         )
     }
 
-    private func statsRangeStartDate(now: Date) -> Date {
-        range.statisticsStartDate(now: now, calendar: statsCalendar)
-    }
-
-    private func statsPreviousRangeInterval(now: Date, currentStart: Date) -> DateInterval? {
-        let calendar = statsCalendar
+    nonisolated private static func statsPreviousRangeInterval(
+        range: PlayHistoryStore.Range,
+        now: Date,
+        currentStart: Date,
+        calendar: Calendar
+    ) -> DateInterval? {
         let component: Calendar.Component
         switch range {
         case .week: component = .weekOfYear
@@ -925,8 +1096,8 @@ struct ListeningStatsView: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(0.08)))
     }
 
-    private func logHeatmapStats() {
-        let timeline = makeStatsSnapshot().timeline
+    private func logHeatmapStats(snapshot: StatsSnapshot, range: PlayHistoryStore.Range) {
+        let timeline = snapshot.timeline
         plog("stats range=\(range.rawValue) days=\(timeline.dailyStats.count) activeDays=\(timeline.dailyStats.filter { $0.count > 0 }.count)")
     }
 
