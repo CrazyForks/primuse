@@ -3,6 +3,37 @@ import Testing
 @testable import PrimuseKit
 
 struct CarPlayLayoutEditorTests {
+    @Test func visualPresetsPreserveContentsVisibilityAndOrder() throws {
+        var configuration = CarPlayLayoutConfiguration()
+        var block = CarPlayLayoutBlock(id: "favorite", kind: .custom)
+        block.items = [.init(id: "saved", kind: .folder, targetID: "opaque-folder", title: "Lossless")]
+        block.isVisible = false
+        block.itemLimit = 60
+        configuration.blocks = [block, .init(id: "radio", kind: .radio)]
+        for style in CarPlayVisualStyle.allCases {
+            configuration.applyVisualStyle(style)
+            #expect(configuration.blocks.map(\.id) == ["favorite", "radio"])
+            #expect(configuration.blocks[0].items == block.items)
+            #expect(!configuration.blocks[0].isVisible)
+            #expect(configuration.blocks[0].itemLimit == 60)
+            let restored = try JSONDecoder().decode(CarPlayLayoutConfiguration.self, from: JSONEncoder().encode(configuration))
+            #expect(restored == configuration)
+        }
+    }
+
+    @Test func oldBlocksDefaultToVisibleAndSiriVisibilityIsIndependent() throws {
+        let block = try JSONDecoder().decode(CarPlayLayoutBlock.self, from: Data(#"{"id":"old","kind":"shortcuts","style":"list"}"#.utf8))
+        #expect(block.isVisible)
+        #expect(!block.usesCustomContent)
+        var configuration = CarPlayLayoutConfiguration()
+        #expect(configuration.showsSiri)
+        var siri = CarPlayLayoutBlock(id: "siri", kind: .siri)
+        siri.isVisible = false
+        configuration.blocks = [block, siri]
+        #expect(!configuration.showsSiri)
+        #expect(configuration.blocks[0].isVisible)
+    }
+
     @Test func legacyLayoutMigratesButExplicitlyEmptyCanvasStaysEmpty() throws {
         let migrated = try JSONDecoder().decode(CarPlayLayoutConfiguration.self, from: Data(#"{"browseStyle":"cards","hiddenSections":["albums","playlists"]}"#.utf8))
         #expect(migrated.blocks.map(\.kind) == [.shortcuts, .recentlyAdded])
@@ -64,7 +95,7 @@ struct CarPlayLayoutEditorTests {
         var source = CarPlayLayoutBlock(id: "source", kind: .custom)
         source.items = [.init(id: "source-song", kind: .song, targetID: "source-song", title: "Source")]
         var full = CarPlayLayoutBlock(id: "full", kind: .custom)
-        full.items = (0..<24).map { .init(id: String($0), kind: .song, targetID: String($0), title: String($0)) }
+        full.items = (0..<60).map { .init(id: String($0), kind: .song, targetID: String($0), title: String($0)) }
         full.columns = 100
         full.itemLimit = -1
         config.blocks = [source, full]

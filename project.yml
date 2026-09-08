@@ -49,6 +49,15 @@ packages:
     from: "0.12.1"
 
 schemes:
+  CarPlayEditorUI:
+    build:
+      targets:
+        Primuse: all
+        CarPlayEditorUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - CarPlayEditorUITests
   Primuse:
     build:
       targets:
@@ -300,6 +309,19 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.welape.yuanyin.tests
         GENERATE_INFOPLIST_FILE: YES
+
+  CarPlayEditorUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: CarPlayEditorUITests
+    dependencies:
+      - target: Primuse
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.welape.yuanyin.carplayuitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Primuse
 
   PrimuseWidgetExtension:
     type: app-extension

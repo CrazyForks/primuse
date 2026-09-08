@@ -1110,11 +1110,29 @@ struct PrimuseApp: App {
     @ViewBuilder
     private var platformRootContent: some View {
         #if os(iOS)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["PRIMUSE_CARPLAY_UI_TESTS"] == "1" {
+            CarPlayEditorTestHost()
+        } else {
+            standardIOSRootContent
+        }
+        #else
+        standardIOSRootContent
+        #endif
+        #else
+        macPlatformRootContent
+        #endif
+    }
+
+    #if os(iOS)
+    private var standardIOSRootContent: some View {
         ContentView()
             .preferredColorScheme(iOSAppearance.colorScheme)
             .modifier(IOSWindowAppearanceModifier(preference: iOSAppearance))
             .automaticAppReviewPrompt()
-        #else
+    }
+    #else
+    @ViewBuilder private var macPlatformRootContent: some View {
         #if DEBUG
         if ProcessInfo.processInfo.environment["PRIMUSE_VISUAL_EVIDENCE"] == "immersiveTypography" {
             MacImmersivePlayerView(
@@ -1132,8 +1150,8 @@ struct PrimuseApp: App {
         MacContentView()
             .automaticAppReviewPrompt()
         #endif
-        #endif
     }
+    #endif
 
     var body: some Scene {
         macAwareMainGroup {

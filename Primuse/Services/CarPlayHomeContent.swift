@@ -6,6 +6,7 @@ import PrimuseKit
 
 enum CarPlayContentArtwork: Sendable {
     case song(Song), album(Album), playlist(Playlist)
+    case songReference(id: String, coverRef: String?)
 }
 
 struct CarPlayHomeItem: Identifiable, Sendable {
@@ -41,57 +42,25 @@ struct CarPlayHomeBlock: Identifiable {
 @MainActor
 enum CarPlayHomeContent {
     static func resolve(_ configuration: CarPlayLayoutConfiguration) -> [CarPlayHomeBlock] {
-        let library = AppServices.shared.musicLibrary
-        let folders = CarPlayFolderLibrary.shared
         let player = AppServices.shared.playerService
-        let blocks = configuration.blocks
-        let playlists = library.playlists.sorted { $0.updatedAt > $1.updatedAt }
-        let albums = blocks.contains { $0.kind == .albums }
-            ? library.visibleAlbums.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } : []
-        let recent = blocks.contains { $0.kind == .recentlyAdded }
-            ? Array(library.visibleSongs.sorted { $0.dateAdded > $1.dateAdded }.prefix(100)) : []
+        let nowPlaying: CarPlayHomeItem? = player.currentSong != nil || player.currentRadioStation != nil
+            ? CarPlayHomeItem(id: "nowPlaying", title: String(localized: "carplay_now_playing"),
+                subtitle: player.currentSong?.title ?? player.currentRadioStation?.name,
+                symbol: "play.circle", artwork: player.currentSong.map(CarPlayContentArtwork.song), target: .nowPlaying) : nil
+        let resolved = CarPlayEditorCatalog.shared.snapshot.blocks(for: configuration,
+            folders: CarPlayFolderLibrary.shared.index, nowPlaying: nowPlaying)
         var remainingRows = max(1, CPListTemplate.maximumItemCount - 3)
         var remainingSections = max(1, CPListTemplate.maximumSectionCount - 1)
-        return blocks.map { block in
-            var items: [CarPlayHomeItem]
-            switch block.kind {
-            case .custom:
-                items = block.items.map { resolve($0, directly: block.playsImmediately) }
-            case .playlists:
-                items = playlists.prefix(block.itemLimit).map { playlist($0, directly: block.playsImmediately) }
-            case .albums:
-                items = albums.prefix(block.itemLimit).map { album($0, directly: block.playsImmediately) }
-            case .recentlyAdded:
-                let queue = recent.map(\.id)
-                items = recent.prefix(block.itemLimit).map { song($0, queue: queue) }
-            case .radio:
-                items = AppServices.shared.radioStationsStore.stations.prefix(block.itemLimit).map {
-                    CarPlayHomeItem(id: $0.id, title: $0.name, subtitle: $0.playbackSubtitle,
-                                    symbol: "radio", target: .radio($0.id))
-                }
-            case .shortcuts:
-                items = []
-                if player.currentSong != nil || player.currentRadioStation != nil {
-                    items.append(CarPlayHomeItem(id: "nowPlaying", title: String(localized: "carplay_now_playing"),
-                                                 subtitle: player.currentSong?.title ?? player.currentRadioStation?.name,
-                                                 symbol: "play.circle", artwork: player.currentSong.map(CarPlayContentArtwork.song),
-                                                 target: .nowPlaying))
-                }
-                let ids = [MusicLibrary.likedSongsPlaylistID] + configuration.pinnedPlaylistIDs.filter { $0 != MusicLibrary.likedSongsPlaylistID }
-                items += ids.compactMap { id in playlists.first { $0.id == id }.map { playlist($0, directly: block.playsImmediately) } }
-                items += configuration.folderIDs.compactMap { id in
-                    guard let node = folders.index?.node(withID: id) else { return nil }
-                    return folder(node, directly: block.playsImmediately)
-                }
-            }
-            let columns = block.style == .list ? 1 : rowSize(for: block)
+        return resolved.filter { $0.configuration.isVisible && $0.configuration.kind != .siri }.map { source in
+            var block = source
+            let columns = block.configuration.style == .list ? 1 : rowSize(for: block.configuration)
             let available = remainingSections > 0 ? remainingRows * columns : 0
-            items = Array(items.prefix(min(block.itemLimit, available)))
-            if !items.isEmpty {
-                remainingRows -= (items.count + columns - 1) / columns
+            block.items = Array(block.items.prefix(available))
+            if !block.items.isEmpty {
+                remainingRows -= (block.items.count + columns - 1) / columns
                 remainingSections -= 1
             }
-            return CarPlayHomeBlock(configuration: block, items: items)
+            return block
         }
     }
 
@@ -103,6 +72,12 @@ enum CarPlayHomeContent {
         let library = AppServices.shared.musicLibrary
         var resolved: CarPlayHomeItem?
         switch item.kind {
+        case .nowPlaying:
+            let player = AppServices.shared.playerService
+            resolved = CarPlayHomeItem(id: item.id, title: String(localized: "carplay_now_playing"),
+                                       subtitle: player.currentSong?.title ?? player.currentRadioStation?.name,
+                                       symbol: "play.circle", artwork: player.currentSong.map(CarPlayContentArtwork.song),
+                                       target: .nowPlaying)
         case .playlist:
             resolved = library.playlists.first { $0.id == item.targetID }.map { playlist($0, directly: directly) }
         case .album:
@@ -141,20 +116,19 @@ enum CarPlayHomeContent {
 
     static func artwork(_ artwork: CarPlayContentArtwork, pixelSize: Int) async -> UIImage? {
         let library = AppServices.shared.musicLibrary
-        let songs: [Song]
         let owner: LibraryArtworkOwner
         switch artwork {
+        case .songReference(let id, let coverRef):
+            return await CarPlayArtworkDecoder.shared.thumbnail(forSongID: id, coverRef: coverRef, maximumPixelSize: pixelSize)
         case .song(let song):
             return await CarPlayArtworkDecoder.shared.thumbnail(forSongID: song.id, coverRef: song.coverArtFileName, maximumPixelSize: pixelSize)
         case .album(let album):
-            songs = library.songs(forAlbum: album.id)
             owner = LibraryArtworkOwner(kind: .album, id: album.id)
         case .playlist(let playlist):
-            songs = library.songs(forPlaylist: playlist.id)
             owner = LibraryArtworkOwner(kind: .playlist, id: playlist.id)
         }
-        let resolution = library.artworkOverrideResolution(for: owner, eligibleSongs: songs)
-        switch resolution {
+        let presentation = library.artworkPresentation(for: owner)
+        switch presentation.resolution {
         case .uploaded(let contentID):
             return await Task.detached(priority: .utility) {
                 guard let data = MetadataAssetStore.shared.customArtworkData(contentID: contentID),
@@ -166,21 +140,25 @@ enum CarPlayHomeContent {
                       ] as CFDictionary) else { return nil as UIImage? }
                 return UIImage(cgImage: image)
             }.value
-        case .selectedSong(let id):
-            guard let song = songs.first(where: { $0.id == id }) else { return nil }
+        case .selectedSong:
+            guard let song = presentation.selectedSong else { return nil }
             return await CarPlayArtworkDecoder.shared.thumbnail(forSongID: song.id, coverRef: song.coverArtFileName, maximumPixelSize: pixelSize)
         case .automatic:
             if case .playlist(let playlist) = artwork {
-                let candidates = Array(songs.prefix(12))
-                let plan = PlaylistArtworkResolutionPolicy.makePlan(playlist: playlist, songs: candidates)
+                let candidates = library.rawSongIDs(forPlaylist: playlist.id).lazy
+                    .compactMap { library.unobservedVisibleSong(id: $0) }.prefix(12)
+                let songs = Array(candidates)
+                let plan = PlaylistArtworkResolutionPolicy.makePlan(playlist: playlist, songs: songs)
                 let result = await PlaylistArtworkResourceResolver.resolve(
-                    playlist: playlist, plan: plan, songs: candidates, size: CGFloat(pixelSize),
+                    playlist: playlist, plan: plan, songs: songs, size: CGFloat(pixelSize),
                     sourceManager: AppServices.shared.sourceManager, allowsMusicKitArtwork: false,
                     cacheDiscriminator: "carplay:\(playlist.updatedAt.timeIntervalSinceReferenceDate)"
                 )
                 if case .image(let image) = result?.value { return image }
+                guard let song = songs.first(where: { $0.coverArtFileName != nil }) ?? songs.first else { return nil }
+                return await CarPlayArtworkDecoder.shared.thumbnail(forSongID: song.id, coverRef: song.coverArtFileName, maximumPixelSize: pixelSize)
             }
-            guard let song = songs.first(where: { $0.coverArtFileName != nil }) ?? songs.first else { return nil }
+            guard case .album(let album) = artwork, let song = library.preferredArtworkSong(forAlbumID: album.id) else { return nil }
             return await CarPlayArtworkDecoder.shared.thumbnail(forSongID: song.id, coverRef: song.coverArtFileName, maximumPixelSize: pixelSize)
         }
     }

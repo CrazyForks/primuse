@@ -489,7 +489,7 @@ struct ContentView: View {
     /// Batch selection temporarily owns the bottom safe area. Playback keeps
     /// running, but its accessory stays hidden until selection ends.
     private var miniPlayerVisible: Bool {
-        miniPlayerActive && !batchSelectionActive
+        miniPlayerActive && !batchSelectionActive && !carPlayEditorActive
     }
     /// iPad (regular) 走 NavigationSplitView; iPhone / iPad 分屏小窗 (compact)
     /// 走 TabView。Apple 推荐用 horizontalSizeClass 而不是 idiom 来判断,以
@@ -512,6 +512,7 @@ struct ContentView: View {
     @State private var showNowPlaying = false
     @State private var nowPlayingPresentationID = UUID()
     @State private var batchSelectionActive = false
+    @State private var carPlayEditorActive = false
     @State private var pendingPlaybackRemovalIDs: Set<String> = []
     @State private var isReconcilingPlaybackRemovals = false
     @State private var libraryDeepLink: LibraryDeepLink?
@@ -882,6 +883,12 @@ struct ContentView: View {
         }
         .environment(\.librarySearchNavigation, searchNavigation)
         .environment(\.appNavigationMode, navigationMode)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if carPlayEditorActive && miniPlayerActive && !showNowPlaying {
+                CarPlayCompactAccessory(onTap: presentNowPlaying)
+            }
+        }
+        .onPreferenceChange(CarPlayEditorActivePreferenceKey.self) { carPlayEditorActive = $0 }
         .songBatchRemovalFeedback()
         .onPreferenceChange(SongBatchSelectionActivePreferenceKey.self) { isActive in
             batchSelectionActive = isActive

@@ -28,7 +28,7 @@ actor CarPlayArtworkDecoder {
     }()
 
     func thumbnail(forSongID songID: String, coverRef: String?, maximumPixelSize: Int = 88) async -> UIImage? {
-        let cacheKey = "\(songID):\(maximumPixelSize)" as NSString
+        let cacheKey = "\(songID):\(coverRef ?? ""): \(maximumPixelSize)" as NSString
         if let cached = thumbnails.object(forKey: cacheKey) {
             return cached
         }
@@ -185,6 +185,7 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
             let generation = self.connectionGeneration
             interfaceController.delegate = self
             CarPlayFolderLibrary.shared.acquire(self.folderLibraryOwner)
+            CarPlayEditorCatalog.shared.acquire(self.folderLibraryOwner)
             let root = self.makeRootTabBar()
             carplayLog.notice("📱 root tab bar built, setting as root template")
             interfaceController.setRootTemplate(root, animated: false) { [weak self] success, _ in
@@ -216,6 +217,7 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
             self.interfaceController = nil
             self.connectionGeneration &+= 1
             CarPlayFolderLibrary.shared.release(self.folderLibraryOwner)
+            CarPlayEditorCatalog.shared.release(self.folderLibraryOwner)
             self.homeTemplate = nil
             self.libraryTemplate = nil
             self.radioTemplate = nil
@@ -556,9 +558,9 @@ extension CarPlaySceneDelegate {
     }
 
     private func configureAssistant(on template: CPListTemplate) {
-        template.assistantCellConfiguration = CPAssistantCellConfiguration(
+        template.assistantCellConfiguration = layout.showsSiri ? CPAssistantCellConfiguration(
             position: .top, visibility: .always, assistantAction: .playMedia
-        )
+        ) : nil
     }
 
     private func makeLibraryTemplate() -> CPListTemplate {
@@ -761,10 +763,20 @@ extension CarPlaySceneDelegate {
     private func imageRow(_ entries: [CollectionEntry], style: CarPlayBrowseStyle) -> CPListImageRowItem {
         let row: CPListImageRowItem
         if #available(iOS 26.0, *) {
-            if style == .cards {
+            if style == .capsules {
+                let elements = entries.map { entry in
+                    let element = CPListImageRowItemCondensedElement(
+                        image: Self.symbolImage(entry.symbol), imageShape: .roundedRectangle,
+                        title: entry.title, subtitle: nil, accessorySymbolName: "play.fill"
+                    )
+                    element.isEnabled = entry.enabled
+                    return element
+                }
+                row = CPListImageRowItem(text: nil, condensedElements: elements, allowsMultipleLines: true)
+            } else if style == .cards || style == .covers {
                 let elements = entries.map { entry in
                     let element = CPListImageRowItemCardElement(
-                        image: Self.symbolImage(entry.symbol), showsImageFullHeight: false,
+                        image: Self.symbolImage(entry.symbol), showsImageFullHeight: style == .covers,
                         title: entry.title, subtitle: entry.subtitle, tintColor: nil
                     )
                     element.isEnabled = entry.enabled
@@ -789,6 +801,7 @@ extension CarPlaySceneDelegate {
                 completion.value()
             }
         }
+        guard style != .capsules else { return row }
         let id = UUID()
         artworkTasks[id] = Task { [weak self, weak row] in
             defer { self?.artworkTasks[id] = nil }
@@ -832,7 +845,14 @@ extension CarPlaySceneDelegate {
     }
 
     private func pushLayoutPresets() {
-        var entries = CarPlayLayoutPreset.allCases.map { preset in
+        var entries = CarPlayVisualStyle.allCases.map { style in
+            CollectionEntry(title: NSLocalizedString(style.titleKey, comment: ""),
+                            symbol: layout.visualStyle == style ? "checkmark.circle.fill" : "rectangle.3.group") { [weak self] in
+                CarPlaySettingsStore.shared.configuration.applyVisualStyle(style)
+                self?.interfaceController?.popTemplate(animated: true, completion: nil)
+            }
+        }
+        entries += CarPlayLayoutPreset.allCases.map { preset in
             CollectionEntry(title: NSLocalizedString(preset.titleKey, comment: ""),
                             symbol: layout.matchingPreset == preset ? "checkmark.circle.fill" : "rectangle.3.group") { [weak self] in
                 CarPlaySettingsStore.shared.configuration.apply(preset)
@@ -1556,6 +1576,7 @@ extension CarPlaySceneDelegate {
             _ = library.artworkOverrideRevision
             _ = radioStore.stations
             _ = CarPlayFolderLibrary.shared.index
+            _ = CarPlayEditorCatalog.shared.revision
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.interfaceController != nil, self.connectionGeneration == generation else { return }
@@ -1677,6 +1698,7 @@ extension CarPlaySceneDelegate {
 
     /// Re-renders one root tab's sections from the latest library state.
     private func rebuildRootTemplate(_ template: CPListTemplate) {
+        configureAssistant(on: template)
         if template === homeTemplate {
             template.updateSections(homeSections())
         } else if template === libraryTemplate {

@@ -14,349 +14,345 @@ struct CarPlayEditorCanvas: View {
     let activate: (CarPlayHomeItem) -> Void
     let drop: ([String], String?, String?) -> Bool
     let addContent: (String?) -> Void
+    var catalog = CarPlayEditorCatalog.Snapshot()
     @State private var detail: CarPlayHomeItem?
+    @State private var localPlayer: CarPlayHomeItem?
 
-    private var referenceWidth: CGFloat { wide ? 1120 : 800 }
+    private var screenWidth: CGFloat { wide ? 800 : 600 }
+    private var screenHeight: CGFloat { screenWidth * 9 / 16 }
 
     var body: some View {
         GeometryReader { geometry in
             screen
-                .frame(width: referenceWidth, height: 480)
+                .frame(width: screenWidth, height: screenHeight)
                 .environment(\.dynamicTypeSize, .large)
-                .scaleEffect(geometry.size.width / referenceWidth, anchor: .topLeading)
+                .scaleEffect(geometry.size.width / screenWidth, anchor: .topLeading)
         }
-        .aspectRatio(referenceWidth / 480, contentMode: .fit)
-        .background(Color(white: 0.035))
-        .clipShape(RoundedRectangle(cornerRadius: 22))
-        .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.12), lineWidth: 1) }
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .background(CarPlayEditorTheme.canvas)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(CarPlayEditorTheme.border, lineWidth: 1) }
         .environment(\.colorScheme, .dark)
-        .onChange(of: playerPage) { detail = nil }
-        .onChange(of: editing) { detail = nil }
+        .onChange(of: playerPage) { detail = nil; localPlayer = nil }
+        .onChange(of: editing) { detail = nil; localPlayer = nil }
+        .onChange(of: configuration.visualStyle) { detail = nil; localPlayer = nil }
+        .accessibilityIdentifier("carplay.canvas")
     }
 
     private var screen: some View {
         HStack(spacing: 0) {
-            VStack(spacing: 28) {
-                Text("9:41").font(.system(size: 19, weight: .semibold))
-                Image(systemName: "wifi").font(.system(size: 18))
-                Spacer()
-                Image(systemName: "music.note").font(.system(size: 25)).foregroundStyle(.white)
-                    .frame(width: 44, height: 44).background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
-                Image(systemName: "map.fill").font(.system(size: 25)).foregroundStyle(.gray)
-                Spacer()
-                Image(systemName: "square.grid.2x2.fill").font(.system(size: 25))
-            }
-            .padding(.vertical, 22).frame(width: 70)
-            .background(.white.opacity(0.055))
+            sidebar
             VStack(spacing: 0) {
-                if playerPage {
-                    player
-                } else if let detail {
-                    detailPage(detail)
-                } else {
-                    home
-                }
+                if playerPage || localPlayer != nil { player(localPlayer ?? previewItem) }
+                else if let detail { detailPage(detail) }
+                else { home }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(CarPlayEditorTheme.text)
         .buttonStyle(.plain)
-        .background(Color(white: 0.035))
+        .background(CarPlayEditorTheme.canvas)
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 17) {
+            Text("9:41").font(.system(size: 11, weight: .semibold))
+            Image(systemName: "wifi").font(.system(size: 11))
+            Image(systemName: "music.note").font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(CarPlayEditorTheme.background)
+                .frame(width: 30, height: 30).background(CarPlayEditorTheme.accent, in: RoundedRectangle(cornerRadius: 9))
+            Image(systemName: "map.fill").font(.system(size: 20)).foregroundStyle(CarPlayEditorTheme.secondary)
+            Spacer()
+            Image(systemName: "square.grid.2x2.fill").font(.system(size: 19))
+        }
+        .padding(.vertical, 14).frame(width: 54)
+        .background(CarPlayEditorTheme.sidebar)
     }
 
     private var home: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 30) {
+            HStack(spacing: 34) {
                 tab("carplay_home_title", symbol: "house.fill", selected: true)
                 tab("library_title", symbol: "music.note.house", selected: false)
                 tab("radio_title", symbol: "radio.fill", selected: false)
                 tab("playlists_title", symbol: "music.note.list", selected: false)
+            }.padding(.vertical, 8)
+            if configuration.showsSiri {
+            HStack(spacing: 6) {
+                Image(systemName: "waveform")
+                Text("carplay_ask_siri")
+                Spacer()
             }
-            .padding(.vertical, 14)
-            Divider().overlay(.white.opacity(0.1))
+            .font(.system(size: 12, weight: .medium)).foregroundStyle(CarPlayEditorTheme.secondary)
+            .padding(.horizontal, 10).frame(height: 26)
+            .background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 12).padding(.bottom, 10)
+            .onTapGesture { if editing, let block = blocks.first(where: { $0.configuration.kind == .siri }) { select(block.id) } }
+            }
+            if configuration.visualStyle == .split && !editing {
+                HStack(alignment: .top, spacing: 12) {
+                    compactPlayer.frame(width: 186)
+                    blockScroll
+                }.padding(.leading, 12)
+            } else { blockScroll }
+        }
+    }
+
+    private var blockScroll: some View {
+        ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "waveform").font(.system(size: 24))
-                        Text("carplay_ask_siri").font(.system(size: 21, weight: .medium))
-                        Spacer()
-                    }.padding(14).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
-                    ForEach(blocks) { block in blockView(block) }
+                LazyVStack(alignment: .leading, spacing: 15) {
+                    ForEach(blocks.filter { $0.configuration.isVisible && $0.configuration.kind != .siri }) { block in
+                        blockView(block).id(block.id)
+                    }
                     if editing {
                         Button { addContent(nil) } label: {
-                            Label("carplay_drop_content", systemImage: "plus")
-                                .font(.system(size: 18, weight: .medium))
-                                .frame(maxWidth: .infinity, minHeight: 58)
-                                .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-                                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [6])) }
+                            Label("carplay_add_module", systemImage: "plus")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(CarPlayEditorTheme.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 36)
+                                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(CarPlayEditorTheme.border, style: StrokeStyle(lineWidth: 1, dash: [4])) }
                         }
                         .dropDestination(for: String.self) { values, _ in drop(values, nil, nil) }
                     }
-                    navigationRows
-                }.padding(14)
-            }.scrollIndicators(.visible)
+                }.padding(.horizontal, 12).padding(.top, editing ? 7 : 0).padding(.bottom, 12)
+            }
+            .scrollIndicators(.hidden)
+            .onChange(of: selectedID) { _, id in
+                if editing, let id { proxy.scrollTo(id, anchor: .top) }
+            }
         }
     }
 
     private func tab(_ title: LocalizedStringKey, symbol: String, selected: Bool) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 22))
-            Text(title).font(.system(size: 16, weight: .semibold))
-        }.foregroundStyle(selected ? Color.accentColor : .white.opacity(0.55))
+        VStack(spacing: 3) {
+            Image(systemName: symbol).font(.system(size: 13))
+            Text(title).font(.system(size: 10, weight: .semibold))
+        }.foregroundStyle(selected ? CarPlayEditorTheme.accent : CarPlayEditorTheme.secondary)
     }
 
-    @ViewBuilder private func blockView(_ block: CarPlayHomeBlock) -> some View {
-        if editing || !block.items.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                if editing || block.configuration.showsTitle {
-                    HStack {
-                        if editing {
-                            Image(systemName: "line.3.horizontal").foregroundStyle(.white.opacity(0.45))
-                                .padding(.vertical, 6)
-                                .draggable("carplay-block:" + block.id)
-                                .accessibilityLabel("carplay_move_module")
-                        }
-                        Text(block.title).font(.system(size: 18, weight: .semibold))
-                            .opacity(block.configuration.showsTitle ? 1 : 0.4)
-                        Spacer()
-                        if editing && block.configuration.kind == .custom {
-                            Button { addContent(block.id) } label: { Image(systemName: "plus").padding(6) }
-                                .accessibilityLabel("carplay_add_content")
-                        }
-                    }
-                }
-                if block.items.isEmpty {
+    private func blockView(_ block: CarPlayHomeBlock) -> some View {
+        let selected = selectedID == block.id
+        return VStack(alignment: .leading, spacing: 7) {
+            if block.configuration.showsTitle && !editing {
+                Text(block.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(CarPlayEditorTheme.secondary)
+            }
+            if block.items.isEmpty {
+                Button { select(block.id) } label: {
                     Label("carplay_empty_module", systemImage: block.configuration.kind.symbol)
-                        .font(.system(size: 19)).foregroundStyle(.white.opacity(0.45))
-                        .frame(maxWidth: .infinity, minHeight: 78)
-                        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
-                } else if block.configuration.style == .list {
-                    VStack(spacing: 1) {
-                        ForEach(block.items) { item in itemView(item, in: block, size: 48) }
-                    }.clipShape(RoundedRectangle(cornerRadius: 12))
-                } else {
-                    let count = CarPlayHomeContent.rowSize(for: block.configuration)
-                    let columns = Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: count)
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                        ForEach(block.items) { item in
-                            itemView(item, in: block, size: (referenceWidth - 130 - CGFloat(count - 1) * 12) / CGFloat(count))
-                        }
-                    }
+                        .font(.system(size: 14)).foregroundStyle(CarPlayEditorTheme.muted)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }.disabled(!editing)
+            } else if block.configuration.style == .list {
+                VStack(spacing: 4) {
+                    ForEach(block.items) { item in itemView(item, block: block) }
+                }
+            } else {
+                let count = min(block.configuration.columns, 6)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: count), spacing: 7) {
+                    ForEach(block.items) { item in itemView(item, block: block) }
                 }
             }
-            .padding(editing ? 10 : 0)
-            .background(editing && selectedID == block.id ? Color.accentColor.opacity(0.09) : .clear,
-                        in: RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                if editing {
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(selectedID == block.id ? Color.accentColor : .white.opacity(0.1), lineWidth: selectedID == block.id ? 2 : 1)
-                        .allowsHitTesting(false)
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { if editing { select(block.id) } }
-            .dropDestination(for: String.self) { values, _ in drop(values, block.id, nil) }
         }
+        .padding(editing ? 8 : 0)
+        .background(selected && editing ? CarPlayEditorTheme.accent.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            if editing {
+                RoundedRectangle(cornerRadius: 10).strokeBorder(
+                    selected ? CarPlayEditorTheme.accent : CarPlayEditorTheme.border,
+                    style: StrokeStyle(lineWidth: selected ? 2 : 1, dash: selected ? [] : [4]))
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if editing {
+                Text(block.title).font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(selected ? CarPlayEditorTheme.background : CarPlayEditorTheme.secondary)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(selected ? CarPlayEditorTheme.accent : CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 4))
+                    .offset(x: 9, y: -9).allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if editing && selected {
+                Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(CarPlayEditorTheme.background)
+                    .frame(width: 22, height: 22).background(CarPlayEditorTheme.accent, in: Circle())
+                    .offset(x: 5, y: -10).draggable("carplay-block:" + block.id)
+                    .accessibilityLabel("carplay_move_module")
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if editing { select(block.id) } }
+        .dropDestination(for: String.self) { values, _ in drop(values, block.id, nil) }
     }
 
-    private func itemView(_ item: CarPlayHomeItem, in block: CarPlayHomeBlock, size: CGFloat) -> some View {
+    private func itemView(_ item: CarPlayHomeItem, block: CarPlayHomeBlock) -> some View {
         Button {
-            if editing { select(block.id) }
-            else { open(item) }
+            if editing { select(block.id) } else { open(item) }
         } label: {
             Group {
                 if block.configuration.style == .list {
-                    HStack(spacing: 14) {
-                        CarPlayPreviewArtwork(item: item).frame(width: size, height: size)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).font(.system(size: 21, weight: .medium)).lineLimit(1)
-                            if let subtitle = item.subtitle { Text(subtitle).font(.system(size: 16)).foregroundStyle(.white.opacity(0.55)).lineLimit(1) }
+                    HStack(spacing: 9) {
+                        CarPlayPreviewArtwork(item: item, pixelSize: 88).frame(width: 30, height: 30)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title).font(.system(size: 15, weight: .medium)).lineLimit(1)
+                            if let subtitle = item.subtitle { Text(subtitle).font(.system(size: 11)).foregroundStyle(CarPlayEditorTheme.secondary).lineLimit(1) }
                         }
-                        Spacer()
-                        Image(systemName: block.configuration.playsImmediately ? "play.fill" : "chevron.right").font(.system(size: 16)).foregroundStyle(.white.opacity(0.45))
-                    }.padding(12).background(.white.opacity(0.075))
-                } else {
-                    let cards = usesCards(block.configuration.style)
-                    VStack(alignment: .leading, spacing: 8) {
-                        CarPlayPreviewArtwork(item: item)
-                            .frame(width: min(size - (cards ? 24 : 0), cards ? 124 : 156),
-                                   height: min(size - (cards ? 24 : 0), cards ? 124 : 156))
-                        Text(item.title).font(.system(size: 18, weight: .medium))
-                            .lineLimit(cards ? 2 : 1)
-                        if let subtitle = item.subtitle {
-                            Text(subtitle).font(.system(size: 15)).foregroundStyle(.white.opacity(0.55)).lineLimit(cards ? 2 : 1)
-                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: block.configuration.playsImmediately ? "play.fill" : "chevron.right")
+                            .font(.system(size: 11)).foregroundStyle(CarPlayEditorTheme.secondary)
+                    }.padding(7).background(CarPlayEditorTheme.row, in: RoundedRectangle(cornerRadius: 6))
+                } else if block.configuration.style == .capsules {
+                    HStack(spacing: 10) {
+                        Image(systemName: item.symbol).font(.system(size: 19))
+                        Text(item.title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
+                        Spacer(minLength: 0)
                     }
-                    .padding(cards ? 12 : 0)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(cards ? Color.white.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 16).frame(height: 58)
+                    .background(CarPlayEditorTheme.surface, in: Capsule())
+                } else {
+                    ZStack(alignment: .bottomLeading) {
+                        CarPlayPreviewArtwork(item: item, pixelSize: 240)
+                        LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
+                        Text(item.title).font(.system(size: 14, weight: .semibold)).lineLimit(1).padding(9)
+                    }
+                    .frame(height: (screenHeight - (editing ? 115 : 92)) / CGFloat(block.configuration.rowsPerPage))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-            }.opacity(item.enabled ? 1 : 0.4)
+            }.opacity(item.enabled ? 1 : 0.5)
         }
         .disabled(!editing && !item.enabled)
-        .modifier(CarPlayItemDrag(enabled: editing && block.configuration.kind == .custom,
-                                   value: "carplay-item:\(block.id):\(item.id)"))
-        .dropDestination(for: String.self) { values, _ in drop(values, block.id, item.id) }
-    }
-
-    private func usesCards(_ style: CarPlayBrowseStyle) -> Bool {
-        if #available(iOS 26.0, *) { return style == .cards }
-        return false
-    }
-
-    private var navigationRows: some View {
-        VStack(spacing: 1) {
-            navigationRow("library_browse_folder", symbol: "folder")
-            navigationRow("library_title", symbol: "music.note.house")
-            navigationRow("carplay_layout_title", symbol: "rectangle.3.group")
-        }.clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func navigationRow(_ title: LocalizedStringKey, symbol: String) -> some View {
-        HStack(spacing: 16) {
-            Image(systemName: symbol).frame(width: 32)
-            Text(title)
-            Spacer()
-            Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.45))
-        }.font(.system(size: 21)).padding(16).background(.white.opacity(0.075))
     }
 
     private func open(_ item: CarPlayHomeItem) {
         switch item.target {
         case .playlist(_, false), .album(_, false), .folder(_, false): detail = item
-        default: activate(item)
+        default: localPlayer = item; activate(item)
         }
     }
 
     private func detailPage(_ item: CarPlayHomeItem) -> some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 10) {
             HStack {
-                Button { detail = nil } label: { Image(systemName: "chevron.left").padding(8) }
-                Text(item.title).lineLimit(1)
+                Button { detail = nil } label: { Image(systemName: "chevron.left").padding(12) }
+                Text(item.title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
                 Spacer()
-            }.font(.system(size: 24, weight: .semibold)).padding(16)
+                Button { localPlayer = item; activate(item) } label: { Image(systemName: "play.fill").padding(12) }
+            }
             ScrollView {
-                VStack(spacing: 1) {
-                    Button { activate(item) } label: { navigationRow("carplay_play_all", symbol: "play.fill") }
-                    Button { activate(item) } label: { navigationRow("carplay_shuffle_all", symbol: "shuffle") }
-                    if case .folder(let id, _) = item.target {
-                        ForEach(Array((CarPlayFolderLibrary.shared.index?.children(of: id) ?? []).prefix(100))) { node in
-                            Button {
-                                detail = CarPlayHomeItem(id: HomeFolderPinStorage.encode([node.id]), title: HomeDiscoveryText.folderTitle(node),
-                                                         symbol: "folder", target: .folder(node.id, directly: false))
-                            } label: {
-                                HStack {
-                                    Image(systemName: "folder")
-                                    Text(HomeDiscoveryText.folderTitle(node)).lineLimit(1)
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                }.font(.system(size: 21)).padding(18).background(.white.opacity(0.075))
-                            }
-                        }
-                    }
-                    ForEach(Array(detailSongs(item).prefix(100))) { song in
-                        Button {
-                            activate(CarPlayHomeItem(id: song.id, title: song.title, artwork: .song(song), target: .song(song.id, queue: [song.id])))
-                        } label: {
-                            HStack {
-                                Text(song.title).lineLimit(1)
-                                Spacer()
-                                Image(systemName: "play.fill").font(.system(size: 15))
-                            }.font(.system(size: 21)).padding(18).background(.white.opacity(0.075))
-                        }
-                    }
-                }.padding(14)
-            }
-        }
-    }
-
-    private func detailSongs(_ item: CarPlayHomeItem) -> [Song] {
-        if case .folder(let id, _) = item.target { return CarPlayFolderLibrary.shared.songs(in: id, scope: .direct) }
-        return CarPlayHomeContent.songs(for: item.target)
-    }
-
-    private var player: some View {
-        let item = playerItem
-        return VStack(spacing: 0) {
-            HStack {
-                Text("carplay_now_playing").font(.system(size: 23, weight: .semibold))
-                Spacer()
-                Image(systemName: "list.bullet").font(.system(size: 23))
-            }.padding(22)
-            HStack(spacing: 36) {
-                CarPlayPreviewArtwork(item: item).frame(width: 236, height: 236)
-                VStack(alignment: .leading, spacing: 18) {
-                    Text(item.title).font(.system(size: 28, weight: .semibold)).lineLimit(2)
-                    if let subtitle = item.subtitle { Text(subtitle).font(.system(size: 20)).foregroundStyle(.white.opacity(0.6)).lineLimit(1) }
-                    Capsule().fill(.white.opacity(0.15)).frame(height: 5)
-                        .overlay(alignment: .leading) { Capsule().fill(.white.opacity(0.6)).frame(width: 50, height: 5) }
-                    HStack(spacing: 40) {
-                        Image(systemName: "backward.fill")
-                        Image(systemName: "play.fill").font(.system(size: 42))
-                        Image(systemName: "forward.fill")
-                    }.font(.system(size: 28)).frame(maxWidth: .infinity).padding(.vertical, 12)
+                let rows = detailItems(item)
+                if rows.isEmpty {
+                    Text("carplay_no_content").font(.system(size: 16)).foregroundStyle(CarPlayEditorTheme.secondary).padding(30)
                 }
-            }.padding(.horizontal, 26)
-            Spacer()
+                ForEach(rows) { entry in
+                    Button { open(entry) } label: {
+                        HStack {
+                            Image(systemName: entry.symbol).frame(width: 24)
+                            Text(entry.title).font(.system(size: 17)).lineLimit(1)
+                            Spacer()
+                            Image(systemName: "play.fill").font(.system(size: 12))
+                        }.padding(12).background(CarPlayEditorTheme.row, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }.padding(.horizontal, 12)
+        }
+    }
+
+    private func detailItems(_ item: CarPlayHomeItem) -> [CarPlayHomeItem] {
+        if case .folder(let id, _) = item.target {
+            let folders = CarPlayFolderLibrary.shared.index
+            let children = (folders?.children(of: id) ?? []).prefix(30).map { CarPlayEditorCatalog.Snapshot.folder($0).configured(directly: false) }
+            let songs = (folders?.songIDs(in: id, scope: .direct) ?? []).lazy.compactMap { catalog.lookup[.song]?[$0] }.prefix(30)
+            return children + songs
+        }
+        return catalog.detail(for: item)
+    }
+
+    private var compactPlayer: some View {
+        Button { localPlayer = previewItem ?? blocks.flatMap(\.items).first } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("carplay_continue_listening").font(.system(size: 13)).foregroundStyle(CarPlayEditorTheme.secondary)
+                CarPlayPreviewArtwork(item: displayedItem(previewItem)).frame(height: 118)
+                Text(displayedItem(previewItem).title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Image(systemName: "play.fill").font(.system(size: 20)).frame(maxWidth: .infinity).padding(10)
+            }.padding(12).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private func displayedItem(_ item: CarPlayHomeItem?) -> CarPlayHomeItem {
+        if let item {
+            if let first = catalog.detail(for: item).first { return first }
+            return item
+        }
+        return CarPlayHomeItem(id: "empty", title: String(localized: "carplay_nothing_playing"), symbol: "music.note", target: .nowPlaying)
+    }
+
+    private func player(_ source: CarPlayHomeItem?) -> some View {
+        let item = displayedItem(source)
+        return VStack(spacing: 12) {
+            HStack {
+                if localPlayer != nil { Button { localPlayer = nil; detail = nil } label: { Image(systemName: "chevron.left") } }
+                Text("carplay_now_playing").font(.system(size: 16, weight: .semibold))
+                Spacer()
+                Image(systemName: "list.bullet")
+            }.padding(.horizontal, 20).padding(.top, 18)
+            HStack(spacing: 24) {
+                CarPlayPreviewArtwork(item: item).frame(width: 172, height: 172)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(item.title).font(.system(size: 23, weight: .semibold)).lineLimit(2)
+                    if let subtitle = item.subtitle { Text(subtitle).font(.system(size: 15)).foregroundStyle(CarPlayEditorTheme.secondary).lineLimit(1) }
+                    Capsule().fill(CarPlayEditorTheme.border).frame(height: 4)
+                    HStack(spacing: 30) {
+                        Image(systemName: "backward.fill")
+                        Image(systemName: "play.fill").font(.system(size: 30))
+                        Image(systemName: "forward.fill")
+                    }.font(.system(size: 20)).frame(maxWidth: .infinity).padding(.top, 6)
+                }
+            }.padding(.horizontal, 24)
             if !configuration.minimalNowPlaying {
-                HStack(spacing: 80) {
-                    Image(systemName: "shuffle")
-                    Image(systemName: "repeat")
-                    Image(systemName: "heart")
-                }.font(.system(size: 25)).padding(.bottom, 28)
+                HStack(spacing: 65) { Image(systemName: "shuffle"); Image(systemName: "repeat"); Image(systemName: "heart") }
+                    .font(.system(size: 18)).foregroundStyle(CarPlayEditorTheme.secondary).padding(.top, 6)
             }
+            Spacer(minLength: 0)
         }
-    }
-
-    private var playerItem: CarPlayHomeItem {
-        if let previewItem {
-            let songs = CarPlayHomeContent.songs(for: previewItem.target)
-            let selectedSong: Song?
-            if case .song(let id, _) = previewItem.target { selectedSong = songs.first { $0.id == id } }
-            else { selectedSong = songs.first }
-            if let song = selectedSong {
-                return CarPlayHomeItem(id: song.id, title: song.title,
-                                       subtitle: AppServices.shared.musicLibrary.artistDisplayName(for: song),
-                                       artwork: .song(song), target: previewItem.target)
-            }
-            return previewItem
-        }
-        let player = AppServices.shared.playerService
-        if let song = player.currentSong {
-            return CarPlayHomeItem(id: song.id, title: song.title, subtitle: AppServices.shared.musicLibrary.artistDisplayName(for: song),
-                                   artwork: .song(song), target: .nowPlaying)
-        }
-        return CarPlayHomeItem(id: "empty", title: player.currentRadioStation?.name ?? String(localized: "carplay_nothing_playing"),
-                               symbol: player.currentRadioStation == nil ? "music.note" : "radio", target: .nowPlaying)
-    }
-}
-
-private struct CarPlayItemDrag: ViewModifier {
-    let enabled: Bool
-    let value: String
-    @ViewBuilder func body(content: Content) -> some View {
-        if enabled { content.draggable(value) }
-        else { content }
     }
 }
 
 struct CarPlayPreviewArtwork: View {
     let item: CarPlayHomeItem
+    var pixelSize = 240
     @State private var image: UIImage?
+    private var identity: String {
+        let library = AppServices.shared.musicLibrary
+        let artwork: String
+        switch item.artwork {
+        case .songReference(let id, let coverRef): artwork = id + (coverRef ?? "")
+        case .song(let song): artwork = song.id + (song.coverArtFileName ?? "")
+        case .album(let album): artwork = album.id + "\(library.albumArtworkLookupRevision):\(library.artworkOverrideRevision)"
+        case .playlist(let playlist): artwork = playlist.id + "\(playlist.updatedAt):\(library.artworkOverrideRevision):\(library.albumArtworkLookupRevision)"
+        case nil: artwork = item.id
+        }
+        return artwork + ":\(pixelSize)"
+    }
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.08))
+                CarPlayEditorTheme.artwork
                 if let image { Image(uiImage: image).resizable().scaledToFill() }
-                else { Image(systemName: item.symbol).font(.system(size: max(18, min(52, geometry.size.width * 0.3)))).foregroundStyle(.white.opacity(0.5)) }
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+                else {
+                    Image(systemName: item.symbol)
+                        .font(.system(size: max(10, min(42, geometry.size.width * 0.3)), weight: .medium))
+                        .foregroundStyle(CarPlayEditorTheme.accent.opacity(0.7))
+                }
+            }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
         }
-        .task(id: item.id) {
-            image = nil
-            if let artwork = item.artwork { image = await CarPlayHomeContent.artwork(artwork, pixelSize: 320) }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task(id: identity) {
+            guard let artwork = item.artwork else { image = nil; return }
+            let loaded = await CarPlayHomeContent.artwork(artwork, pixelSize: pixelSize)
+            guard !Task.isCancelled else { return }
+            image = loaded
         }
         .accessibilityHidden(true)
     }

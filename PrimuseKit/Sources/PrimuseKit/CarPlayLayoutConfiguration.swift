@@ -7,9 +7,16 @@ public enum CarPlayLayoutPreset: String, CaseIterable, Identifiable, Sendable {
 }
 
 public enum CarPlayBrowseStyle: String, Codable, CaseIterable, Identifiable, Sendable {
-    case list, covers, cards
+    case list, covers, cards, capsules
     public var id: String { rawValue }
     public var titleKey: String { "carplay_style_" + rawValue }
+}
+
+public enum CarPlayVisualStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    case list, wall, capsules, split
+    public var id: String { rawValue }
+    public var titleKey: String { "carplay_visual_" + rawValue }
+    public var subtitleKey: String { "carplay_visual_" + rawValue + "_detail" }
 }
 
 public enum CarPlayHomeSection: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -33,6 +40,7 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     public var pinnedPlaylistIDs: [String] = []
     public var pinnedFolders = "[]"
     public var customBlocks: [CarPlayLayoutBlock]?
+    public var visualStyle: CarPlayVisualStyle = .list
 
     public init() {}
 
@@ -44,6 +52,8 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     public var canAddShortcut: Bool {
         pinnedPlaylistIDs.count + folderIDs.count < Self.maximumShortcutCount
     }
+
+    public var showsSiri: Bool { blocks.first { $0.kind == .siri }?.isVisible ?? true }
 
     public var visibleSections: [CarPlayHomeSection] {
         Self.unique(sectionOrder + CarPlayHomeSection.allCases).filter { !hiddenSections.contains($0) }
@@ -86,8 +96,8 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
         var updated = blocks
         guard let source = updated.firstIndex(where: { $0.id == sourceID }),
               let destination = updated.firstIndex(where: { $0.id == destinationID }),
-              updated[destination].kind == .custom,
-              source == destination || (updated[destination].items.count < 24 && !updated[destination].items.contains { $0.id == id }),
+              (updated[destination].kind == .custom || updated[destination].usesCustomContent),
+              source == destination || (updated[destination].items.count < 60 && !updated[destination].items.contains { $0.id == id }),
               let index = updated[source].items.firstIndex(where: { $0.id == id }),
               itemID == nil || updated[destination].items.contains(where: { $0.id == itemID }) else { return false }
         let item = updated[source].items.remove(at: index)
@@ -102,7 +112,7 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     public mutating func apply(_ preset: CarPlayLayoutPreset) {
         let playlists = pinnedPlaylistIDs
         let folders = pinnedFolders
-        let collections = blocks.filter { $0.kind == .custom }
+        let collections = blocks.filter { $0.kind == .custom || $0.usesCustomContent }
         self = Self()
         pinnedPlaylistIDs = playlists
         pinnedFolders = folders
@@ -110,6 +120,7 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
         case .quickPlay:
             break
         case .artwork:
+            visualStyle = .wall
             browseStyle = .cards
             hiddenSections = []
             playsCollectionsDirectly = false
@@ -124,6 +135,18 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
                 updated.style = browseStyle
                 return updated
             } + blocks
+        }
+    }
+
+    public mutating func applyVisualStyle(_ style: CarPlayVisualStyle) {
+        visualStyle = style
+        browseStyle = style == .list || style == .split ? .list : (style == .capsules ? .capsules : .covers)
+        blocks = blocks.map { block in
+            var result = block
+            result.style = browseStyle
+            result.columns = style == .wall ? 3 : 2
+            result.rowsPerPage = style == .capsules ? 3 : 2
+            return result
         }
     }
 
@@ -152,13 +175,14 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case browseStyle, sectionOrder, hiddenSections, playsCollectionsDirectly
         case opensNowPlayingOnConnect, opensNowPlayingAfterSelection, minimalNowPlaying
-        case pinnedPlaylistIDs, pinnedFolders, customBlocks
+        case pinnedPlaylistIDs, pinnedFolders, customBlocks, visualStyle
     }
 
     public init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
         browseStyle = (try? values.decode(CarPlayBrowseStyle.self, forKey: .browseStyle)) ?? browseStyle
+        visualStyle = (try? values.decode(CarPlayVisualStyle.self, forKey: .visualStyle)) ?? (browseStyle == .list ? .list : .wall)
         if let order = try? values.decode([String].self, forKey: .sectionOrder) {
             sectionOrder = Self.unique(order.compactMap(CarPlayHomeSection.init(rawValue:)) + CarPlayHomeSection.allCases)
         }

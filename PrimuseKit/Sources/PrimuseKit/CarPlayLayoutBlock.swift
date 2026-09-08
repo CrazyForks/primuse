@@ -1,12 +1,15 @@
 import Foundation
 
 public enum CarPlayLayoutBlockKind: String, Codable, CaseIterable, Identifiable, Sendable {
-    case shortcuts, playlists, albums, recentlyAdded, custom, radio
+    case shortcuts, playlists, albums, recentlyAdded, custom, radio, folders, ranking, siri
     public var id: String { rawValue }
     public var titleKey: String {
         switch self {
         case .custom: "carplay_block_custom"
         case .radio: "radio_title"
+        case .folders: "library_browse_folder"
+        case .ranking: "carplay_listening_ranking"
+        case .siri: "carplay_siri_suggestions"
         default: "carplay_section_" + rawValue
         }
     }
@@ -18,13 +21,16 @@ public enum CarPlayLayoutBlockKind: String, Codable, CaseIterable, Identifiable,
         case .recentlyAdded: "clock"
         case .custom: "square.grid.2x2"
         case .radio: "radio"
+        case .folders: "folder.fill"
+        case .ranking: "chart.bar.fill"
+        case .siri: "waveform"
         }
     }
 }
 
 public struct CarPlayLayoutItem: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, CaseIterable, Identifiable, Sendable {
-        case playlist, folder, album, song, radio
+        case playlist, folder, album, song, radio, nowPlaying
         public var id: String { rawValue }
     }
     public var id: String
@@ -65,10 +71,13 @@ public struct CarPlayLayoutBlock: Codable, Equatable, Identifiable, Sendable {
     public var title = ""
     public var style: CarPlayBrowseStyle
     public var columns = 3
+    public var rowsPerPage = 2
     public var itemLimit = 6
     public var showsTitle = true
+    public var isVisible = true
     public var playsImmediately = true
     public var items: [CarPlayLayoutItem] = []
+    public var usesCustomContent = false
 
     public init(id: String = UUID().uuidString, kind: CarPlayLayoutBlockKind, style: CarPlayBrowseStyle = .covers) {
         self.id = id
@@ -79,11 +88,32 @@ public struct CarPlayLayoutBlock: Codable, Equatable, Identifiable, Sendable {
     public var normalized: Self {
         var result = self
         result.columns = min(6, max(2, columns))
-        result.itemLimit = min(24, max(1, itemLimit))
+        result.rowsPerPage = min(4, max(1, rowsPerPage))
+        result.itemLimit = min(60, max(1, itemLimit))
         result.title = String(title.prefix(80))
         var seen = Set<String>()
-        result.items = Array(items.filter { !$0.targetID.isEmpty && seen.insert($0.id).inserted }.prefix(24))
+        result.items = Array(items.filter { !$0.targetID.isEmpty && seen.insert($0.id).inserted }.prefix(60))
         return result
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, style, columns, rowsPerPage, itemLimit, showsTitle, isVisible, playsImmediately, items, usesCustomContent
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        kind = try values.decode(CarPlayLayoutBlockKind.self, forKey: .kind)
+        style = (try? values.decode(CarPlayBrowseStyle.self, forKey: .style)) ?? .covers
+        title = (try? values.decode(String.self, forKey: .title)) ?? ""
+        columns = (try? values.decode(Int.self, forKey: .columns)) ?? 3
+        rowsPerPage = (try? values.decode(Int.self, forKey: .rowsPerPage)) ?? 2
+        itemLimit = (try? values.decode(Int.self, forKey: .itemLimit)) ?? 6
+        showsTitle = (try? values.decode(Bool.self, forKey: .showsTitle)) ?? true
+        isVisible = (try? values.decode(Bool.self, forKey: .isVisible)) ?? true
+        playsImmediately = (try? values.decode(Bool.self, forKey: .playsImmediately)) ?? true
+        items = (try? values.decode([CarPlayLayoutItem].self, forKey: .items)) ?? []
+        usesCustomContent = (try? values.decode(Bool.self, forKey: .usesCustomContent)) ?? (kind == .custom)
     }
 }
 

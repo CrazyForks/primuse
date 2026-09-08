@@ -3,116 +3,134 @@ import PrimuseKit
 import SwiftUI
 
 struct CarPlayContentPicker: View {
-    var embedded = false
-    var close: (() -> Void)?
-    let add: (CarPlayLayoutItem) -> Void
+    let catalog: CarPlayEditorCatalog
+    let add: (CarPlayLayoutItem) -> Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var kind: CarPlayLayoutItem.Kind = .playlist
+    @State private var kind: CarPlayLayoutItem.Kind
     @State private var query = ""
+    @State private var results: [CarPlayLayoutItem] = []
+    @State private var selected: Set<String> = []
     @State private var folderID: LibraryFolderNodeID?
     @State private var folders = CarPlayFolderLibrary.shared
     @State private var owner = UUID()
 
-    init(embedded: Bool = false, initialKind: CarPlayLayoutItem.Kind = .playlist,
-         close: (() -> Void)? = nil, add: @escaping (CarPlayLayoutItem) -> Void) {
-        self.embedded = embedded
-        self.close = close
+    init(catalog: CarPlayEditorCatalog, initialKind: CarPlayLayoutItem.Kind = .playlist, add: @escaping (CarPlayLayoutItem) -> Bool) {
+        self.catalog = catalog
         self.add = add
         _kind = State(initialValue: initialKind)
     }
 
-    private var items: [CarPlayLayoutItem] {
-        let library = AppServices.shared.musicLibrary
-        let all: [CarPlayLayoutItem]
-        switch kind {
-        case .playlist:
-            all = library.playlists.map { .init(id: $0.id, kind: .playlist, targetID: $0.id, title: $0.name) }
-        case .album:
-            all = library.visibleAlbums.map { .init(id: $0.id, kind: .album, targetID: $0.id, title: $0.title) }
-        case .song:
-            all = library.visibleSongs.map { .init(id: $0.id, kind: .song, targetID: $0.id, title: $0.title) }
-        case .radio:
-            all = AppServices.shared.radioStationsStore.stations.map { .init(id: $0.id, kind: .radio, targetID: $0.id, title: $0.name) }
-        case .folder:
-            let nodes = folderID.map { folders.index?.children(of: $0) ?? [] } ?? folders.index?.sourceNodes ?? []
-            all = nodes.map { .init(id: HomeFolderPinStorage.encode([$0.id]), kind: .folder,
-                                    targetID: HomeFolderPinStorage.encode([$0.id]), title: HomeDiscoveryText.folderTitle($0)) }
-        }
-        return all.filter { query.isEmpty || $0.title.localizedStandardContains(query) }
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-    }
-
     var body: some View {
-        Group {
-            if embedded {
-                VStack(spacing: 12) {
-                    HStack {
-                        Text(LocalizedStringKey(title(kind))).font(.headline)
-                        Spacer()
-                        Button("done") { close?() }
-                    }
-                    TextField("carplay_find_content", text: $query).textFieldStyle(.roundedBorder)
-                    contents
-                }
-            } else {
-                NavigationStack {
-                    contents
-                        .navigationTitle(LocalizedStringKey(title(kind)))
-                        .navigationBarTitleDisplayMode(.inline)
-                        .searchable(text: $query)
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("done") { dismiss() } } }
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            Capsule().fill(CarPlayEditorTheme.border).frame(width: 36, height: 4).frame(maxWidth: .infinity)
+            HStack {
+                Text("carplay_content_sources").font(.system(size: 19, weight: .semibold))
+                Spacer()
+                Button("done") { dismiss() }.font(.system(size: 14, weight: .semibold)).foregroundStyle(CarPlayEditorTheme.accent)
             }
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(CarPlayEditorTheme.muted)
+                TextField("carplay_find_content", text: $query).autocorrectionDisabled()
+                    .accessibilityIdentifier("carplay.contentSearch")
+            }.font(.system(size: 14)).padding(11).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            ScrollView(.horizontal) {
+                HStack(spacing: 7) {
+                    ForEach(CarPlayLayoutItem.Kind.allCases) { option in
+                        Button { kind = option } label: {
+                            Label(LocalizedStringKey(title(option)), systemImage: symbol(option)).font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 11).padding(.vertical, 8)
+                                .foregroundStyle(kind == option ? CarPlayEditorTheme.accentText : CarPlayEditorTheme.secondary)
+                                .background(kind == option ? CarPlayEditorTheme.accent.opacity(0.16) : CarPlayEditorTheme.surface, in: Capsule())
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }.scrollIndicators(.hidden).accessibilityIdentifier("carplay.contentKinds")
+            if kind == .folder, let folderID {
+                HStack {
+                    Button {
+                        self.folderID = folders.index?.node(withID: folderID)?.parentID
+                        query = ""
+                    } label: { Label("carplay_parent_folder", systemImage: "chevron.left") }
+                    Spacer()
+                    if let node = folders.index?.node(withID: folderID) {
+                        Button("carplay_add_this_folder") {
+                            append(CarPlayLayoutItem(id: HomeFolderPinStorage.encode([node.id]), kind: .folder,
+                                targetID: HomeFolderPinStorage.encode([node.id]), title: HomeDiscoveryText.folderTitle(node)))
+                        }
+                    }
+                }.font(.system(size: 12)).foregroundStyle(CarPlayEditorTheme.accent)
+            }
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(results) { item in row(item) }
+                    if results.isEmpty {
+                        if catalog.isLoading || (kind == .folder && folders.isLoading) { ProgressView().padding(30) }
+                        else { Text("carplay_no_content").font(.system(size: 14)).foregroundStyle(CarPlayEditorTheme.muted).padding(40) }
+                    }
+                }
+            }.scrollIndicators(.hidden)
         }
-        .onChange(of: kind) { query = ""; folderID = nil }
-        .onAppear { folders.acquire(owner) }
+        .padding(16).background(CarPlayEditorTheme.sheet).foregroundStyle(CarPlayEditorTheme.text)
+        .presentationBackground(CarPlayEditorTheme.sheet).presentationCornerRadius(20)
+        .task(id: requestID) { await search() }
+        .onChange(of: kind) { query = ""; folderID = nil; updateFolderAccess() }
+        .onAppear { updateFolderAccess() }
         .onDisappear { folders.release(owner) }
     }
 
-    private var contents: some View {
-        VStack(spacing: 0) {
-            Picker("carplay_content_type", selection: $kind) {
-                ForEach(CarPlayLayoutItem.Kind.allCases) { kind in
-                    Image(systemName: symbol(kind)).accessibilityLabel(LocalizedStringKey(title(kind))).tag(kind)
-                }
-            }.pickerStyle(.segmented).padding(.bottom, 10)
-            List {
-                if kind == .folder, let folderID {
-                    Button("carplay_parent_folder", systemImage: "arrow.up") {
-                        self.folderID = folders.index?.node(withID: folderID)?.parentID
-                    }
-                    if let node = folders.index?.node(withID: folderID) {
-                        row(.init(kind: .folder, targetID: HomeFolderPinStorage.encode([folderID]), title: HomeDiscoveryText.folderTitle(node)), navigates: false)
-                    }
-                }
-                ForEach(items) { item in row(item, navigates: kind == .folder) }
-            }
-            .listStyle(.plain)
-            .overlay {
-                if items.isEmpty && folderID == nil {
-                    if kind == .folder && folders.isLoading { ProgressView() }
-                    else { ContentUnavailableView("carplay_no_content", systemImage: symbol(kind)) }
-                }
-            }
-        }
+    private var requestID: String {
+        "\(kind.rawValue):\(query):\(folderID.map { HomeFolderPinStorage.encode([$0]) } ?? ""): \(catalog.revision):\(folders.revision)"
     }
 
-    private func row(_ item: CarPlayLayoutItem, navigates: Bool) -> some View {
-        HStack {
-            if navigates {
-                Button { folderID = item.folderID; query = "" } label: {
-                    Label(item.title, systemImage: "folder").frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.plain)
-            } else {
-                Label(item.title, systemImage: symbol(item.kind))
-                Spacer()
+    private func search() async {
+        let source: [CarPlayLayoutItem]
+        if kind == .folder {
+            let nodes = folderID.map { folders.index?.children(of: $0) ?? [] } ?? folders.index?.sourceNodes ?? []
+            source = nodes.map {
+                .init(id: HomeFolderPinStorage.encode([$0.id]), kind: .folder,
+                      targetID: HomeFolderPinStorage.encode([$0.id]), title: HomeDiscoveryText.folderTitle($0))
             }
-            Button("carplay_add_content", systemImage: "plus.circle") {
-                add(item)
-                if !embedded { dismiss() }
-            }.labelStyle(.iconOnly).buttonStyle(.borderless)
+        } else if kind == .nowPlaying {
+            source = [.init(id: "nowPlaying", kind: .nowPlaying, targetID: "nowPlaying", title: String(localized: "carplay_now_playing"))]
+        } else { source = catalog.snapshot.searchItems[kind] ?? [] }
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
         }
-        .draggable(item.dragValue)
+        let work = Task.detached(priority: .userInitiated) {
+            source.filter { query.isEmpty || $0.title.localizedStandardContains(query) }
+        }
+        let values = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        guard !Task.isCancelled else { return }
+        results = values
+    }
+
+    private func row(_ item: CarPlayLayoutItem) -> some View {
+        let added = selected.contains(item.kind.rawValue + item.targetID)
+        return HStack(spacing: 12) {
+            Image(systemName: symbol(item.kind)).font(.system(size: 16)).foregroundStyle(CarPlayEditorTheme.accentText)
+                .frame(width: 34, height: 34).background(CarPlayEditorTheme.border.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
+            Button {
+                if kind == .folder { folderID = item.folderID; query = "" }
+                else { append(item) }
+            } label: {
+                Text(item.title).font(.system(size: 14)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Button { append(item) } label: {
+                Image(systemName: added ? "checkmark.circle.fill" : "plus.circle").font(.system(size: 20))
+                    .foregroundStyle(CarPlayEditorTheme.accent).frame(width: 36, height: 36)
+            }.buttonStyle(.plain).disabled(added).accessibilityLabel("carplay_add_content")
+        }.padding(10).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func append(_ item: CarPlayLayoutItem) {
+        let key = item.kind.rawValue + item.targetID
+        guard !selected.contains(key), add(item) else { return }
+        selected.insert(key)
+    }
+
+    private func updateFolderAccess() {
+        if kind == .folder { folders.acquire(owner) } else { folders.release(owner) }
     }
 
     private func title(_ kind: CarPlayLayoutItem.Kind) -> String {
@@ -122,6 +140,7 @@ struct CarPlayContentPicker: View {
         case .album: "carplay_section_albums"
         case .song: "carplay_tab_songs"
         case .radio: "radio_title"
+        case .nowPlaying: "carplay_now_playing"
         }
     }
     private func symbol(_ kind: CarPlayLayoutItem.Kind) -> String {
@@ -131,6 +150,7 @@ struct CarPlayContentPicker: View {
         case .album: "square.stack"
         case .song: "music.note"
         case .radio: "radio"
+        case .nowPlaying: "play.circle"
         }
     }
 }

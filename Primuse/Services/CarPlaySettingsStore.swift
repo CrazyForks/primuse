@@ -41,20 +41,34 @@ final class CarPlayFolderLibrary {
     static let shared = CarPlayFolderLibrary()
     private(set) var index: LibraryFolderIndex?
     private(set) var isLoading = false
+    private(set) var revision = 0
     @ObservationIgnored private var owners: Set<UUID> = []
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var buildTask: Task<Void, Never>?
     @ObservationIgnored private var namesObserver: NSObjectProtocol?
+    @ObservationIgnored private var namesRevision = 0
+    @ObservationIgnored private var cachedInput: InputStamp?
+
+    private struct InputStamp: Equatable {
+        let songs: Int
+        let playlists: Int
+        let hierarchy: UInt64
+        let sources: [LibraryFolderSourceDescriptor]
+        let names: Int
+    }
 
     func acquire(_ owner: UUID) {
         guard owners.insert(owner).inserted, owners.count == 1 else { return }
         generation &+= 1
         observeInputs(generation: generation)
-        namesObserver = NotificationCenter.default.addObserver(
+        if namesObserver == nil { namesObserver = NotificationCenter.default.addObserver(
             forName: CloudDirectoryNameStore.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.scheduleRebuild() }
-        }
+            Task { @MainActor in
+                self?.namesRevision &+= 1
+                self?.scheduleRebuild()
+            }
+        } }
         scheduleRebuild()
     }
 
@@ -65,8 +79,6 @@ final class CarPlayFolderLibrary {
         buildTask?.cancel()
         buildTask = nil
         isLoading = false
-        if let namesObserver { NotificationCenter.default.removeObserver(namesObserver) }
-        namesObserver = nil
     }
 
     func songs(in id: LibraryFolderNodeID, scope: LibraryFolderSongScope = .descendants) -> [Song] {
@@ -103,6 +115,12 @@ final class CarPlayFolderLibrary {
 
     private func scheduleRebuild() {
         guard !owners.isEmpty else { return }
+        let services = AppServices.shared
+        let stamp = InputStamp(songs: services.musicLibrary.visibleSongCollectionRevision,
+            playlists: services.musicLibrary.playlistCollectionRevision,
+            hierarchy: UInt64(services.scanService.folderHierarchyRevision),
+            sources: services.sourcesStore.allSources.map(LibraryFolderSourceDescriptor.init(source:)), names: namesRevision)
+        guard stamp != cachedInput else { return }
         buildTask?.cancel()
         isLoading = true
         buildTask = Task { [weak self] in
@@ -165,6 +183,8 @@ final class CarPlayFolderLibrary {
             } onCancel: { task.cancel() }
             guard !Task.isCancelled else { return }
             self.index = result
+            self.cachedInput = stamp
+            self.revision &+= 1
             self.isLoading = false
             self.buildTask = nil
         }
