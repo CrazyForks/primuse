@@ -1505,13 +1505,12 @@ private struct MinimalTopNavigationBar: View {
 
                 if selection == .search, let searchContext {
                     SearchScopeSwitchButton(scope: $searchScope, context: searchContext)
-                        .labelStyle(.titleOnly)
-                        .font(.subheadline.weight(.semibold))
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 17, weight: .semibold))
                         .buttonStyle(.plain)
                         .foregroundStyle(Color.accentColor)
                         .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 10)
-                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        .background(Color.accentColor.opacity(0.14), in: Circle())
                 }
 
                 actionButton(

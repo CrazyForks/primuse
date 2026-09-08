@@ -619,7 +619,7 @@ struct SearchView: View {
             if !usesMinimalNavigation, let contextualScope {
                 ToolbarItem(placement: .topBarTrailing) {
                     SearchScopeSwitchButton(scope: $scope, context: contextualScope)
-                        .labelStyle(.titleOnly)
+                        .labelStyle(.iconOnly)
                 }
             }
         }
