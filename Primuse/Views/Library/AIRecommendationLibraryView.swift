@@ -732,14 +732,13 @@ struct AIRecommendationLibraryView: View {
         let queue = orderedIDs.compactMap { songsByID[$0] }
         guard let index = queue.firstIndex(where: { $0.id == song.id }) else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: index)
         beginTrackingStreamingQueue(
             queue,
             hasFallbackTail: queue.count > visibleQueue.count
         )
         let selected = queue[index]
         SiriMediaInteractionDonor.donate(song: selected)
-        Task { await player.play(song: selected) }
+        Task { await player.play(queue: queue, startingAt: index) }
     }
 
     private func playAll() {
@@ -760,13 +759,12 @@ struct AIRecommendationLibraryView: View {
         let queue = orderedIDs.compactMap { songsByID[$0] }
         guard let first = queue.first else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
         beginTrackingStreamingQueue(
             queue,
             hasFallbackTail: queue.count > visibleQueue.count
         )
         SiriMediaInteractionDonor.donate(song: first)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func beginTrackingStreamingQueue(

@@ -700,10 +700,9 @@ struct ArtistDetailView: View {
 
     private func playAll(shuffled: Bool) {
         let queue = shuffled ? playableSongs.shuffled() : playableSongs
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         if shuffled { player.shuffleEnabled = true }
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func shuffleAll() { playAll(shuffled: true) }
@@ -711,9 +710,8 @@ struct ArtistDetailView: View {
     private func playSong(_ song: Song) {
         let queue = playableSongs
         guard let index = queue.firstIndex(where: { $0.id == song.id }) else { return }
-        player.setQueue(queue, startAt: index)
         SiriMediaInteractionDonor.donate(song: song)
-        Task { await player.play(song: song) }
+        Task { await player.play(queue: queue, startingAt: index) }
     }
 }
 
@@ -795,8 +793,7 @@ private struct ArtistAllSongsView: View {
 
     private func playSong(_ song: Song) {
         guard let index = playableSongs.firstIndex(where: { $0.id == song.id }) else { return }
-        player.setQueue(playableSongs, startAt: index)
         SiriMediaInteractionDonor.donate(song: song)
-        Task { await player.play(song: song) }
+        Task { await player.play(queue: playableSongs, startingAt: index) }
     }
 }

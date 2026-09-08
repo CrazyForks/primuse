@@ -1071,21 +1071,19 @@ struct MacSimilarSongsPopover: View {
         let queue = ([song] + tail).filteredPlayable()
         guard let first = queue.first else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
         onClose()
         SiriMediaInteractionDonor.donate(song: first)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func playRadio() {
         let queue = MusicDiscoveryEngine.songRadio(from: seed, in: library, limit: 48)
             .map(\.song)
             .filteredPlayable()
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
         onClose()
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func loadLastFm() async {

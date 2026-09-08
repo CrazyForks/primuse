@@ -2226,24 +2226,21 @@ private struct GenreDetailView: View {
     }
 
     private func playAll() {
-        guard let first = playableSongs.first else { return }
-        player.setQueue(playableSongs, startAt: 0)
-        Task { await player.play(song: first) }
+        guard !playableSongs.isEmpty else { return }
+        Task { await player.play(queue: playableSongs, startingAt: 0) }
     }
 
     private func shuffleAll() {
         let queue = playableSongs.shuffled()
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         player.shuffleEnabled = true
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func playSong(_ song: Song) {
         guard let index = playableSongs.firstIndex(where: { $0.id == song.id }) else { return }
-        player.setQueue(playableSongs, startAt: index)
         SiriMediaInteractionDonor.donate(song: song)
-        Task { await player.play(song: song) }
+        Task { await player.play(queue: playableSongs, startingAt: index) }
     }
 }
 

@@ -209,10 +209,88 @@ struct PlaybackInterruptionResumePolicyTests {
     }
 }
 
+@Suite("Queue selection playback policy")
+struct QueueSelectionPlaybackPolicyTests {
+    @Test("The active or loading selected item keeps its transport")
+    func activeSelectionIsCoalesced() {
+        #expect(QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: "song-a",
+            currentItemID: "song-a",
+            transportIsActive: true,
+            isLoading: false
+        ) == .preserveCurrentTransport)
+        #expect(QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: "song-a",
+            currentItemID: "song-a",
+            transportIsActive: false,
+            isLoading: true
+        ) == .preserveCurrentTransport)
+    }
+
+    @Test("A paused, different, or externally-owned item starts a fresh transport")
+    func inactiveSelectionStarts() {
+        #expect(QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: "song-a",
+            currentItemID: "song-a",
+            transportIsActive: false,
+            isLoading: false
+        ) == .startSelectedItem)
+        #expect(QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: "song-b",
+            currentItemID: "song-a",
+            transportIsActive: true,
+            isLoading: false
+        ) == .startSelectedItem)
+        #expect(QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: "song-a",
+            currentItemID: "song-a",
+            transportIsActive: true,
+            isLoading: false,
+            transportCanBePreserved: false
+        ) == .startSelectedItem)
+    }
+}
+
+@Suite("Audio output route loss policy")
+struct AudioOutputRouteLossPolicyTests {
+    @Test("Built-in route churn never looks like an external disconnect")
+    func builtInRouteChurnDoesNotPause() {
+        #expect(!AudioOutputRouteLossPolicy.shouldPause(
+            reasonIsOldDeviceUnavailable: true,
+            previousRouteHadExternalOutput: false,
+            currentRouteHasExternalOutput: false
+        ))
+        #expect(!AudioOutputRouteLossPolicy.shouldPause(
+            reasonIsOldDeviceUnavailable: true,
+            previousRouteHadExternalOutput: false,
+            currentRouteHasExternalOutput: true
+        ))
+    }
+
+    @Test("Only a real fallback from external output pauses")
+    func externalFallbackPauses() {
+        #expect(AudioOutputRouteLossPolicy.shouldPause(
+            reasonIsOldDeviceUnavailable: true,
+            previousRouteHadExternalOutput: true,
+            currentRouteHasExternalOutput: false
+        ))
+        #expect(!AudioOutputRouteLossPolicy.shouldPause(
+            reasonIsOldDeviceUnavailable: true,
+            previousRouteHadExternalOutput: true,
+            currentRouteHasExternalOutput: true
+        ))
+        #expect(!AudioOutputRouteLossPolicy.shouldPause(
+            reasonIsOldDeviceUnavailable: false,
+            previousRouteHadExternalOutput: true,
+            currentRouteHasExternalOutput: false
+        ))
+    }
+}
+
 @Suite("Bluetooth playback recovery policy")
 struct BluetoothPlaybackRecoveryPolicyTests {
-    @Test("Only a Bluetooth profile switch bypasses disconnect pause")
-    func profileSwitchDoesNotPause() {
+    @Test("Only an actual Bluetooth departure pauses the Bluetooth-only model")
+    func bluetoothRouteLoss() {
         #expect(!BluetoothPlaybackRecoveryPolicy.shouldPauseForRouteLoss(
             reasonIsOldDeviceUnavailable: true,
             previousRouteWasBluetooth: true,
@@ -223,13 +301,8 @@ struct BluetoothPlaybackRecoveryPolicyTests {
             previousRouteWasBluetooth: true,
             currentRouteIsBluetooth: false
         ))
-        #expect(BluetoothPlaybackRecoveryPolicy.shouldPauseForRouteLoss(
-            reasonIsOldDeviceUnavailable: true,
-            previousRouteWasBluetooth: false,
-            currentRouteIsBluetooth: true
-        ))
         #expect(!BluetoothPlaybackRecoveryPolicy.shouldPauseForRouteLoss(
-            reasonIsOldDeviceUnavailable: false,
+            reasonIsOldDeviceUnavailable: true,
             previousRouteWasBluetooth: false,
             currentRouteIsBluetooth: false
         ))

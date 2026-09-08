@@ -1429,7 +1429,6 @@ enum HomeDiscoveryPlayback {
         guard !queue.isEmpty else { return }
         if let selectedID, !queue.contains(where: { $0.id == selectedID }) { return }
         let position = selectedID.flatMap { id in queue.firstIndex { $0.id == id } } ?? 0
-        player.setQueue(queue, startAt: position)
-        Task { await player.play(song: queue[position]) }
+        Task { await player.play(queue: queue, startingAt: position) }
     }
 }

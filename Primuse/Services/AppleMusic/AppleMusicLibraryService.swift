@@ -69,6 +69,11 @@ final class AppleMusicLibraryService {
         case failed(id: String, name: String, coverArtReference: String?, error: String)
     }
 
+    private struct UserPlaylistSyncFailure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     /// macOS 会优先读云端资料库；云端权限不可用时仍保留 Music.app 的本机歌曲，
     /// 但必须把降级原因带回 UI，不能把“仅同步到 2 首本机歌”误报成完整成功。
     private struct LibrarySongFetchResult {
@@ -792,10 +797,14 @@ final class AppleMusicLibraryService {
 
             // 拉用户在 Apple Music 里建的 playlists, 每个映射成独立的本地镜像歌单
             // (跟「Apple Music 资料库」全集并存)。tracks 走 .with([.tracks])
-            // 延迟加载关系, 失败的 playlist 跳过不阻塞整体 sync。
-            let syncedUserPlaylistCount = fetchResult.syncMode == .authoritative
-                ? await syncUserPlaylists()
-                : 0
+            // 延迟加载关系；成功的镜像先落库，任一歌单抓取失败则把本轮同步
+            // 标记为失败，保留旧镜像并允许用户重试。
+            let syncedUserPlaylistCount: Int
+            if fetchResult.syncMode == .authoritative {
+                syncedUserPlaylistCount = try await syncUserPlaylists()
+            } else {
+                syncedUserPlaylistCount = 0
+            }
             guard syncGeneration == generation else { return }
 
             lastSyncAt = Date()
@@ -1058,81 +1067,82 @@ final class AppleMusicLibraryService {
     /// 实现: 按平台拉用户全部歌单 (含分页), 每个用
     /// `.with([.tracks])` 把 tracks 拉过来, 转 PrimuseKit.Song 后 replace 进对应歌单。
     @discardableResult
-    private func syncUserPlaylists() async -> Int {
-        do {
-            let allPlaylists = try await fetchLibraryPlaylists()
-            plog("🎵 Apple Music user playlists: \(allPlaylists.count)")
+    private func syncUserPlaylists() async throws -> Int {
+        let allPlaylists = try await fetchLibraryPlaylists()
+        plog("🎵 Apple Music user playlists: \(allPlaylists.count)")
 
-            var fetchedMirrors: [UserPlaylistMirror] = []
-            var failedIDs = Set<String>()
-            for amPlaylist in allPlaylists {
-                if Task.isCancelled { return 0 }
-                let result = await fetchUserPlaylistMirror(amPlaylist)
-                if Task.isCancelled { return 0 }
-                markSyncProgress()   // 每处理完一个歌单 (含 .with([.tracks]) 往返) 续期
-                switch result {
-                case .mirror(let mirror):
-                    fetchedMirrors.append(mirror)
-                case .empty(let id, let name, let coverArtReference):
-                    fetchedMirrors.append(UserPlaylistMirror(
-                        id: id,
-                        name: Self.safePlaylistName(name),
-                        songIDs: [],
-                        coverArtReference: coverArtReference
-                    ))
-                    plog("🎵 AM playlist '\(name)' is empty, preserving local mirror \(id)")
-                case .unresolved(let id, let name, let count, let coverArtReference):
-                    // 保住已有镜像 (如果存在), 别让 prune 当作"服务端已删"清掉。
-                    if library.playlist(id: id) != nil {
-                        failedIDs.insert(id)
-                        library.updateMirrorPlaylistArtwork(
-                            playlistID: id,
-                            coverArtPath: coverArtReference,
-                            forceRefresh: coverArtReference != nil
-                        )
-                    }
-                    plog("""
-                        ⚠️ AM playlist '\(name)' has \(count) track(s) on Apple Music but none \
-                        resolved locally — keeping the existing mirror
-                        """)
-                case .failed(let id, let name, let coverArtReference, let error):
+        var fetchedMirrors: [UserPlaylistMirror] = []
+        var failedIDs = Set<String>()
+        var firstFailure: UserPlaylistSyncFailure?
+        for amPlaylist in allPlaylists {
+            try Task.checkCancellation()
+            let result = await fetchUserPlaylistMirror(amPlaylist)
+            try Task.checkCancellation()
+            markSyncProgress()   // 每处理完一个歌单 (含 .with([.tracks]) 往返) 续期
+            switch result {
+            case .mirror(let mirror):
+                fetchedMirrors.append(mirror)
+            case .empty(let id, let name, let coverArtReference):
+                fetchedMirrors.append(UserPlaylistMirror(
+                    id: id,
+                    name: Self.safePlaylistName(name),
+                    songIDs: [],
+                    coverArtReference: coverArtReference
+                ))
+                plog("🎵 AM playlist '\(name)' is empty, preserving local mirror \(id)")
+            case .unresolved(let id, let name, let count, let coverArtReference):
+                // 保住已有镜像 (如果存在), 别让 prune 当作"服务端已删"清掉。
+                if library.playlist(id: id) != nil {
                     failedIDs.insert(id)
-                    if library.playlist(id: id) != nil, let coverArtReference {
-                        library.updateMirrorPlaylistArtwork(
-                            playlistID: id,
-                            coverArtPath: coverArtReference,
-                            forceRefresh: true
-                        )
-                    }
-                    plog("⚠️AM playlist '\(name)' fetch tracks failed: \(error)")
+                    library.updateMirrorPlaylistArtwork(
+                        playlistID: id,
+                        coverArtPath: coverArtReference,
+                        forceRefresh: coverArtReference != nil
+                    )
                 }
+                plog("""
+                    ⚠️ AM playlist '\(name)' has \(count) track(s) on Apple Music but none \
+                    resolved locally — keeping the existing mirror
+                    """)
+            case .failed(let id, let name, let coverArtReference, let error):
+                failedIDs.insert(id)
+                if library.playlist(id: id) != nil, let coverArtReference {
+                    library.updateMirrorPlaylistArtwork(
+                        playlistID: id,
+                        coverArtPath: coverArtReference,
+                        forceRefresh: true
+                    )
+                }
+                if firstFailure == nil {
+                    let detail = "\(Self.safePlaylistName(name)): \(error)"
+                    firstFailure = UserPlaylistSyncFailure(message: String(
+                        format: String(localized: "apple_music_library_access_failed_format"),
+                        detail
+                    ))
+                }
+                plog("⚠️AM playlist '\(name)' fetch tracks failed: \(error)")
             }
-
-            let mirrorsToKeep = Self.resolveUserPlaylistMirrors(fetchedMirrors)
-            for mirror in mirrorsToKeep {
-                library.ensurePlaylist(id: mirror.id, name: mirror.name)
-                library.replaceMirrorPlaylistSongs(
-                    playlistID: mirror.id,
-                    songIDs: mirror.songIDs,
-                    coverArtPath: mirror.coverArtReference
-                )
-                plog("🎵 AM playlist '\(mirror.name)' → \(mirror.songIDs.count) songs")
-            }
-
-            let keepIDs = Set(mirrorsToKeep.map(\.id)).union(failedIDs)
-            playlistArtworkCache = playlistArtworkCache.filter { keepIDs.contains($0.key) }
-            library.prunePlaylists(
-                withIDPrefix: Self.userPlaylistIDPrefix,
-                keepingIDs: keepIDs
-            )
-            return mirrorsToKeep.count
-        } catch is CancellationError {
-            // ignore
-            return 0
-        } catch {
-            plog("⚠️Apple Music playlist sync failed: \(error.localizedDescription)")
-            return 0
         }
+
+        let mirrorsToKeep = Self.resolveUserPlaylistMirrors(fetchedMirrors)
+        for mirror in mirrorsToKeep {
+            library.ensurePlaylist(id: mirror.id, name: mirror.name)
+            library.replaceMirrorPlaylistSongs(
+                playlistID: mirror.id,
+                songIDs: mirror.songIDs,
+                coverArtPath: mirror.coverArtReference
+            )
+            plog("🎵 AM playlist '\(mirror.name)' → \(mirror.songIDs.count) songs")
+        }
+
+        let keepIDs = Set(mirrorsToKeep.map(\.id)).union(failedIDs)
+        playlistArtworkCache = playlistArtworkCache.filter { keepIDs.contains($0.key) }
+        library.prunePlaylists(
+            withIDPrefix: Self.userPlaylistIDPrefix,
+            keepingIDs: keepIDs
+        )
+        if let firstFailure { throw firstFailure }
+        return mirrorsToKeep.count
     }
 
     private func fetchLibraryPlaylists() async throws -> [MusicKit.Playlist] {

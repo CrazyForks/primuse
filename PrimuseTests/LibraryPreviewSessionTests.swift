@@ -195,6 +195,60 @@ final class LibraryPreviewSessionTests: XCTestCase {
         XCTAssertEqual(library.playlistCollectionRevision, revision + 1)
     }
 
+    func testAppleMusicSnapshotPrunesDeletedPlaylistWithoutDeletingLibrarySongs() throws {
+        let storageDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "PrimuseAppleMusicPlaylistPruneTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: storageDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: storageDirectory) }
+
+        let library = MusicLibrary(storageDirectory: storageDirectory)
+        let sourceID = AppleMusicLibraryIdentity.sourceID
+        let song = Song(
+            id: "apple-song",
+            title: "Apple Song",
+            fileFormat: .aac,
+            filePath: "i.apple-song",
+            sourceID: sourceID
+        )
+        library.addSongs([song], affectedSourceIDs: [sourceID])
+
+        let removedPlaylistID = AppleMusicLibraryIdentity.userPlaylistIDPrefix + "p.removed"
+        let retainedPlaylistID = AppleMusicLibraryIdentity.userPlaylistIDPrefix + "p.retained"
+        for (id, name) in [
+            (AppleMusicLibraryIdentity.systemPlaylistID, "Apple Music Library"),
+            (removedPlaylistID, "Primuse Bulk"),
+            (retainedPlaylistID, "Retained"),
+        ] {
+            library.ensurePlaylist(id: id, name: name)
+            library.replaceMirrorPlaylistSongs(
+                playlistID: id,
+                songIDs: [song.id],
+                coverArtPath: nil
+            )
+        }
+
+        library.prunePlaylists(
+            withIDPrefix: AppleMusicLibraryIdentity.userPlaylistIDPrefix,
+            keepingIDs: [retainedPlaylistID]
+        )
+
+        XCTAssertNil(library.playlist(id: removedPlaylistID))
+        XCTAssertNotNil(library.playlist(id: retainedPlaylistID))
+        XCTAssertNotNil(library.playlist(id: AppleMusicLibraryIdentity.systemPlaylistID))
+        XCTAssertEqual(library.song(id: song.id)?.sourceID, sourceID)
+        XCTAssertEqual(library.rawSongIDs(forPlaylist: retainedPlaylistID), [song.id])
+        XCTAssertEqual(
+            library.rawSongIDs(forPlaylist: AppleMusicLibraryIdentity.systemPlaylistID),
+            [song.id]
+        )
+    }
+
     func testMergeOnlyServerFallbackPreservesMissingRowsAndLocalEnrichment() throws {
         let storageDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(

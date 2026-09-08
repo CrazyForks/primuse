@@ -1637,19 +1637,17 @@ struct MacHomeView: View {
         queue = queue.filteredPlayable()
         guard let startIndex = queue.firstIndex(where: { $0.id == song.id }) else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: startIndex)
         SiriMediaInteractionDonor.donate(song: queue[startIndex])
-        Task { await player.play(song: queue[startIndex]) }
+        Task { await player.play(queue: queue, startingAt: startIndex) }
     }
 
     private func playLibrary(shuffled: Bool) {
         let candidates = library.visibleSongs.filteredPlayable()
         guard !candidates.isEmpty else { return }
         let queue = shuffled ? candidates.shuffled() : candidates
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 }
 

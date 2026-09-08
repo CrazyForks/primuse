@@ -3047,10 +3047,9 @@ struct SongListView: View {
         let candidates = filteredSongs.filteredPlayable()
         guard !candidates.isEmpty else { return }
         let queue = shuffled ? candidates.shuffled() : candidates
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         player.shuffleEnabled = shuffled
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
     #endif
 
@@ -3864,9 +3863,8 @@ struct SongListView: View {
         let queue = Array(visibleQueue[index...]) + Array(visibleQueue[..<index])
         guard let first = queue.first else { return }
         plog("🎶 SongList setQueue visible=\(visibleQueue.count) queue=\(queue.count) start='\(first.title)'")
-        player.setQueue(queue, startAt: 0)
         SiriMediaInteractionDonor.donate(song: first)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 }
 
@@ -4614,9 +4612,8 @@ private struct MacLibraryFolderInlineContent: View {
             .compactMap { library.unobservedVisibleSong(id: $0) }
             .filteredPlayable()
         guard let first = queue.first else { return }
-        player.setQueue(queue, startAt: 0)
         SiriMediaInteractionDonor.donate(song: first)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func playSong(_ song: Song) {
@@ -4624,9 +4621,8 @@ private struct MacLibraryFolderInlineContent: View {
             .compactMap { library.unobservedVisibleSong(id: $0) }
             .filteredPlayable()
         guard let index = queue.firstIndex(where: { $0.id == song.id }) else { return }
-        player.setQueue(queue, startAt: index)
         SiriMediaInteractionDonor.donate(song: song)
-        Task { await player.play(song: song) }
+        Task { await player.play(queue: queue, startingAt: index) }
     }
 }
 #endif
@@ -5177,9 +5173,8 @@ private struct LibraryFolderNodeView: View {
             .compactMap { library.unobservedVisibleSong(id: $0) }
             .filteredPlayable()
         guard let first = queue.first else { return }
-        player.setQueue(queue, startAt: 0)
         SiriMediaInteractionDonor.donate(song: first)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func playSong(_ song: Song) {
@@ -5187,9 +5182,8 @@ private struct LibraryFolderNodeView: View {
             .compactMap { library.unobservedVisibleSong(id: $0) }
             .filteredPlayable()
         guard let index = queue.firstIndex(where: { $0.id == song.id }) else { return }
-        player.setQueue(queue, startAt: index)
         SiriMediaInteractionDonor.donate(song: song)
-        Task { await player.play(song: song) }
+        Task { await player.play(queue: queue, startingAt: index) }
     }
 
     private func pruneSelection() {

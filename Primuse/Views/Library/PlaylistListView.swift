@@ -848,10 +848,9 @@ struct PlaylistListView: View {
     private func playPlaylist(_ playlist: Playlist, shuffled: Bool = false) {
         let playable = library.songs(forPlaylist: playlist.id).filteredPlayable()
         let queue = shuffled ? playable.shuffled() : playable
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         if shuffled { player.shuffleEnabled = true }
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 }
 

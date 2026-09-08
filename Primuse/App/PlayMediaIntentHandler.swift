@@ -70,33 +70,28 @@ final class PlayMediaIntentHandler: NSObject,
                     return
                 }
                 if shouldShuffle { queue.shuffle() }
-                let first = queue[0]
 
                 switch intent.playbackQueueLocation {
                 case .next:
                     if player.currentSong == nil {
                         player.shuffleEnabled = shouldShuffle
-                        player.setQueue(queue, startAt: 0)
-                        Self.startPlayback(first, with: player)
+                        Self.startPlayback(queue, with: player)
                     } else {
                         player.insertNextInQueue(queue)
                     }
                 case .later:
                     if player.currentSong == nil {
                         player.shuffleEnabled = shouldShuffle
-                        player.setQueue(queue, startAt: 0)
-                        Self.startPlayback(first, with: player)
+                        Self.startPlayback(queue, with: player)
                     } else {
                         player.appendToQueue(queue)
                     }
                 case .unknown, .now:
                     player.shuffleEnabled = shouldShuffle
-                    player.setQueue(queue, startAt: 0)
-                    Self.startPlayback(first, with: player)
+                    Self.startPlayback(queue, with: player)
                 @unknown default:
                     player.shuffleEnabled = shouldShuffle
-                    player.setQueue(queue, startAt: 0)
-                    Self.startPlayback(first, with: player)
+                    Self.startPlayback(queue, with: player)
                 }
 
                 // `play(song:)` can spend tens of seconds resolving a remote
@@ -792,9 +787,9 @@ final class PlayMediaIntentHandler: NSObject,
     }
 
     @MainActor
-    private static func startPlayback(_ song: Song, with player: AudioPlayerService) {
+    private static func startPlayback(_ queue: [Song], with player: AudioPlayerService) {
         Task { @MainActor in
-            await player.play(song: song, caller: "SiriKit")
+            await player.play(queue: queue, startingAt: 0, caller: "SiriKit")
         }
     }
 

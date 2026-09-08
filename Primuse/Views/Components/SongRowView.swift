@@ -1370,11 +1370,10 @@ struct SimilarSongsSheet: View {
 
     private func startSimilarMix() {
         let queue = ([seed] + results.map(\.song)).filteredPlayable()
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
         dismiss()
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func startSongRadio() {
@@ -1387,11 +1386,10 @@ struct SimilarSongsSheet: View {
             let radio = MusicDiscoveryEngine.songRadio(from: seed, in: library, limit: 48)
             let queue = radio.map(\.song).filteredPlayable()
             isBuildingRadio = false
-            guard let first = queue.first else { return }
+            guard !queue.isEmpty else { return }
             player.shuffleEnabled = false
-            player.setQueue(queue, startAt: 0)
             dismiss()
-            await player.play(song: first)
+            await player.play(queue: queue, startingAt: 0)
         }
     }
 
@@ -1400,10 +1398,9 @@ struct SimilarSongsSheet: View {
         let queue = ([song] + tail).filteredPlayable()
         guard let first = queue.first else { return }
         player.shuffleEnabled = false
-        player.setQueue(queue, startAt: 0)
         dismiss()
         SiriMediaInteractionDonor.donate(song: first)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 }
 

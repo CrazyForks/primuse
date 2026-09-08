@@ -325,18 +325,62 @@ public enum BluetoothDeferredResumeDecision: Equatable, Sendable {
     case resume
 }
 
+public enum QueueSelectionPlaybackDecision: Equatable, Sendable {
+    case startSelectedItem
+    case preserveCurrentTransport
+}
+
+/// Replacing a queue around the item that is already playing should update the
+/// traversal context without restarting its decoder. This also coalesces
+/// repeated taps while the same item is still starting.
+public enum QueueSelectionPlaybackPolicy {
+    public static func decision(
+        selectedItemID: String,
+        currentItemID: String?,
+        transportIsActive: Bool,
+        isLoading: Bool,
+        transportCanBePreserved: Bool = true
+    ) -> QueueSelectionPlaybackDecision {
+        guard transportCanBePreserved,
+              selectedItemID == currentItemID,
+              transportIsActive || isLoading else {
+            return .startSelectedItem
+        }
+        return .preserveCurrentTransport
+    }
+}
+
+/// Distinguishes a real external-output loss from the noisy
+/// `.oldDeviceUnavailable` notifications iOS can emit while the phone remains
+/// on its built-in speaker. Pausing is only needed when an external route was
+/// actually present and the replacement route has no external output.
+public enum AudioOutputRouteLossPolicy {
+    public static func shouldPause(
+        reasonIsOldDeviceUnavailable: Bool,
+        previousRouteHadExternalOutput: Bool,
+        currentRouteHasExternalOutput: Bool
+    ) -> Bool {
+        reasonIsOldDeviceUnavailable
+            && previousRouteHadExternalOutput
+            && !currentRouteHasExternalOutput
+    }
+}
+
 /// Keeps a Bluetooth microphone preemption separate from a physical route loss.
 /// A2DP/HFP profile switches can report `.oldDeviceUnavailable`, but playback
 /// should pause only when the resulting route really falls back to the device.
 /// Deferred resume stays one-shot and cannot cross an item or user-intent change.
 public enum BluetoothPlaybackRecoveryPolicy {
+    /// Retained for callers that only model Bluetooth routes. Unrelated
+    /// built-in route churn is never a Bluetooth disconnect.
     public static func shouldPauseForRouteLoss(
         reasonIsOldDeviceUnavailable: Bool,
         previousRouteWasBluetooth: Bool,
         currentRouteIsBluetooth: Bool
     ) -> Bool {
         reasonIsOldDeviceUnavailable
-            && !(previousRouteWasBluetooth && currentRouteIsBluetooth)
+            && previousRouteWasBluetooth
+            && !currentRouteIsBluetooth
     }
 
     public static func deferredResumeDecision(

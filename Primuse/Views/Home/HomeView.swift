@@ -2572,11 +2572,10 @@ struct HomeView: View {
         }
         plog("🏠 setQueue: \(queueSongs.count) songs, startIndex=\(startIndex), songAtIndex='\(queueSongs[startIndex].title)'")
         player.shuffleEnabled = false
-        player.setQueue(queueSongs, startAt: startIndex)
         let resolved = queueSongs[startIndex]
         plog("🏠 calling player.play(song: '\(resolved.title)')")
         SiriMediaInteractionDonor.donate(song: resolved)
-        Task { await player.play(song: resolved) }
+        Task { await player.play(queue: queueSongs, startingAt: startIndex) }
     }
 
     private func playLibrary(shuffled: Bool) {
@@ -2587,10 +2586,9 @@ struct HomeView: View {
         guard !candidates.isEmpty else { return }
 
         let queueSongs = shuffled ? candidates.shuffled() : candidates
-        guard let firstSong = queueSongs.first else { return }
+        guard !queueSongs.isEmpty else { return }
 
         player.shuffleEnabled = false
-        player.setQueue(queueSongs, startAt: 0)
-        Task { await player.play(song: firstSong) }
+        Task { await player.play(queue: queueSongs, startingAt: 0) }
     }
 }

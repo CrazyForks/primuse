@@ -247,7 +247,7 @@ struct ImmersiveStageView<Artwork: View>: View {
 
             if metrics.isPortrait {
                 VStack(alignment: .leading, spacing: metrics.s(22)) {
-                    artworkPlate(
+                    portraitArtworkPlate(
                         side: min(metrics.size.width * 0.63, metrics.size.height * 0.31),
                         radius: metrics.f(8)
                     )
@@ -309,7 +309,7 @@ struct ImmersiveStageView<Artwork: View>: View {
 
             if metrics.isPortrait {
                 VStack(alignment: .leading, spacing: metrics.s(24)) {
-                    artworkPlate(
+                    portraitArtworkPlate(
                         side: min(metrics.size.width * 0.69, metrics.size.height * 0.36),
                         radius: metrics.f(8)
                     )
@@ -407,7 +407,7 @@ struct ImmersiveStageView<Artwork: View>: View {
 
             if metrics.isPortrait {
                 VStack(alignment: .leading, spacing: metrics.s(22)) {
-                    artworkPlate(
+                    portraitArtworkPlate(
                         side: min(metrics.size.width * 0.73, metrics.size.height * 0.37),
                         radius: metrics.f(18)
                     )
@@ -640,7 +640,7 @@ struct ImmersiveStageView<Artwork: View>: View {
 
             if metrics.isPortrait {
                 VStack(alignment: .leading, spacing: metrics.s(22)) {
-                    artworkPlate(
+                    portraitArtworkPlate(
                         side: min(metrics.size.width * 0.76, metrics.size.height * 0.37),
                         radius: metrics.f(20)
                     )
@@ -736,6 +736,11 @@ struct ImmersiveStageView<Artwork: View>: View {
             glowColor: palette.primary,
             artwork: artwork
         )
+    }
+
+    private func portraitArtworkPlate(side: CGFloat, radius: CGFloat) -> some View {
+        artworkPlate(side: side, radius: radius)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private func rotatingCircularArtwork(diameter: CGFloat) -> some View {

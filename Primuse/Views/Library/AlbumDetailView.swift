@@ -500,10 +500,9 @@ struct AlbumDetailView: View {
     private func playAll(shuffled: Bool = false) {
         let playable = songs.filteredPlayable()
         let queue = shuffled ? playable.shuffled() : playable
-        guard let first = queue.first else { return }
+        guard !queue.isEmpty else { return }
         if shuffled { player.shuffleEnabled = true }
-        player.setQueue(queue, startAt: 0)
-        Task { await player.play(song: first) }
+        Task { await player.play(queue: queue, startingAt: 0) }
     }
 
     private func shuffleAll() {
@@ -513,9 +512,8 @@ struct AlbumDetailView: View {
     private func playSong(_ song: Song) {
         let queue = songs.filteredPlayable()
         guard let index = queue.firstIndex(where: { $0.id == song.id }) else { return }
-        player.setQueue(queue, startAt: index)
         SiriMediaInteractionDonor.donate(song: song)
-        Task { await player.play(song: song) }
+        Task { await player.play(queue: queue, startingAt: index) }
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

@@ -1150,7 +1150,6 @@ struct ContentView: View {
         }
 
         let song = resolvedQueue[songIndex]
-        player.setQueue(resolvedQueue, startAt: songIndex)
         if let shuffle = info["shuffleEnabled"] as? Bool { player.shuffleEnabled = shuffle }
         if let rmRaw = info["repeatMode"] as? String,
            let rm = RepeatMode(rawValue: rmRaw) {
@@ -1170,7 +1169,11 @@ struct ContentView: View {
 
         Task {
             if wasPlaying {
-                await player.play(song: song, caller: "Handoff")
+                await player.play(
+                    queue: resolvedQueue,
+                    startingAt: songIndex,
+                    caller: "Handoff"
+                )
                 // play(song:) starts at zero; seek to the publisher's live
                 // position only for an explicitly playing Handoff.
                 player.seek(to: resumeTime, startPlaying: true)
@@ -1197,8 +1200,10 @@ struct ContentView: View {
             guard let song = library.visibleSong(id: id) else { return }
             // 命中歌 + 整库剩下的拼起来当队列,跟 Siri / Shortcuts 同款行为
             let rest = library.visibleSongs.filter { $0.id != id }
-            player.setQueue([song] + rest, startAt: 0)
-            Task { await player.play(song: song, caller: "Spotlight") }
+            let queue = [song] + rest
+            Task {
+                await player.play(queue: queue, startingAt: 0, caller: "Spotlight")
+            }
         case .album(let id):
             guard let album = library.visibleAlbums.first(where: { $0.id == id }) else { return }
             openLibraryDeepLink(.album(album))

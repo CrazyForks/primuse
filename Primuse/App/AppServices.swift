@@ -1756,9 +1756,8 @@ final class AppServices {
         if shuffled { queue.shuffle() }
         let first = queue[0]
         playerService.shuffleEnabled = shuffled
-        playerService.setQueue(queue, startAt: 0)
         Task { @MainActor [playerService] in
-            await playerService.play(song: first, caller: "AppIntent")
+            await playerService.play(queue: queue, startingAt: 0, caller: "AppIntent")
         }
         return first
     }

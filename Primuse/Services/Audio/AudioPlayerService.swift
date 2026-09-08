@@ -2124,52 +2124,50 @@ final class AudioPlayerService {
                 note.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
                     as? AVAudioSessionRouteDescription
             )?.outputs ?? []
-            let previousRouteWasBluetooth = previousOutputs.contains {
-                $0.portType == .bluetoothA2DP
-                    || $0.portType == .bluetoothHFP
-                    || $0.portType == .bluetoothLE
-            }
             let previousRouteWasAirPlay = previousOutputs.contains { $0.portType == .airPlay }
+            let previousRouteHadExternalOutput = previousOutputs.contains {
+                $0.portType != .builtInSpeaker && $0.portType != .builtInReceiver
+            }
             let currentOutputs = AVAudioSession.sharedInstance().currentRoute.outputs
             let previousOutputTypes = previousOutputs.map { $0.portType.rawValue }.joined(separator: ",")
             let currentOutputTypes = currentOutputs.map { $0.portType.rawValue }.joined(separator: ",")
             let previousOutputUIDs = Set(previousOutputs.map(\.uid).filter { !$0.isEmpty })
             let hasSameOutputDevice = currentOutputs.contains { previousOutputUIDs.contains($0.uid) }
-            let currentRouteIsBluetooth = currentOutputs.contains {
-                    $0.portType == .bluetoothA2DP
-                        || $0.portType == .bluetoothHFP
-                        || $0.portType == .bluetoothLE
-            }
-            let currentRouteIsBuiltIn = currentOutputs.contains {
-                $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver
-            }
             let routeChangeTime = Date()
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.publishLockScreenLyricsIfNeeded()
                 let reason = reasonValue.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
                 let session = AVAudioSession.sharedInstance()
-                let handlingOutputTypes = session.currentRoute.outputs
-                    .map { $0.portType.rawValue }.joined(separator: ",")
+                let handlingOutputs = session.currentRoute.outputs
+                let handlingOutputTypes = handlingOutputs
+                    .map { $0.portType.rawValue }
+                    .joined(separator: ",")
+                let handlingRouteHasExternalOutput = handlingOutputs.contains {
+                    $0.portType != .builtInSpeaker && $0.portType != .builtInReceiver
+                }
+                let handlingRouteIsBuiltIn = handlingOutputs.contains {
+                    $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver
+                }
                 plog("🔀 Audio route changed reason=\(String(describing: reason)) raw=\(reasonValue.map(String.init) ?? "nil") previous=[\(previousOutputTypes)] observed=[\(currentOutputTypes)] handling=[\(handlingOutputTypes)] sameOutputDevice=\(hasSameOutputDevice) song=\(self.currentSong?.id ?? "nil") time=\(String(format: "%.3f", self.currentTime)) playing=\(self.isPlaying) loading=\(self.isLoading) intended=\(self.interruptionResumePolicy.playbackIsIntended) awaitingInterruptionEnd=\(self.interruptionResumePolicy.isAwaitingInterruptionEnd) otherAudio=\(session.isOtherAudioPlaying)")
                 let reasonIsOldDeviceUnavailable = reason == .oldDeviceUnavailable
                 if self.recoverLocalAudioFocusAfterAirPlayReturn(
                     previousRouteWasAirPlay: previousRouteWasAirPlay,
-                    currentRouteIsBuiltIn: currentRouteIsBuiltIn,
+                    currentRouteIsBuiltIn: handlingRouteIsBuiltIn,
                     reasonIsOldDeviceUnavailable: reasonIsOldDeviceUnavailable,
                     at: routeChangeTime
                 ) {
                     self.forceAudioOnlyIfNeeded()
                     return
                 }
-                if BluetoothPlaybackRecoveryPolicy.shouldPauseForRouteLoss(
+                if AudioOutputRouteLossPolicy.shouldPause(
                     reasonIsOldDeviceUnavailable: reasonIsOldDeviceUnavailable,
-                    previousRouteWasBluetooth: previousRouteWasBluetooth,
-                    currentRouteIsBluetooth: currentRouteIsBluetooth
+                    previousRouteHadExternalOutput: previousRouteHadExternalOutput,
+                    currentRouteHasExternalOutput: handlingRouteHasExternalOutput
                 ) {
-                    // `oldDeviceUnavailable` also fires for A2DP → HFP. Pause
-                    // only when the device really left Bluetooth; a profile
-                    // switch keeps the same physical accessory connected.
+                    // Keep the user's audio private only for a real external
+                    // route fallback. Built-in speaker churn and transitions
+                    // between external outputs leave playback untouched.
                     self.handleOutputDeviceDisappeared()
                     return
                 }
@@ -8494,14 +8492,88 @@ final class AudioPlayerService {
         updatePlaybackState()
     }
 
+    private enum QueueReplacementTransition: Equatable {
+        case prepareNewSelection
+        case preserveCurrentTransport
+    }
+
+    /// Replaces the visible queue and starts its selected item as one operation.
+    /// The old transport is never rebuilt on the way to a different song, and a
+    /// repeated selection of the active/loading item only updates queue context.
+    func play(
+        queue songs: [Song],
+        startingAt index: Int = 0,
+        caller: String = #fileID,
+        callerLine: Int = #line
+    ) async {
+        guard !songs.isEmpty else {
+            clearQueue()
+            return
+        }
+        let selectedIndex = max(0, min(index, songs.count - 1))
+        let selectedSong = songs[selectedIndex]
+        let transportCanBePreserved = !isAppleMusicMode || isPrimuseManagingAppleMusicQueue
+        let decision = QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: selectedSong.id,
+            currentItemID: currentSong?.id,
+            transportIsActive: isPlaybackActuallyActive,
+            isLoading: isLoading,
+            transportCanBePreserved: transportCanBePreserved
+        )
+        installQueue(
+            songs,
+            startAt: selectedIndex,
+            transition: decision == .preserveCurrentTransport
+                ? .preserveCurrentTransport
+                : .prepareNewSelection
+        )
+        guard decision == .startSelectedItem else {
+            plog("🎶 queue selection reused active transport for '\(selectedSong.title)'")
+            return
+        }
+        await play(song: selectedSong, caller: caller, callerLine: callerLine)
+    }
+
     func setQueue(_ songs: [Song], startAt index: Int = 0) {
+        guard !songs.isEmpty else {
+            clearQueue()
+            return
+        }
+        let selectedIndex = max(0, min(index, songs.count - 1))
+        let transportCanBePreserved = !isAppleMusicMode || isPrimuseManagingAppleMusicQueue
+        let decision = QueueSelectionPlaybackPolicy.decision(
+            selectedItemID: songs[selectedIndex].id,
+            currentItemID: currentSong?.id,
+            transportIsActive: isPlaybackActuallyActive,
+            isLoading: isLoading,
+            transportCanBePreserved: transportCanBePreserved
+        )
+        installQueue(
+            songs,
+            startAt: selectedIndex,
+            transition: decision == .preserveCurrentTransport
+                ? .preserveCurrentTransport
+                : .prepareNewSelection
+        )
+    }
+
+    private func installQueue(
+        _ songs: [Song],
+        startAt index: Int,
+        transition: QueueReplacementTransition
+    ) {
         guard !songs.isEmpty else {
             plog("🎶 setQueue empty — clearing queue")
             clearQueue()
             return
         }
 
-        invalidateQueueTransitions()
+        switch transition {
+        case .prepareNewSelection:
+            invalidateQueueTransitions(rebuildCurrentTransport: false)
+        case .preserveCurrentTransport:
+            invalidatePreparedQueueSuccessor()
+        }
         queueEntries = songs.map { QueueEntry(song: $0) }
         currentIndex = max(0, min(index, songs.count - 1))
         // Protect any newly-installed canonical queue from an existing Apple
@@ -8517,6 +8589,9 @@ final class AudioPlayerService {
         pendingNextShuffleIndices = nil
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
+        if transition == .preserveCurrentTransport, isPlaybackActuallyActive {
+            prefetchNextSong()
+        }
     }
 
     /// Re-evaluate prepared queue work after an enable/disable state arrives
@@ -8538,7 +8613,7 @@ final class AudioPlayerService {
     func appendToQueue(_ songs: [Song]) {
         let playable = songs.filteredPlayable()
         guard !playable.isEmpty else { return }
-        invalidateQueueTransitions()
+        invalidatePreparedQueueSuccessor()
         queueEntries.append(contentsOf: playable.map { QueueEntry(song: $0) })
         if isAppleMusicMode {
             isPrimuseManagingAppleMusicQueue = true
@@ -8547,6 +8622,7 @@ final class AudioPlayerService {
         pendingNextShuffleIndices = nil
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
+        if isPlaybackActuallyActive { prefetchNextSong() }
     }
 
     /// Insert songs immediately after the current queue position. If there is
@@ -8560,7 +8636,7 @@ final class AudioPlayerService {
             return 0
         }
         let insertionIndex = min(currentIndex + 1, queueEntries.count)
-        invalidateQueueTransitions()
+        invalidatePreparedQueueSuccessor()
         queueEntries.insert(contentsOf: playable.map { QueueEntry(song: $0) }, at: insertionIndex)
         if isAppleMusicMode {
             isPrimuseManagingAppleMusicQueue = true
@@ -8569,6 +8645,7 @@ final class AudioPlayerService {
         pendingNextShuffleIndices = nil
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
+        if isPlaybackActuallyActive { prefetchNextSong() }
         return insertionIndex
     }
     /// Remove every occurrence of the target songs from the canonical queue
@@ -8616,12 +8693,13 @@ final class AudioPlayerService {
     func removeQueuePrefix(count: Int) {
         guard count > 0 else { return }
         let toRemove = min(count, queueEntries.count)
-        invalidateQueueTransitions()
+        invalidatePreparedQueueSuccessor()
         queueEntries.removeFirst(toRemove)
         currentIndex = max(0, currentIndex - toRemove)
         pendingNextShuffleIndices = nil
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
+        if isPlaybackActuallyActive { prefetchNextSong() }
     }
 
     /// Wipe the queue. Replaces the legacy `player.queue = []` setter,
@@ -9432,23 +9510,26 @@ final class AudioPlayerService {
         }
     }
 
-    private func invalidateQueueTransitions() {
+    private func invalidateQueueTransitions(rebuildCurrentTransport: Bool = true) {
         let pendingMusicVideoID = pendingMusicVideoPlayID == playID
             ? pendingMusicVideoPlayID
             : nil
         let hadActiveMusicVideoSeek = hasMusicVideoSeekActivityEvidence
         let hadAdvanceEligibility = playbackAdvancePolicy.activeTicket != nil
-        let shouldPreservePendingMusicVideoTicket = pendingMusicVideoID != nil
+        let shouldPreservePendingMusicVideoTicket = rebuildCurrentTransport
+            && pendingMusicVideoID != nil
             && hadAdvanceEligibility
         invalidateInterruptionResumePreservingIntent()
-        let shouldRebuildCurrentTransport = hadAdvanceEligibility
+        let shouldRebuildCurrentTransport = rebuildCurrentTransport
+            && hadAdvanceEligibility
             && isPlaying
             && currentSong != nil
             && !isAppleMusicMode
             && !isLiveRadio
             && !isCastingMode
             && !isSystemMediaPlaybackActive
-        let shouldRearmMusicVideo = hadAdvanceEligibility
+        let shouldRearmMusicVideo = rebuildCurrentTransport
+            && hadAdvanceEligibility
             && (isPlaying || hadActiveMusicVideoSeek)
             && isSystemMediaPlaybackActive
         if !shouldPreservePendingMusicVideoTicket {
@@ -10599,7 +10680,7 @@ final class AudioPlayerService {
         guard !additions.isEmpty else { return false }
 
         let firstNewIndex = queueEntries.count
-        invalidateQueueTransitions()
+        invalidatePreparedQueueSuccessor()
         queueEntries.append(contentsOf: additions.map { QueueEntry(song: $0) })
         pendingNextShuffleIndices = nil
         shuffledIndices = [currentIndex]
