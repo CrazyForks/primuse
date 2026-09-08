@@ -2,21 +2,20 @@
 import PrimuseKit
 import SwiftUI
 
-// Shared with the supplied Nocturne CarPlay reference.
 enum CarPlayEditorTheme {
-    static let background = Color(red: 22/255, green: 24/255, blue: 38/255)
-    static let canvas = Color(red: 15/255, green: 16/255, blue: 24/255)
-    static let sidebar = Color(red: 20/255, green: 21/255, blue: 31/255)
-    static let surface = Color(red: 30/255, green: 32/255, blue: 51/255)
-    static let sheet = Color(red: 27/255, green: 29/255, blue: 44/255)
-    static let row = Color(red: 26/255, green: 28/255, blue: 40/255)
-    static let border = Color(red: 46/255, green: 49/255, blue: 73/255)
-    static let accent = Color(red: 145/255, green: 132/255, blue: 217/255)
-    static let accentText = Color(red: 195/255, green: 187/255, blue: 236/255)
-    static let text = Color(red: 233/255, green: 233/255, blue: 237/255)
-    static let secondary = Color(red: 154/255, green: 156/255, blue: 176/255)
-    static let muted = Color(red: 107/255, green: 109/255, blue: 133/255)
-    static let artwork = LinearGradient(colors: [Color(red: 59/255, green: 51/255, blue: 88/255), Color(red: 29/255, green: 26/255, blue: 43/255)], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let background = Color(uiColor: .systemGroupedBackground)
+    static let canvas = Color(uiColor: .systemBackground)
+    static let sidebar = Color(uiColor: .secondarySystemBackground)
+    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
+    static let sheet = Color(uiColor: .systemBackground)
+    static let row = Color(uiColor: .secondarySystemBackground)
+    static let border = Color(uiColor: .separator).opacity(0.3)
+    static let accent = Color.accentColor
+    static let accentText = Color.accentColor
+    static let text = Color.primary
+    static let secondary = Color.secondary
+    static let muted = Color.secondary.opacity(0.7)
+    static let artwork = LinearGradient(colors: [Color(uiColor: .tertiarySystemFill), Color(uiColor: .secondarySystemFill)], startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
 struct CarPlayEditorActivePreferenceKey: PreferenceKey {
@@ -45,35 +44,18 @@ struct CarPlayCompactAccessory: View {
     }
 }
 
-struct CarPlayEditorButton: ButtonStyle {
-    var prominent = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(prominent ? CarPlayEditorTheme.background : CarPlayEditorTheme.accentText)
-            .padding(.horizontal, 15).frame(minHeight: 32)
-            .background(prominent ? CarPlayEditorTheme.accent : CarPlayEditorTheme.accent.opacity(0.12), in: Capsule())
-            .opacity(configuration.isPressed ? 0.65 : 1)
-    }
-}
-
-struct CarPlaySegment<Value: Equatable>: View {
+struct CarPlaySegment<Value: Hashable>: View {
     let values: [(Value, String)]
     @Binding var selection: Value
-    var height: CGFloat = 32
-    var prominent = false
     var body: some View {
-        HStack(spacing: 3) {
+        Picker("", selection: $selection) {
             ForEach(values.indices, id: \.self) { index in
-                let option = values[index]
-                Button { selection = option.0 } label: {
-                    Text(LocalizedStringKey(option.1)).font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(selection == option.0 ? (prominent ? CarPlayEditorTheme.background : CarPlayEditorTheme.text) : CarPlayEditorTheme.secondary)
-                        .frame(maxWidth: .infinity).frame(height: height)
-                        .background(selection == option.0 ? (prominent ? CarPlayEditorTheme.accent : CarPlayEditorTheme.border) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                }.buttonStyle(.plain)
+                Text(LocalizedStringKey(values[index].1)).tag(values[index].0)
             }
-        }.padding(3).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 9))
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(minHeight: 32)
     }
 }
 
@@ -97,11 +79,40 @@ struct CarPlayLayoutGlyph: View {
 struct CarPlayStyleThumbnail: View {
     let style: CarPlayVisualStyle
     var body: some View {
-        Image("CarPlayStyle" + style.rawValue.capitalized)
-            .resizable().scaledToFit()
-            .frame(maxWidth: .infinity)
-            .background(CarPlayEditorTheme.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+        HStack(spacing: 8) {
+            VStack(spacing: 10) {
+                Image(systemName: "music.note").foregroundStyle(.tint)
+                Image(systemName: "map")
+                Spacer(minLength: 0)
+                Image(systemName: "square.grid.2x2")
+            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.vertical, 10).frame(width: 22)
+            if style == .split {
+                VStack(alignment: .leading, spacing: 7) {
+                    RoundedRectangle(cornerRadius: 6).fill(CarPlayEditorTheme.artwork)
+                    Capsule().fill(.tertiary).frame(height: 4)
+                }.frame(maxWidth: .infinity)
+            }
+            let columns = style == .wall ? 3 : style == .capsules ? 2 : 1
+            let rows = style == .wall ? 2 : 3
+            VStack(spacing: 6) {
+                ForEach(0..<rows, id: \.self) { _ in
+                    HStack(spacing: 6) {
+                        ForEach(0..<columns, id: \.self) { _ in
+                            if style == .wall {
+                                RoundedRectangle(cornerRadius: 6).fill(CarPlayEditorTheme.artwork)
+                                    .overlay { Image(systemName: "music.note").font(.caption).foregroundStyle(.secondary) }
+                            } else {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "music.note").font(.system(size: 10)).foregroundStyle(.secondary)
+                                    Capsule().fill(.tertiary).frame(height: 4)
+                                }.padding(8).frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: style == .capsules ? 14 : 6))
+                            }
+                        }
+                    }
+                }
+            }
+        }.padding(8).background(CarPlayEditorTheme.canvas, in: RoundedRectangle(cornerRadius: 12))
             .accessibilityHidden(true)
     }
 }
@@ -111,15 +122,8 @@ struct CarPlayPresetLibrary: View {
     let close: () -> Void
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Button(action: close) { Image(systemName: "chevron.left").frame(width: 32, height: 32).background(CarPlayEditorTheme.surface, in: Circle()) }
-                    .accessibilityLabel("back")
-                Text("carplay_styles_title").font(.system(size: 17, weight: .semibold))
-                Spacer()
-                Button("carplay_customize", action: close).font(.system(size: 14, weight: .semibold)).foregroundStyle(CarPlayEditorTheme.accent)
-            }.padding(.horizontal, 16).padding(.vertical, 8)
             Text("carplay_styles_subtitle").font(.system(size: 13)).foregroundStyle(CarPlayEditorTheme.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 60).padding(.trailing, 16).padding(.bottom, 14)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(CarPlayVisualStyle.allCases) { style in
@@ -162,8 +166,7 @@ struct CarPlayPresetLibrary: View {
                 } label: {
                     if current { Label("carplay_fine_tune", systemImage: "pencil") }
                     else { Text("carplay_use") }
-                }.buttonStyle(CarPlayEditorButton(prominent: !current)).fixedSize()
-                    .overlay { Capsule().strokeBorder(current ? CarPlayEditorTheme.accent : .clear, lineWidth: 1) }
+                }.buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small).fixedSize()
                     .accessibilityIdentifier("carplay.preset." + style.rawValue)
             }
         }

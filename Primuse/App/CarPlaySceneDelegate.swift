@@ -149,6 +149,7 @@ final class CarPlaySceneDelegate: UIResponder {
     /// a scan burst can't stack hundreds of live setImage tasks on the main
     /// actor (the CarPlay stutter root cause).
     private var artworkTasks: [UUID: Task<Void, Never>] = [:]
+    private let artworkUpdates = CarPlayArtworkUpdates()
 
     /// Only the newest row selection may finish the asynchronous playback wait
     /// and present the shared Now Playing template. Without this ownership, a
@@ -232,6 +233,7 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
             self.isNowPlayingTransitionInFlight = false
             self.openQueueTemplate = nil
             self.cancelArtworkTasks()
+            self.artworkUpdates.removeAll()
             if let observer = self.likeChangesObserver { NotificationCenter.default.removeObserver(observer) }
             self.likeChangesObserver = nil
         }
@@ -363,7 +365,7 @@ extension CarPlaySceneDelegate {
             let item = CPListItem(
                 text: query,
                 detailText: "\(matchCount) \(String(localized: "songs_count"))",
-                image: Self.symbolImage("magnifyingglass")
+                image: CarPlayTemplateImages.placeholder("magnifyingglass", artwork: false)
             )
             item.handler = { [weak self] _, completion in
                 Task { @MainActor in
@@ -379,7 +381,7 @@ extension CarPlaySceneDelegate {
             let empty = CPListItem(
                 text: String(localized: "recent_searches"),
                 detailText: String(localized: "carplay_search_no_results"),
-                image: Self.symbolImage("iphone")
+                image: CarPlayTemplateImages.placeholder("iphone", artwork: false)
             )
             empty.isEnabled = false
             sectionItems = [empty]
@@ -425,7 +427,7 @@ extension CarPlaySceneDelegate {
     /// singleton push, etc.) are logged instead of becoming an uncaught
     /// framework exception.
     private func safePush(_ template: CPTemplate, label: String) {
-        if let list = template as? CPListTemplate { configureAssistant(on: list) }
+        if let list = template as? CPListTemplate { configureNavigation(on: list) }
         interfaceController?.pushTemplate(template, animated: true) { success, error in
             if let error {
                 carplayLog.error("📱 pushTemplate(\(label, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
@@ -440,7 +442,7 @@ extension CarPlaySceneDelegate {
         )
         template.tabTitle = String(localized: "carplay_home_title")
         template.tabImage = UIImage(systemName: "house")
-        configureAssistant(on: template)
+        configureNavigation(on: template, isTabRoot: true)
         template.emptyViewTitleVariants = [String(localized: "carplay_empty_library_title")]
         template.emptyViewSubtitleVariants = [String(localized: "carplay_empty_library_subtitle")]
         return template
@@ -454,7 +456,7 @@ extension CarPlaySceneDelegate {
         template.tabTitle = String(localized: "radio_title")
         template.tabImage = UIImage(systemName: "radio.fill")
         template.userInfo = DetailContext.browse(.radio)
-        configureAssistant(on: template)
+        configureNavigation(on: template, isTabRoot: true)
         template.emptyViewTitleVariants = [String(localized: "radio_empty_title")]
         template.emptyViewSubtitleVariants = [String(localized: "radio_empty_description")]
         return template
@@ -467,7 +469,7 @@ extension CarPlaySceneDelegate {
         )
         template.tabTitle = String(localized: "carplay_tab_playlists")
         template.tabImage = UIImage(systemName: "music.note.list")
-        configureAssistant(on: template)
+        configureNavigation(on: template, isTabRoot: true)
         template.emptyViewTitleVariants = [String(localized: "carplay_empty_playlists_title")]
         template.emptyViewSubtitleVariants = [String(localized: "carplay_empty_playlists_subtitle")]
         return template
@@ -483,7 +485,7 @@ extension CarPlaySceneDelegate {
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
             .prefix(500))
         let sections = Self.sectionedByIndexLetter(albums, titleKey: \.title) { album in
-            let item = CPListItem(text: album.title, detailText: album.artistName, image: nil)
+            let item = CPListItem(text: album.title, detailText: album.artistName, image: CarPlayTemplateImages.placeholder("square.stack"))
             self.loadArtwork(forAlbumID: album.id, into: item)
             item.handler = { [weak self] _, completion in
                 Task { @MainActor in
@@ -546,9 +548,9 @@ extension CarPlaySceneDelegate {
         case songs, albums, artists, playlists, radio
     }
 
-    private typealias CollectionArtwork = CarPlayContentArtwork
+    typealias CollectionArtwork = CarPlayContentArtwork
 
-    private struct CollectionEntry: Sendable {
+    struct CollectionEntry: Sendable {
         let title: String
         var subtitle: String? = nil
         var symbol = "music.note"
@@ -557,8 +559,13 @@ extension CarPlaySceneDelegate {
         let action: @MainActor @Sendable () -> Void
     }
 
-    private func configureAssistant(on template: CPListTemplate) {
-        template.assistantCellConfiguration = layout.showsSiri ? CPAssistantCellConfiguration(
+    func configureNavigation(on template: CPListTemplate, configuration: CarPlayLayoutConfiguration? = nil, isTabRoot: Bool = false) {
+        if !isTabRoot, template.title != String(localized: "recent_searches") {
+            template.trailingNavigationBarButtons = [CPBarButton(image: Self.symbolImage("magnifyingglass")) { [weak self] _ in
+                self?.pushSearchTemplate()
+            }]
+        } else { template.trailingNavigationBarButtons = [] }
+        template.assistantCellConfiguration = (configuration ?? layout).showsSiri ? CPAssistantCellConfiguration(
             position: .top, visibility: .always, assistantAction: .playMedia
         ) : nil
     }
@@ -567,7 +574,7 @@ extension CarPlaySceneDelegate {
         let template = CPListTemplate(title: String(localized: "library"), sections: libraryMenuSections())
         template.tabTitle = String(localized: "library")
         template.tabImage = Self.symbolImage("square.stack")
-        configureAssistant(on: template)
+        configureNavigation(on: template, isTabRoot: true)
         return template
     }
 
@@ -632,9 +639,11 @@ extension CarPlaySceneDelegate {
                 self.safePush(self.makeLibraryTemplate(), label: "Library")
             },
             CollectionEntry(title: String(localized: "carplay_layout_title"),
-                            subtitle: self.layout.matchingPreset.map { NSLocalizedString($0.titleKey, comment: "") }
-                                ?? String(localized: "carplay_custom_layout"), symbol: "rectangle.3.group") { [weak self] in
+                            symbol: "rectangle.3.group") { [weak self] in
                 self?.pushLayoutPresets()
+            },
+            CollectionEntry(title: String(localized: "carplay_search_title"), symbol: "magnifyingglass") { [weak self] in
+                self?.pushSearchTemplate()
             }
         ]
         return sections + collectionSections(navigation, style: .list)
@@ -739,8 +748,8 @@ extension CarPlaySceneDelegate {
         return [CPListSection(items: rows, header: title, sectionIndexTitle: nil)]
     }
 
-    private func collectionItem(_ entry: CollectionEntry) -> CPListItem {
-        let item = CPListItem(text: entry.title, detailText: entry.subtitle, image: Self.symbolImage(entry.symbol))
+    func collectionItem(_ entry: CollectionEntry) -> CPListItem {
+        let item = CPListItem(text: entry.title, detailText: entry.subtitle, image: CarPlayTemplateImages.placeholder(entry.symbol, scale: artworkScale, artwork: entry.artwork != nil))
         item.isEnabled = entry.enabled
         item.handler = { _, completion in
             let completion = CarPlaySendableBox(value: completion)
@@ -749,34 +758,37 @@ extension CarPlaySceneDelegate {
                 completion.value()
             }
         }
-        let id = UUID()
-        artworkTasks[id] = Task { [weak self, weak item] in
-            defer { self?.artworkTasks[id] = nil }
-            guard let self, let artwork = entry.artwork else { return }
-            let image = await self.collectionArtwork(artwork, pixelSize: 88)
-            guard !Task.isCancelled, let image else { return }
-            item?.setImage(image)
+        if let artwork = entry.artwork {
+            let scale = artworkScale
+            loadObservedArtwork(artwork, pixelSize: Int(CarPlayTemplateImages.listSide * scale), owner: item) { [weak item] image in
+                item?.setImage(CarPlayTemplateImages.square(image, scale: scale))
+            }
         }
         return item
     }
 
-    private func imageRow(_ entries: [CollectionEntry], style: CarPlayBrowseStyle) -> CPListImageRowItem {
+    private var artworkScale: CGFloat { max(1, interfaceController?.carTraitCollection.displayScale ?? 2) }
+
+    func imageRow(_ entries: [CollectionEntry], style: CarPlayBrowseStyle) -> CPListImageRowItem {
+        let side = CarPlayTemplateImages.rowSide(for: style)
+        let scale = artworkScale
+        let placeholders = entries.map { CarPlayTemplateImages.placeholder($0.symbol, side: side, scale: scale) }
         let row: CPListImageRowItem
         if #available(iOS 26.0, *) {
             if style == .capsules {
-                let elements = entries.map { entry in
+                let elements = entries.enumerated().map { index, entry in
                     let element = CPListImageRowItemCondensedElement(
-                        image: Self.symbolImage(entry.symbol), imageShape: .roundedRectangle,
+                        image: placeholders[index], imageShape: .roundedRectangle,
                         title: entry.title, subtitle: nil, accessorySymbolName: "play.fill"
                     )
                     element.isEnabled = entry.enabled
                     return element
                 }
                 row = CPListImageRowItem(text: nil, condensedElements: elements, allowsMultipleLines: true)
-            } else if style == .cards || style == .covers {
-                let elements = entries.map { entry in
+            } else if style == .cards {
+                let elements = entries.enumerated().map { index, entry in
                     let element = CPListImageRowItemCardElement(
-                        image: Self.symbolImage(entry.symbol), showsImageFullHeight: style == .covers,
+                        image: placeholders[index], showsImageFullHeight: false,
                         title: entry.title, subtitle: entry.subtitle, tintColor: nil
                     )
                     element.isEnabled = entry.enabled
@@ -784,15 +796,15 @@ extension CarPlaySceneDelegate {
                 }
                 row = CPListImageRowItem(text: nil, cardElements: elements, allowsMultipleLines: true)
             } else {
-                let elements = entries.map { entry in
-                    let element = CPListImageRowItemRowElement(image: Self.symbolImage(entry.symbol), title: entry.title, subtitle: entry.subtitle)
+                let elements = entries.enumerated().map { index, entry in
+                    let element = CPListImageRowItemRowElement(image: placeholders[index], title: entry.title, subtitle: entry.subtitle)
                     element.isEnabled = entry.enabled
                     return element
                 }
                 row = CPListImageRowItem(text: nil, elements: elements, allowsMultipleLines: false)
             }
         } else {
-            row = CPListImageRowItem(text: "", images: entries.map { Self.symbolImage($0.symbol) }, imageTitles: entries.map(\.title))
+            row = CPListImageRowItem(text: "", images: placeholders, imageTitles: entries.map(\.title))
         }
         row.listImageRowHandler = { _, index, completion in
             let completion = CarPlaySendableBox(value: completion)
@@ -801,31 +813,42 @@ extension CarPlaySceneDelegate {
                 completion.value()
             }
         }
-        guard style != .capsules else { return row }
-        let id = UUID()
-        artworkTasks[id] = Task { [weak self, weak row] in
-            defer { self?.artworkTasks[id] = nil }
-            var images = entries.map { Self.symbolImage($0.symbol) }
-            for (index, entry) in entries.enumerated() {
-                guard !Task.isCancelled, let self else { return }
-                if let artwork = entry.artwork, let image = await self.collectionArtwork(artwork, pixelSize: 320) {
-                    images[index] = image
-                }
-            }
-            guard !Task.isCancelled, let row else { return }
-            if #available(iOS 26.0, *) {
-                let elements = row.elements
-                for (index, image) in images.enumerated() { elements[index].image = image }
-                row.elements = elements
-            } else {
-                row.update(images)
+        var images = placeholders
+        for (index, entry) in entries.enumerated() {
+            guard let artwork = entry.artwork else { continue }
+            loadObservedArtwork(artwork, pixelSize: Int(side * scale), owner: row) { [weak row] image in
+                guard let row else { return }
+                images[index] = CarPlayTemplateImages.square(image, side: side, scale: scale)
+                if #available(iOS 26.0, *) {
+                    let elements = row.elements
+                    guard elements.indices.contains(index) else { return }
+                    elements[index].image = images[index]
+                    row.elements = elements
+                } else { row.update(images) }
             }
         }
         return row
     }
 
-    private func collectionArtwork(_ artwork: CollectionArtwork, pixelSize: Int) async -> UIImage? {
-        await CarPlayHomeContent.artwork(artwork, pixelSize: pixelSize)
+    private func loadObservedArtwork(_ artwork: CarPlayContentArtwork, pixelSize: Int,
+                                     owner: AnyObject, apply: @escaping @MainActor (UIImage) -> Void) {
+        let id = UUID()
+        var pendingRefresh = false
+        let refresh: @MainActor () -> Void = { [weak self, weak owner] in
+            pendingRefresh = true
+            guard let self, owner != nil, self.artworkTasks[id] == nil else { return }
+            self.artworkTasks[id] = Task { [weak self, weak owner] in
+                defer { self?.artworkTasks[id] = nil }
+                repeat {
+                    pendingRefresh = false
+                    let image = await CarPlayHomeContent.artwork(artwork, pixelSize: pixelSize)
+                    guard !Task.isCancelled, owner != nil else { return }
+                    if let image { apply(image) }
+                } while pendingRefresh
+            }
+        }
+        artworkUpdates.bind(owner: owner, songIDs: CarPlayHomeContent.artworkSongIDs(artwork), refresh: refresh)
+        refresh()
     }
 
     private func playCollection(_ songs: [Song], title: String, shuffled: Bool = false) {
@@ -1036,7 +1059,7 @@ extension CarPlaySceneDelegate {
             let item = CPListItem(
                 text: station.name,
                 detailText: detail,
-                image: Self.symbolImage("radio")
+                image: CarPlayTemplateImages.placeholder("radio")
             )
             if isCurrent {
                 item.isPlaying = player.isPlaying
@@ -1141,7 +1164,7 @@ extension CarPlaySceneDelegate {
             text: song.title,
             detailText: AppServices.shared.musicLibrary.artistDisplayName(for: song)
                 ?? song.albumTitle,
-            image: nil
+            image: CarPlayTemplateImages.placeholder("music.note")
         )
         loadArtwork(for: song, into: item)
         item.handler = { [weak self] _, completion in
@@ -1308,20 +1331,10 @@ extension CarPlaySceneDelegate {
 // explicit cancel on item disposal.
 extension CarPlaySceneDelegate {
     private func loadArtwork(for song: Song, into item: CPListItem) {
-        // Keep the non-Sendable `item` on the main actor (this Task inherits
-        // @MainActor), but offload the fetch + `UIImage(data:)` decode to a
-        // detached task. Previously the decode ran on the main thread for
-        // every row — even on cache hits — so a big list pegged the main
-        // actor. `UIImage` is Sendable, so handing the decoded image back is
-        // safe; `item` never leaves the main actor.
-        let id = UUID()
-        let task = Task { [weak self, weak item] in
-            defer { self?.artworkTasks[id] = nil }
-            let image = await Self.decodeCover(for: song)
-            guard !Task.isCancelled, let image, let item else { return }
-            item.setImage(image)
+        let scale = artworkScale
+        loadObservedArtwork(.song(song), pixelSize: Int(CarPlayTemplateImages.listSide * scale), owner: item) { [weak item] image in
+            item?.setImage(CarPlayTemplateImages.square(image, scale: scale))
         }
-        artworkTasks[id] = task
     }
 
     /// Cancels the previous batch of cover-load tasks before a rebuild. A scan /
@@ -1331,12 +1344,6 @@ extension CarPlaySceneDelegate {
     private func cancelArtworkTasks() {
         for task in artworkTasks.values { task.cancel() }
         artworkTasks.removeAll()
-    }
-
-    /// Off-main cover fetch + serial decode. The dedicated actor keeps the
-    /// work away from the main actor and prevents concurrent ImageIO decodes.
-    nonisolated private static func decodeCover(for song: Song) async -> UIImage? {
-        await CarPlayArtworkDecoder.shared.thumbnail(forSongID: song.id, coverRef: song.coverArtFileName)
     }
 
     private func loadArtwork(forAlbumID albumID: String, into item: CPListItem) {
@@ -1356,7 +1363,7 @@ extension CarPlaySceneDelegate {
                         .flatMap(UIImage.init(data:))
                 }.value
                 guard !Task.isCancelled, let image, let item else { return }
-                item.setImage(image)
+                item.setImage(CarPlayTemplateImages.square(image, scale: self?.artworkScale ?? 2))
             }
             artworkTasks[id] = task
         case .selectedSong(let songID):
@@ -1375,7 +1382,7 @@ extension CarPlaySceneDelegate {
             defer { self?.artworkTasks[id] = nil }
             let image = await CarPlayArtworkDecoder.shared.thumbnail(forRadioID: station.id, data: data)
             guard !Task.isCancelled, let image, let item else { return }
-            item.setImage(image)
+            item.setImage(CarPlayTemplateImages.square(image, scale: self?.artworkScale ?? 2))
         }
         artworkTasks[id] = task
     }
@@ -1506,7 +1513,7 @@ extension CarPlaySceneDelegate {
                 text: song.title,
                 detailText: AppServices.shared.musicLibrary.artistDisplayName(for: song)
                     ?? song.albumTitle,
-                image: nil
+                image: CarPlayTemplateImages.placeholder("music.note")
             )
             loadArtwork(for: song, into: item)
             // First row corresponds to currently-playing track — show indicator.
@@ -1698,7 +1705,7 @@ extension CarPlaySceneDelegate {
 
     /// Re-renders one root tab's sections from the latest library state.
     private func rebuildRootTemplate(_ template: CPListTemplate) {
-        configureAssistant(on: template)
+        configureNavigation(on: template, isTabRoot: true)
         if template === homeTemplate {
             template.updateSections(homeSections())
         } else if template === libraryTemplate {

@@ -32,7 +32,6 @@ struct CarPlayEditorCanvas: View {
         .background(CarPlayEditorTheme.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(CarPlayEditorTheme.border, lineWidth: 1) }
-        .environment(\.colorScheme, .dark)
         .onChange(of: playerPage) { detail = nil; localPlayer = nil }
         .onChange(of: editing) { detail = nil; localPlayer = nil }
         .onChange(of: configuration.visualStyle) { detail = nil; localPlayer = nil }
@@ -212,13 +211,15 @@ struct CarPlayEditorCanvas: View {
                     .padding(.horizontal, 16).frame(height: 58)
                     .background(CarPlayEditorTheme.surface, in: Capsule())
                 } else {
-                    ZStack(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: 5) {
                         CarPlayPreviewArtwork(item: item, pixelSize: 240)
-                        LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
-                        Text(item.title).font(.system(size: 14, weight: .semibold)).lineLimit(1).padding(9)
+                            .aspectRatio(1, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Text(item.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                        if let subtitle = item.subtitle {
+                            Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
-                    .frame(height: (screenHeight - (editing ? 115 : 92)) / CGFloat(block.configuration.rowsPerPage))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             }.opacity(item.enabled ? 1 : 0.5)
         }

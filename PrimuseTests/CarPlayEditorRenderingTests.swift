@@ -1,4 +1,5 @@
 #if os(iOS)
+import CarPlay
 import PrimuseKit
 import SwiftUI
 import XCTest
@@ -42,13 +43,19 @@ final class CarPlayEditorRenderingTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = CarPlaySettingsStore(defaults: defaults)
         let original = settings.configuration
-        try await render(CarPlaySettingsView(settings: settings), size: CGSize(width: 390, height: 844), name: "CarPlay-editor-phone")
-        try await render(CarPlaySettingsView(settings: settings), size: CGSize(width: 1194, height: 834), name: "CarPlay-editor-tablet")
-        try await render(CarPlaySettingsView(settings: settings, showsLibrary: true), size: CGSize(width: 390, height: 844), name: "CarPlay-style-library")
+        try await render(NavigationStack { CarPlaySettingsView(settings: settings) }, size: CGSize(width: 390, height: 844), name: "CarPlay-editor-phone")
+        try await render(NavigationStack { CarPlaySettingsView(settings: settings) }, size: CGSize(width: 1194, height: 834), name: "CarPlay-editor-tablet")
+        try await render(NavigationStack { CarPlaySettingsView(settings: settings, showsLibrary: true) }, size: CGSize(width: 390, height: 844), name: "CarPlay-style-library")
         let model = CarPlayEditorModel(settings: settings)
         model.select(try XCTUnwrap(model.configuration.blocks.first?.id))
-        try await render(CarPlaySettingsView(settings: settings, model: model), size: CGSize(width: 390, height: 844), name: "CarPlay-module-inspector")
+        try await render(NavigationStack { CarPlaySettingsView(settings: settings, model: model) }, size: CGSize(width: 390, height: 844), name: "CarPlay-module-inspector")
         try await render(CarPlayModulePicker(model: model, close: {}), size: CGSize(width: 390, height: 660), name: "CarPlay-add-module")
+        let playerModel = CarPlayEditorModel(settings: settings)
+        playerModel.playerPage = true
+        for scheme in [ColorScheme.light, .dark] {
+            try await render(NavigationStack { CarPlaySettingsView(settings: settings, model: playerModel) },
+                size: CGSize(width: 390, height: 844), name: "CarPlay-native-player-\(scheme)", scheme: scheme)
+        }
         XCTAssertEqual(settings.configuration, original)
     }
 
@@ -158,11 +165,231 @@ final class CarPlayEditorRenderingTests: XCTestCase {
         XCTAssertFalse(stopped.enabled)
     }
 
-    private func render(_ view: some View, size: CGSize, name: String,
+    func testNativeCoverRowsKeepSquareArtworkTitlesAndTapTargets() async throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("New row elements require iOS 26") }
+        let delegate = CarPlaySceneDelegate()
+        var selected = [Int]()
+        let entries = (0..<3).map { index in
+            CarPlaySceneDelegate.CollectionEntry(title: "Playlist \(index)", subtitle: "\(index) songs",
+                symbol: index == 0 ? "music.note" : "music.note.list", enabled: index != 2) { selected.append(index) }
+        }
+        let row = delegate.imageRow(entries, style: .covers)
+        XCTAssertEqual(row.elements.count, 3)
+        for (index, element) in row.elements.enumerated() {
+            let element = try XCTUnwrap(element as? CPListImageRowItemRowElement)
+            XCTAssertEqual(element.title, entries[index].title)
+            XCTAssertEqual(element.subtitle, entries[index].subtitle)
+            XCTAssertEqual(element.image.size.width, element.image.size.height)
+            XCTAssertEqual(element.isEnabled, entries[index].enabled)
+        }
+        for index in [1, 2] {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                row.listImageRowHandler?(row, index) { continuation.resume() }
+            }
+        }
+        XCTAssertEqual(selected, [1], "An unavailable card must not invoke its action")
+        let legacyCard = delegate.imageRow(entries, style: .cards)
+        XCTAssertFalse(try XCTUnwrap(legacyCard.elements.first as? CPListImageRowItemCardElement).showsImageFullHeight)
+    }
+
+    func testNativeArtworkHasConsistentInsetsAdaptiveContrastAndUndistortedCrop() throws {
+        let delegate = CarPlaySceneDelegate()
+        let sizes = ["folder", "music.note", "music.note.list", "square.stack"].map { symbol in
+            delegate.collectionItem(.init(title: symbol, symbol: symbol, action: {})).image?.size
+        }
+        XCTAssertTrue(sizes.allSatisfy { $0 == CPListItem.maximumImageSize }, "CarPlay image sizes: \(sizes)")
+        let placeholder = CarPlayTemplateImages.placeholder("music.note.list", side: 100, scale: 1)
+        let light = try XCTUnwrap(placeholder.imageAsset?.image(with: UITraitCollection(userInterfaceStyle: .light)))
+        let dark = try XCTUnwrap(placeholder.imageAsset?.image(with: UITraitCollection(userInterfaceStyle: .dark)))
+        XCTAssertNotEqual(light.pngData(), dark.pngData())
+        let symbol = CarPlayTemplateImages.placeholder("circle.fill", side: 100, scale: 1)
+        let daySymbol = try XCTUnwrap(symbol.imageAsset?.image(with: UITraitCollection(userInterfaceStyle: .light)))
+        let nightSymbol = try XCTUnwrap(symbol.imageAsset?.image(with: UITraitCollection(userInterfaceStyle: .dark)))
+        XCTAssertLessThan(pixel(daySymbol, x: 50, y: 50)[0], 30)
+        XCTAssertGreaterThan(pixel(nightSymbol, x: 50, y: 50)[0], 225)
+        for (name, image) in [("CarPlay-placeholder-light", light), ("CarPlay-placeholder-dark", dark)] {
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertEqual(pixel(light, x: 0, y: 0)[3], 255)
+        XCTAssertEqual(pixel(dark, x: 0, y: 0)[3], 255)
+        let fixture = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100)).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+            UIColor.red.setFill()
+            context.cgContext.fillEllipse(in: CGRect(x: 80, y: 30, width: 40, height: 40))
+        }
+        let square = CarPlayTemplateImages.square(fixture, side: 100, scale: 1)
+        XCTAssertEqual(square.size, light.size)
+        XCTAssertGreaterThan(pixel(square, x: 35, y: 50)[0], 240, "Center crop must preserve the circle's horizontal radius")
+        XCTAssertGreaterThan(pixel(square, x: 50, y: 35)[0], 240, "Center crop must preserve the circle's vertical radius")
+        XCTAssertGreaterThan(pixel(square, x: 20, y: 50)[1], 240)
+    }
+
+    func testNativeSearchButtonDoesNotRequireAnAssistantRowAndRejectsMusicKitURLs() {
+        let delegate = CarPlaySceneDelegate()
+        let template = CPListTemplate(title: "Library", sections: [])
+        var configuration = CarPlayLayoutConfiguration()
+        delegate.configureNavigation(on: template, configuration: configuration, isTabRoot: true)
+        XCTAssertTrue(template.trailingNavigationBarButtons.isEmpty, "Tab roots do not support custom navigation buttons")
+        delegate.configureNavigation(on: template, configuration: configuration)
+        XCTAssertNil(template.assistantCellConfiguration)
+        XCTAssertEqual(template.trailingNavigationBarButtons.count, 1)
+        configuration.blocks.append(.init(id: "siri", kind: .siri))
+        delegate.configureNavigation(on: template, configuration: configuration)
+        XCTAssertNotNil(template.assistantCellConfiguration)
+        XCTAssertEqual(template.trailingNavigationBarButtons.count, 1)
+        XCTAssertNil(CarPlayHomeContent.httpArtworkReference("musicKit://artwork/123"))
+        XCTAssertNil(CarPlayHomeContent.httpArtworkReference("file:///artwork.jpg"))
+        XCTAssertNil(CarPlayHomeContent.httpArtworkReference("https:///"))
+        XCTAssertEqual(CarPlayHomeContent.httpArtworkReference("https://example.com/cover.jpg"), "https://example.com/cover.jpg")
+    }
+
+    private func pixel(_ image: UIImage, x: Int, y: Int) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 100 * 100 * 4)
+        let context = CGContext(data: &bytes, width: 100, height: 100, bitsPerComponent: 8, bytesPerRow: 400,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image.cgImage!, in: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let offset = (y * 100 + x) * 4
+        return Array(bytes[offset..<offset + 4])
+    }
+
+    private actor ArtworkRequestProbe {
+        var urls: [URL] = []
+        var active = 0
+        var maximumActive = 0
+        func fetch(_ url: URL) async throws -> Data {
+            urls.append(url)
+            active += 1
+            maximumActive = max(maximumActive, active)
+            defer { active -= 1 }
+            try await Task.sleep(for: .milliseconds(40))
+            if url.path.hasSuffix("i.missing") { throw URLError(.notConnectedToInternet) }
+            if url.path.hasSuffix("i.catalog") {
+                return Data(#"{"data":[{"relationships":{"catalog":{"data":[{"attributes":{"artwork":{"url":"https://example.com/catalog/{w}x{h}.jpg"}}}]}}}]}"#.utf8)
+            }
+            return Data(#"{"data":[{"attributes":{"artwork":{"width":null,"height":null,"url":"https://example.com/library/{w}x{h}.jpg"}}}]}"#.utf8)
+        }
+    }
+
+    func testAppleMusicArtworkUsesExactLibraryResourcesAndCoalescesRequests() async throws {
+        let probe = ArtworkRequestProbe()
+        let loader = CarPlayAppleMusicArtwork(fetch: { try await probe.fetch($0) }, isAuthorized: { true })
+        let images = await withTaskGroup(of: String?.self, returning: [String?].self) { group in
+            for _ in 0..<8 { group.addTask { await loader.reference(kind: .songs, id: "i.song", pixelSize: 88) } }
+            var results: [String?] = []
+            for await result in group { results.append(result) }
+            return results
+        }
+        XCTAssertEqual(images.count, 8)
+        XCTAssertTrue(images.allSatisfy { $0 == "https://example.com/library/88x88.jpg" })
+        let resized = await loader.reference(kind: .songs, id: "i.song", pixelSize: 320)
+        XCTAssertEqual(resized, "https://example.com/library/320x320.jpg")
+        let firstRequests = await probe.urls
+        XCTAssertEqual(firstRequests.count, 1, "Different thumbnail sizes must share one metadata request")
+        XCTAssertEqual(firstRequests.first?.path, "/v1/me/library/songs/i.song")
+        let playlist = await loader.reference(kind: .playlists, id: "p.playlist", pixelSize: 160)
+        XCTAssertEqual(playlist, "https://example.com/library/160x160.jpg", "Null artwork dimensions must not discard a playlist cover")
+        let catalog = await loader.reference(kind: .songs, id: "i.catalog", pixelSize: 100)
+        XCTAssertEqual(catalog, "https://example.com/catalog/100x100.jpg")
+        for _ in 0..<2 {
+            let missing = await loader.reference(kind: .songs, id: "i.missing", pixelSize: 100)
+            XCTAssertNil(missing)
+        }
+        let requests = await probe.urls
+        XCTAssertEqual(requests.filter { $0.path.hasSuffix("i.missing") }.count, 1, "Offline misses must not cause repeated requests")
+        XCTAssertEqual(requests.filter { $0.path.contains("/playlists/") }.count, 1)
+        XCTAssertNil(CarPlayAppleMusicArtwork.resourceURL(kind: .songs, id: "i.song/../../me"))
+        XCTAssertNil(CarPlayAppleMusicArtwork.resourceURL(kind: .playlists, id: "i.song"))
+        let unauthorized = CarPlayAppleMusicArtwork(fetch: { _ in XCTFail("Unauthorized artwork must not request access or load data"); return Data() }, isAuthorized: { false })
+        let denied = await unauthorized.reference(kind: .songs, id: "i.song", pixelSize: 100)
+        XCTAssertNil(denied)
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<12 {
+                group.addTask { _ = await loader.reference(kind: .songs, id: "i.bound\(index)", pixelSize: 88) }
+            }
+        }
+        let maximumActive = await probe.maximumActive
+        XCTAssertLessThanOrEqual(maximumActive, 4)
+    }
+
+    func testArtworkCacheUpdatesOnlyMatchingLiveRows() async throws {
+        let center = NotificationCenter()
+        let updates = CarPlayArtworkUpdates(center: center)
+        var owner: NSObject? = NSObject()
+        weak var weakOwner = owner
+        var refreshes = 0
+        updates.bind(owner: try XCTUnwrap(owner), songIDs: ["target"]) { refreshes += 1 }
+        center.post(name: .primuseArtworkDidCache, object: "unrelated")
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(refreshes, 0)
+        center.post(name: .primuseArtworkDidCache, object: "target")
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(refreshes, 1)
+        owner = nil
+        XCTAssertNil(weakOwner, "Observing artwork must not retain a removed template row")
+        center.post(name: .primuseArtworkDidCache, object: "target")
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(refreshes, 1)
+
+        let delegate = CarPlaySceneDelegate()
+        let songID = "carplay-artwork-test-\(UUID().uuidString)"
+        let item = delegate.collectionItem(.init(title: "Cached later", artwork: .songReference(id: songID, coverRef: nil), action: {}))
+        try await Task.sleep(for: .milliseconds(80))
+        let placeholder = item.image?.pngData()
+        let projectionCount = CarPlayEditorCatalog.shared.projectionCount
+        let fixture = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+        }
+        await MetadataAssetStore.shared.cacheCover(try XCTUnwrap(fixture.pngData()), forSongID: songID)
+        for _ in 0..<100 where item.image?.pngData() == placeholder { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNotEqual(item.image?.pngData(), placeholder, "A displayed list row must receive artwork cached during playback")
+        XCTAssertGreaterThan(pixel(try XCTUnwrap(item.image), x: 50, y: 50)[0], 240)
+        XCTAssertEqual(CarPlayEditorCatalog.shared.projectionCount, projectionCount)
+    }
+
+    func testSongWithoutCoverReferenceReadsEmbeddedArtworkFromCachedAudio() async throws {
+        let source = MusicSource(id: "carplay-embedded-\(UUID().uuidString)", name: "Embedded art", type: .local)
+        let manager = SourceManager(sourcesProvider: { [source] })
+        let song = Song(id: UUID().uuidString, title: "Embedded cover", fileFormat: .mp3,
+                        filePath: "/embedded.mp3", sourceID: source.id)
+        await manager.ensureOfflineAudioSnapshot(for: song)
+        let url = manager.audioCacheTargetURL(for: song)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fixture = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100)).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+        }
+        var payload = Data([0]) + Data("image/png".utf8) + Data([0, 3, 0])
+        payload.append(try XCTUnwrap(fixture.pngData()))
+        var frame = Data("APIC".utf8)
+        let length = UInt32(payload.count)
+        frame.append(contentsOf: [UInt8(length >> 24), UInt8((length >> 16) & 255), UInt8((length >> 8) & 255), UInt8(length & 255), 0, 0])
+        frame.append(payload)
+        let count = frame.count
+        var file = Data([0x49, 0x44, 0x33, 3, 0, 0,
+                         UInt8((count >> 21) & 127), UInt8((count >> 14) & 127), UInt8((count >> 7) & 127), UInt8(count & 127)])
+        file.append(frame)
+        file.append(Data(repeating: 0, count: 4_096))
+        try file.write(to: url)
+        let cachedAudio = await manager.cachedURLForBackgroundRead(for: song)
+        XCTAssertNotNil(cachedAudio)
+        let image = await CarPlayHomeContent.songArtwork(song, pixelSize: 100, sourceManager: manager)
+        XCTAssertGreaterThan(pixel(try XCTUnwrap(image), x: 50, y: 50)[1], 240)
+        let cachedArt = await MetadataAssetStore.shared.cachedCoverData(forSongID: song.id)
+        XCTAssertNotNil(cachedArt, "Listing cached audio must populate the same cover cache as playback")
+    }
+
+    private func render(_ view: some View, size: CGSize, name: String, scheme: ColorScheme = .light,
                         interact: ((UIView) async throws -> Void)? = nil) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
-        let host = UIHostingController(rootView: view.environment(\.locale, Locale(identifier: "zh-Hans")))
+        window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+        let host = UIHostingController(rootView: view.environment(\.locale, Locale(identifier: "zh-Hans")).preferredColorScheme(scheme))
         host.safeAreaRegions = []
         window.rootViewController = host
         window.frame = CGRect(origin: .zero, size: size)

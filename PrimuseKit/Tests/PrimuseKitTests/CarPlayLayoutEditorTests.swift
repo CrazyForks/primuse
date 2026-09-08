@@ -26,12 +26,14 @@ struct CarPlayLayoutEditorTests {
         #expect(block.isVisible)
         #expect(!block.usesCustomContent)
         var configuration = CarPlayLayoutConfiguration()
-        #expect(configuration.showsSiri)
+        #expect(!configuration.showsSiri)
         var siri = CarPlayLayoutBlock(id: "siri", kind: .siri)
         siri.isVisible = false
         configuration.blocks = [block, siri]
         #expect(!configuration.showsSiri)
         #expect(configuration.blocks[0].isVisible)
+        configuration.blocks[1].isVisible = true
+        #expect(configuration.showsSiri)
     }
 
     @Test func legacyLayoutMigratesButExplicitlyEmptyCanvasStaysEmpty() throws {

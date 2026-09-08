@@ -3,7 +3,6 @@ import PrimuseKit
 import SwiftUI
 
 struct CarPlaySettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.settingsFocusedAnchor) private var focusedAnchor
     @State private var model: CarPlayEditorModel
     @State private var catalog = CarPlayEditorCatalog.shared
@@ -42,7 +41,6 @@ struct CarPlaySettingsView: View {
                     CarPlayPresetLibrary(model: model) { showingLibrary = false }
                 } else {
                     VStack(spacing: 0) {
-                        header
                         if !model.inspectorVisible {
                             presetStrip.padding(.top, 8)
                             screenSelector.padding(.horizontal, 16).padding(.top, 12)
@@ -57,8 +55,7 @@ struct CarPlaySettingsView: View {
                                 add: { addingContent = true }, preview: { fullScreen = true })
                                 .frame(maxHeight: 492).padding(.top, 16)
                         } else if model.playerPage {
-                            playbackInspector.padding(16)
-                            Spacer(minLength: 0)
+                            playbackInspector
                         } else {
                             if !model.preview {
                                 Label("carplay_canvas_hint", systemImage: "hand.tap")
@@ -73,21 +70,24 @@ struct CarPlaySettingsView: View {
             .frame(maxWidth: 800).frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(CarPlayEditorTheme.background)
         }
-        .foregroundStyle(CarPlayEditorTheme.text).tint(CarPlayEditorTheme.accent)
-        .environment(\.colorScheme, .dark)
-        .toolbar(.hidden, for: .navigationBar)
+        .foregroundStyle(CarPlayEditorTheme.text)
+        .navigationTitle(LocalizedStringKey(showingLibrary ? "carplay_styles_title" : "carplay_editor_title"))
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(showingLibrary || model.inspectorVisible)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar { editorToolbar }
         .toolbar(.hidden, for: .tabBar)
         .preference(key: CarPlayEditorActivePreferenceKey.self, value: true)
         .sheet(isPresented: $addingModule) {
             CarPlayModulePicker(model: model) { addingModule = false }
-                .presentationDetents([.large]).preferredColorScheme(.dark)
+                .presentationDetents([.large])
         }
         .sheet(isPresented: $addingContent) {
             CarPlayContentPicker(catalog: catalog, initialKind: focusedAnchor == "carplay.folders" ? .folder : .playlist) { item in
                 if model.selectedID == nil { model.add(.custom) }
                 guard let id = model.selectedID else { return false }
                 return model.addContent(item, to: id, resolved: blocks.first(where: { $0.id == id })?.items ?? [])
-            }.presentationDetents([.large]).preferredColorScheme(.dark)
+            }.presentationDetents([.large])
         }
         .fullScreenCover(isPresented: $fullScreen) { expandedPreview }
         .alert("carplay_save_preset", isPresented: $savingPreset) {
@@ -115,25 +115,33 @@ struct CarPlaySettingsView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Button {
-                if model.inspectorVisible { model.inspectorVisible = false; model.continuousChange(false) }
-                else { model.flush(); dismiss() }
-            } label: {
-                Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
-                    .frame(width: 32, height: 32).background(CarPlayEditorTheme.surface, in: Circle())
-            }.buttonStyle(.plain).accessibilityLabel("back")
-            Text("carplay_editor_title").font(.system(size: 17, weight: .semibold))
-            Spacer(minLength: 4)
+    @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
+        if showingLibrary || model.inspectorVisible {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("back", systemImage: "chevron.backward") {
+                    showingLibrary = false
+                    model.inspectorVisible = false
+                    model.continuousChange(false)
+                }.labelStyle(.iconOnly)
+            }
+        }
+        ToolbarItemGroup(placement: .topBarTrailing) {
             if model.inspectorVisible {
                 Button("done") { model.inspectorVisible = false; model.continuousChange(false) }
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(CarPlayEditorTheme.accent)
-            } else {
-                CarPlaySegment(values: [(false, "carplay_edit"), (true, "carplay_preview")], selection: $model.preview, height: 26, prominent: true)
-                    .frame(width: 112)
+            } else if !showingLibrary {
+                Button { model.preview.toggle() } label: { Text(LocalizedStringKey(model.preview ? "carplay_edit" : "carplay_preview")) }
+                    .accessibilityIdentifier("carplay.previewMode")
+                Menu {
+                    Button("carplay_undo", action: model.undo).disabled(!model.history.canUndo)
+                        .accessibilityIdentifier("carplay.undo")
+                    Button("carplay_redo", action: model.redo).disabled(!model.history.canRedo)
+                        .accessibilityIdentifier("carplay.redo")
+                    Divider()
+                    Button("carplay_save_preset_short", systemImage: "square.and.arrow.down") { presetName = ""; savingPreset = true }
+                } label: { Image(systemName: "ellipsis") }
+                    .accessibilityIdentifier("carplay.actions")
             }
-        }.padding(.horizontal, 16).padding(.vertical, 6)
+        }
     }
 
     private var presetStrip: some View {
@@ -153,7 +161,7 @@ struct CarPlaySettingsView: View {
                         }.accessibilityIdentifier("carplay.style." + style.rawValue)
                     }
                     ForEach(model.settings.savedLayouts) { saved in
-                        Button(saved.name) { model.apply(saved) }.font(.system(size: 11)).buttonStyle(CarPlayEditorButton())
+                        Button(saved.name) { model.apply(saved) }.font(.system(size: 11)).buttonStyle(.bordered).buttonBorderShape(.capsule)
                     }
                     Button { presetName = ""; savingPreset = true } label: {
                         Label("carplay_save_preset_short", systemImage: "plus").font(.system(size: 11))
@@ -162,19 +170,18 @@ struct CarPlaySettingsView: View {
                     }
                 }.padding(.leading, 16)
             }.scrollIndicators(.hidden).accessibilityIdentifier("carplay.presets")
-            HStack(spacing: 0) {
-                Button(action: model.undo) { Image(systemName: "arrow.uturn.backward").frame(width: 30, height: 30) }
-                    .disabled(!model.history.canUndo).accessibilityLabel("carplay_undo").accessibilityIdentifier("carplay.undo")
-                Button(action: model.redo) { Image(systemName: "arrow.uturn.forward").frame(width: 30, height: 30) }
-                    .disabled(!model.history.canRedo).accessibilityLabel("carplay_redo").accessibilityIdentifier("carplay.redo")
-            }.font(.system(size: 12)).foregroundStyle(CarPlayEditorTheme.secondary)
-                .background(CarPlayEditorTheme.surface, in: Capsule()).padding(.trailing, 16)
+            HStack(spacing: 4) {
+                Button { cycleStyle(-1) } label: { Image(systemName: "arrow.left").frame(width: 32, height: 32) }
+                    .accessibilityLabel("back").accessibilityIdentifier("carplay.previousStyle")
+                Button { cycleStyle(1) } label: { Image(systemName: "arrow.right").frame(width: 32, height: 32) }
+                    .accessibilityLabel("next").accessibilityIdentifier("carplay.nextStyle")
+            }.font(.body).padding(.trailing, 16)
         }.buttonStyle(.plain).settingsAnchor("carplay.preset")
     }
 
     private var screenSelector: some View {
         HStack(spacing: 8) {
-            CarPlaySegment(values: [(false, "carplay_home_title"), (true, "carplay_now_playing")], selection: $model.playerPage, height: 28)
+            CarPlaySegment(values: [(false, "carplay_home_title"), (true, "carplay_now_playing")], selection: $model.playerPage)
             Button { fullScreen = true } label: {
                 Image(systemName: "arrow.up.right.and.arrow.down.left").font(.system(size: 13))
                     .frame(width: 34, height: 34).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 9))
@@ -262,15 +269,23 @@ struct CarPlaySettingsView: View {
     }
 
     private var playbackInspector: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("carplay_player_style").font(.system(size: 12)).foregroundStyle(CarPlayEditorTheme.secondary)
-            CarPlaySegment(values: [(false, "carplay_player_standard"), (true, "carplay_preset_focus")], selection: configurationBinding(\.minimalNowPlaying))
-            Text("carplay_connection_page").font(.system(size: 12)).foregroundStyle(CarPlayEditorTheme.secondary)
-            CarPlaySegment(values: [(false, "carplay_home_title"), (true, "carplay_now_playing")], selection: configurationBinding(\.opensNowPlayingOnConnect))
-            Text("carplay_after_selection").font(.system(size: 12)).foregroundStyle(CarPlayEditorTheme.secondary)
-            CarPlaySegment(values: [(false, "carplay_stay_here"), (true, "carplay_now_playing")], selection: configurationBinding(\.opensNowPlayingAfterSelection))
-            NavigationLink { SiriSettingsView() } label: { Label("Siri", systemImage: "waveform").font(.system(size: 14)) }
+        Form {
+            Picker("carplay_player_style", selection: configurationBinding(\.minimalNowPlaying)) {
+                Text("carplay_player_standard").tag(false)
+                Text("carplay_preset_focus").tag(true)
+            }
+            Picker("carplay_connection_page", selection: configurationBinding(\.opensNowPlayingOnConnect)) {
+                Text("carplay_home_title").tag(false)
+                Text("carplay_now_playing").tag(true)
+            }
+            Picker("carplay_after_selection", selection: configurationBinding(\.opensNowPlayingAfterSelection)) {
+                Text("carplay_stay_here").tag(false)
+                Text("carplay_now_playing").tag(true)
+            }
         }
+        .scrollContentBackground(.hidden)
+        .contentMargins(.top, 16)
+        .accessibilityIdentifier("carplay.playbackOptions")
     }
 
     private func configurationBinding(_ keyPath: WritableKeyPath<CarPlayLayoutConfiguration, Bool>) -> Binding<Bool> {
@@ -288,15 +303,15 @@ struct CarPlaySettingsView: View {
                     .frame(maxWidth: min(geometry.size.width, geometry.size.height * 16 / 9))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 HStack(spacing: 12) {
-                    Button { cycleStyle(-1) } label: { Image(systemName: "chevron.left").frame(width: 32, height: 36) }
+                    Button { cycleStyle(-1) } label: { Image(systemName: "arrow.left").frame(width: 32, height: 36) }
                     Text(LocalizedStringKey(model.configuration.visualStyle.titleKey)).font(.system(size: 12, weight: .semibold))
-                    Button { cycleStyle(1) } label: { Image(systemName: "chevron.right").frame(width: 32, height: 36) }
+                    Button { cycleStyle(1) } label: { Image(systemName: "arrow.right").frame(width: 32, height: 36) }
                     Spacer()
                     Button { fullScreen = false; model.preview = false } label: { Label("carplay_edit", systemImage: "pencil").font(.system(size: 13, weight: .semibold)) }
-                        .buttonStyle(CarPlayEditorButton())
+                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
                 }.padding(.horizontal, 16).padding(.vertical, 8).background(CarPlayEditorTheme.background.opacity(0.94), in: Capsule()).padding(16)
             }
-        }.foregroundStyle(CarPlayEditorTheme.text).preferredColorScheme(.dark)
+        }.foregroundStyle(CarPlayEditorTheme.text)
     }
 
     private func cycleStyle(_ offset: Int) {

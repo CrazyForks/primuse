@@ -53,7 +53,7 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
         pinnedPlaylistIDs.count + folderIDs.count < Self.maximumShortcutCount
     }
 
-    public var showsSiri: Bool { blocks.first { $0.kind == .siri }?.isVisible ?? true }
+    public var showsSiri: Bool { blocks.first { $0.kind == .siri }?.isVisible ?? false }
 
     public var visibleSections: [CarPlayHomeSection] {
         Self.unique(sectionOrder + CarPlayHomeSection.allCases).filter { !hiddenSections.contains($0) }

@@ -25,7 +25,7 @@ struct CarPlayModuleInspector: View {
                     itemCount
                     VStack(alignment: .leading, spacing: 8) {
                         sectionTitle("carplay_tap_action")
-                        CarPlaySegment(values: [(true, "carplay_action_play"), (false, "carplay_action_browse")], selection: binding(\.playsImmediately), prominent: true)
+                        CarPlaySegment(values: [(true, "carplay_action_play"), (false, "carplay_action_browse")], selection: binding(\.playsImmediately))
                     }.settingsAnchor("carplay.directPlay")
                     sources
                     HStack {
