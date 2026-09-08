@@ -666,6 +666,38 @@ final class ArtistNameLibraryTests: XCTestCase {
         XCTAssertTrue(restored.songs(forArtist: MusicLibrary.hashID("host")).isEmpty)
     }
 
+    @MainActor
+    func testArtistArtworkFallbackPrefersCoveredContributorSong() async throws {
+        let storageDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ArtistArtworkFallbackTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: storageDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: storageDirectory) }
+
+        let library = MusicLibrary(storageDirectory: storageDirectory)
+        let uncovered = makeSong(id: "a-uncovered", artistName: "Guest")
+        var covered = makeSong(
+            id: "z-covered",
+            artistName: "Host; Guest",
+            sourceArtistNames: ["Host", "Guest"]
+        )
+        covered.coverArtFileName = "/Music/Album/cover.jpg"
+        library.addSongs([uncovered, covered], affectedSourceIDs: ["source"])
+
+        let guestID = MusicLibrary.hashID("guest")
+        for _ in 0..<200 where library.preferredArtworkSong(forArtistID: guestID) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(library.preferredArtworkSong(forArtistID: guestID)?.id, covered.id)
+        XCTAssertEqual(
+            library.preferredArtworkSong(forArtistID: MusicLibrary.hashID("host"))?.id,
+            covered.id
+        )
+    }
+
     func testMetadataSearchFindsSecondaryNativeArtist() {
         let song = makeSong(
             artistName: "Primary & Secondary",

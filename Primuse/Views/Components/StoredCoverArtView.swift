@@ -722,6 +722,7 @@ struct ArtistArtworkView: View {
     @Environment(MusicLibrary.self) private var library
     @State private var uploadedImage: PlatformImage?
     @State private var reloadRevision = 0
+    @State private var automaticArtworkResolved: Bool?
 
     private var currentArtist: PrimuseKit.Artist {
         library.visibleArtist(id: artist.id) ?? artist
@@ -778,13 +779,43 @@ struct ArtistArtworkView: View {
         presentation: MusicLibrary.ArtworkPresentation
     ) -> some View {
         ZStack {
+            if showsPlaceholder {
+                CachedArtworkView(
+                    coverRef: nil,
+                    songID: nil,
+                    size: side,
+                    cornerRadius: 0,
+                    placeholderIcon: "music.mic",
+                    showsPlaceholder: true
+                )
+            }
+
+            if currentArtist.thumbnailPath?.isEmpty != false
+                || automaticArtworkResolved == false,
+               let fallbackSong = library.preferredArtworkSong(
+                   forArtistID: currentArtist.id
+               ) {
+                CachedArtworkView(
+                    coverRef: fallbackSong.coverArtFileName,
+                    songID: fallbackSong.id,
+                    size: side,
+                    cornerRadius: 0,
+                    sourceID: fallbackSong.sourceID,
+                    filePath: fallbackSong.filePath,
+                    fileFormat: fallbackSong.fileFormat,
+                    showsPlaceholder: false,
+                    revisionToken: library.artworkOverrideRevision
+                )
+            }
+
             CachedArtworkView(
                 artistID: currentArtist.id,
                 artistName: currentArtist.name,
                 artworkReference: currentArtist.thumbnailPath,
                 size: side,
                 cornerRadius: 0,
-                showsPlaceholder: showsPlaceholder
+                showsPlaceholder: false,
+                onResolutionChange: { automaticArtworkResolved = $0 }
             )
 
             if let uploadedImage, presentation.uploadedContentID != nil {

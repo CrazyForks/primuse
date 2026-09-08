@@ -2852,6 +2852,9 @@ final class MusicLibrary {
     /// selection beside the other visible lookups so scrolling never scans and
     /// sorts the complete library from a card body.
     @ObservationIgnored private var preferredArtworkSongIDByAlbumID: [String: String] = [:]
+    /// Artist rows use the same O(1) fallback so an artist without dedicated
+    /// artwork can still show representative embedded or album artwork.
+    @ObservationIgnored private var preferredArtworkSongIDByArtistID: [String: String] = [:]
 
     private struct PreparedVisibleCache: Sendable {
         let songs: [Song]
@@ -2871,6 +2874,7 @@ final class MusicLibrary {
         let countBySourceID: [String: Int]
         let allCountBySourceID: [String: Int]
         let preferredArtworkSongIDByAlbumID: [String: String]
+        let preferredArtworkSongIDByArtistID: [String: String]
         let orderedIDsChanged: Bool
     }
     /// Changes only when the ordered set of visible song IDs changes. Views
@@ -2957,6 +2961,7 @@ final class MusicLibrary {
         visibleSongCountBySourceID = prepared.countBySourceID
         songCountBySourceID = prepared.allCountBySourceID
         preferredArtworkSongIDByAlbumID = prepared.preferredArtworkSongIDByAlbumID
+        preferredArtworkSongIDByArtistID = prepared.preferredArtworkSongIDByArtistID
         albumArtworkLookupRevision &+= 1
         if prepared.orderedIDsChanged {
             visibleSongCollectionRevision &+= 1
@@ -3026,6 +3031,7 @@ final class MusicLibrary {
             preferredArtworkSongIDByAlbumID: makePreferredArtworkSongLookup(
                 songs: nextVisibleSongs
             ),
+            preferredArtworkSongIDByArtistID: lookups.preferredArtworkSongIDByArtistID,
             orderedIDsChanged: !haveSameOrderedIDs(previousVisibleSongs, nextVisibleSongs)
         )
     }
@@ -3044,7 +3050,8 @@ final class MusicLibrary {
         songIDsByArtistID: [String: [String]],
         songsBySourceID: [String: [Song]],
         playableBySourceID: [String: [Song]],
-        countBySourceID: [String: Int]
+        countBySourceID: [String: Int],
+        preferredArtworkSongIDByArtistID: [String: String]
     ) {
         var indexByID: [String: Int] = [:]
         var songByID: [String: Song] = [:]
@@ -3052,14 +3059,23 @@ final class MusicLibrary {
         var songsBySourceID: [String: [Song]] = [:]
         var playableBySourceID: [String: [Song]] = [:]
         var countBySourceID: [String: Int] = [:]
+        var preferredArtworkSongsByArtistID: [String: Song] = [:]
         for (index, song) in songs.enumerated() {
             indexByID[song.id] = index
             if songByID[song.id] == nil { songByID[song.id] = song }
-            for artistID in resolvedArtistIDs(
+            let artistIDs = resolvedArtistIDs(
                 for: song,
                 configuration: artistNameConfiguration
-            ) {
+            )
+            for artistID in artistIDs {
                 songIDsByArtistID[artistID, default: []].append(song.id)
+                if let current = preferredArtworkSongsByArtistID[artistID] {
+                    if artworkFallbackPrecedes(song, current) {
+                        preferredArtworkSongsByArtistID[artistID] = song
+                    }
+                } else {
+                    preferredArtworkSongsByArtistID[artistID] = song
+                }
             }
             songsBySourceID[song.sourceID, default: []].append(song)
             countBySourceID[song.sourceID, default: 0] += 1
@@ -3073,7 +3089,8 @@ final class MusicLibrary {
             songIDsByArtistID,
             songsBySourceID,
             playableBySourceID,
-            countBySourceID
+            countBySourceID,
+            preferredArtworkSongsByArtistID.mapValues(\.id)
         )
     }
 
@@ -3097,14 +3114,14 @@ final class MusicLibrary {
                 preferredSongs[albumID] = song
                 continue
             }
-            if albumArtworkFallbackPrecedes(song, current) {
+            if artworkFallbackPrecedes(song, current) {
                 preferredSongs[albumID] = song
             }
         }
         return preferredSongs.mapValues(\.id)
     }
 
-    private nonisolated static func albumArtworkFallbackPrecedes(
+    private nonisolated static func artworkFallbackPrecedes(
         _ lhs: Song,
         _ rhs: Song
     ) -> Bool {
@@ -4183,17 +4200,33 @@ final class MusicLibrary {
         return visibleSongByID[songID]
     }
 
+    func preferredArtworkSong(forArtistID artistID: String) -> Song? {
+        _ = albumArtworkLookupRevision
+        _ = songReplacementToken
+        guard let songID = preferredArtworkSongIDByArtistID[artistID] else { return nil }
+        return visibleSongByID[songID]
+    }
+
     private func promotePreferredArtworkSongIfNeeded(_ song: Song) {
-        guard visibleSongByID[song.id] != nil,
-              let albumID = song.albumID,
-              !albumID.isEmpty else { return }
-        if let currentID = preferredArtworkSongIDByAlbumID[albumID],
-           let current = visibleSongByID[currentID],
-           !Self.albumArtworkFallbackPrecedes(song, current) {
-            return
+        guard visibleSongByID[song.id] != nil else { return }
+        var changed = false
+        if let albumID = song.albumID, !albumID.isEmpty {
+            let current = preferredArtworkSongIDByAlbumID[albumID]
+                .flatMap { visibleSongByID[$0] }
+            if current.map({ Self.artworkFallbackPrecedes(song, $0) }) != false {
+                preferredArtworkSongIDByAlbumID[albumID] = song.id
+                changed = true
+            }
         }
-        preferredArtworkSongIDByAlbumID[albumID] = song.id
-        albumArtworkLookupRevision &+= 1
+        for artistID in artistIDs(for: song) {
+            let current = preferredArtworkSongIDByArtistID[artistID]
+                .flatMap { visibleSongByID[$0] }
+            if current.map({ Self.artworkFallbackPrecedes(song, $0) }) != false {
+                preferredArtworkSongIDByArtistID[artistID] = song.id
+                changed = true
+            }
+        }
+        if changed { albumArtworkLookupRevision &+= 1 }
     }
 
     // MARK: - User-selected library artwork
