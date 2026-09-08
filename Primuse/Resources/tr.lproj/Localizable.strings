@@ -926,7 +926,7 @@
 "immersive_demo_lyric_12" = "Bas düştüğünde yıldız ışığının bile ağırlığı vardır";
 "Share playlists, smart playlists, and family music sources" = "Çalma listelerini, akıllı çalma listelerini ve aile müziği kaynaklarını paylaşın";
 "Done" = "Bitti";
-"playback_error_apple_music_generic" = "Apple Music oynatma başarısız oldu. Aboneliğinizi veya ağınızı kontrol edin.";
+"playback_error_apple_music_generic" = "Apple Music bu şarkıyı çalamadı. Müzik uygulamasında çalınabildiğini kontrol edip tekrar deneyin.";
 "ai_primuse_relay_fallback_provider_format" = "Yerleşik hizmet kullanılamıyor. “%@”ye geri dönüş doğrulandı.";
 "radio_connected_for" = "Şunun için bağlanıldı:";
 "lyrics_source_reload_unchanged" = "Kaynak şarkı sözleri zaten önbelleğe alınan şarkı sözleriyle eşleşiyor.";
@@ -3570,6 +3570,9 @@
 "library_quick_access_cover_collage" = "Tümü kolaj";
 "library_quick_access_cover_description" = "Ana Sayfa ve Arşivdeki Hızlı Erişime uygulanır. Varsayılan, mevcut stilleri korur. Tek tip stiller beğenilen şarkılar için şarkı görsellerini kullanır; kolajlar dört kutuyu doldurmak için mevcut görselleri tekrarlar.";
 
+"playback_error_local_audio" = "Bu ses dosyasının kodu çözülemedi. Dosya bozuk olabilir veya desteklenmeyen bir kodlama kullanıyor olabilir.";
+"apple_music_subscription_check_failed" = "Apple Music çalma izni doğrulanamadı. Bağlantınızı kontrol edip tekrar deneyin.";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3604,6 +3607,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

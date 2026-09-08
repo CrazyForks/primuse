@@ -653,7 +653,7 @@
 "playback_error_source_disabled" = "该音乐源已停用";
 "playback_error_decode" = "无法播放此曲目";
 "playback_error_format" = "不支持的音频格式";
-"playback_error_apple_music_generic" = "Apple Music 播放失败,请检查订阅状态或网络";
+"playback_error_apple_music_generic" = "Apple Music 无法播放此歌曲。请先在“音乐”App 中确认该歌曲可以播放，再重试。";
 
 // MARK: - Gapless
 "gapless_not_available" = "无缝播放已可用于队列曲目；开启淡入淡出会自动关闭它。";
@@ -3757,6 +3757,9 @@
 "library_quick_access_cover_collage" = "统一多图合并";
 "library_quick_access_cover_description" = "应用于首页和资料库的快捷收藏。默认保留现有样式；统一样式会为“我喜欢的”使用歌曲封面，多图不足四张时重复补齐。";
 
+"playback_error_local_audio" = "无法解码此音频文件，文件可能已损坏或使用了不支持的编码。";
+"apple_music_subscription_check_failed" = "暂时无法确认 Apple Music 播放权限。请检查网络后重试。";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "首页";
 "carplay_layout_title" = "布局预设";
@@ -3791,6 +3794,7 @@
 "carplay_parent_folder" = "上级目录";
 "carplay_play_all" = "播放全部";
 "carplay_shuffle_all" = "随机播放";
+
 "carplay_block_custom" = "自选内容";
 "carplay_content_unavailable" = "内容不可用";
 "carplay_save_preset" = "保存预设";

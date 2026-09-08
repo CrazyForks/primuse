@@ -2097,7 +2097,7 @@
 "play_similar_radio" = "تشغيل راديو مشابه";
 "playable_songs_count_format" = "%d أغاني قابلة للتشغيل";
 "playback" = "التشغيل";
-"playback_error_apple_music_generic" = "Apple Music فشل التشغيل. تحقق من اشتراكك أو شبكتك.";
+"playback_error_apple_music_generic" = "تعذر على Apple Music تشغيل هذه الأغنية. تأكد من إمكانية تشغيلها في تطبيق الموسيقى، ثم حاول مجددًا.";
 "playback_error_connection" = "لا يمكن الاتصال بالمصدر";
 "playback_error_decode" = "لا يمكن تشغيل هذا المسار";
 "playback_error_format" = "تنسيق الصوت غير مدعوم";
@@ -3570,6 +3570,9 @@
 "library_quick_access_cover_collage" = "صور مجمّعة موحّدة";
 "library_quick_access_cover_description" = "ينطبق على الوصول السريع في الرئيسية والمكتبة. يحافظ الافتراضي على الأنماط الحالية. تستخدم الأنماط الموحّدة صور الأغاني للأغاني المفضلة، وتكرّر الصور المجمّعة الصور المتاحة لملء أربع خانات.";
 
+"playback_error_local_audio" = "تعذر فك ترميز ملف الصوت هذا. قد يكون تالفًا أو يستخدم ترميزًا غير مدعوم.";
+"apple_music_subscription_check_failed" = "تعذر التحقق من صلاحية تشغيل Apple Music. تحقق من اتصالك وحاول مجددًا.";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3604,6 +3607,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

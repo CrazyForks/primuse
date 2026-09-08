@@ -14,7 +14,8 @@ public struct PlaybackAudioSessionFailure: Error, LocalizedError, Sendable {
 public enum PlaybackPipelineFailureAction: Equatable, Sendable {
     /// The result belongs to an older request and must not publish any state.
     case discardStaleResult
-    /// Cancellation or unavailable audio ownership must not skip a healthy item.
+    /// Cancellation, audio ownership or a local asset requiring user action
+    /// must preserve the selected item.
     case preserveCurrentItem
     /// A current, non-cancellation failure may use normal queue recovery.
     case advanceAfterFailure
@@ -28,17 +29,19 @@ public enum PlaybackPipelineFailurePolicy {
         action(
             requestIsCurrent: requestIsCurrent,
             errorIsCancellation: OperationCancellationPolicy.isCancellation(error),
-            errorIsAudioSessionFailure: error is PlaybackAudioSessionFailure
+            errorIsAudioSessionFailure: error is PlaybackAudioSessionFailure,
+            errorRequiresUserAction: error is AppleMusicLocalAssetError
         )
     }
 
     public static func action(
         requestIsCurrent: Bool,
         errorIsCancellation: Bool,
-        errorIsAudioSessionFailure: Bool = false
+        errorIsAudioSessionFailure: Bool = false,
+        errorRequiresUserAction: Bool = false
     ) -> PlaybackPipelineFailureAction {
         guard requestIsCurrent else { return .discardStaleResult }
-        return errorIsCancellation || errorIsAudioSessionFailure
+        return errorIsCancellation || errorIsAudioSessionFailure || errorRequiresUserAction
             ? .preserveCurrentItem : .advanceAfterFailure
     }
 }

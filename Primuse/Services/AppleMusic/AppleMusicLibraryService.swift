@@ -178,7 +178,9 @@ final class AppleMusicLibraryService {
               !Task.isCancelled else { return }
         appleMusic.failPlaybackRequest(
             requestID,
-            message: String(localized: "playback_error_apple_music_generic")
+            message: appleMusic.authState == .authorized
+                ? String(localized: "playback_error_apple_music_generic")
+                : String(localized: "apple_music_library_not_authorized")
         )
     }
 
@@ -919,13 +921,7 @@ final class AppleMusicLibraryService {
             var confirmedIDs = Set<String>()
             var confirmedItemCount = 0
             for item in localLibrary.allMediaItems {
-                guard item.mediaKind == .kindSong,
-                      item.locationType == .file,
-                      !item.isDRMProtected,
-                      let location = item.location,
-                      location.isFileURL,
-                      location.pathExtension.lowercased() != "m4p",
-                      FileManager.default.isReadableFile(atPath: location.path) else {
+                guard (try? AppleMusicLibrarySource.localAsset(for: item).validatedURL()) != nil else {
                     continue
                 }
                 confirmedItemCount += 1

@@ -617,7 +617,7 @@
 "playback_error_source_disabled" = "該音樂來源已停用";
 "playback_error_decode" = "無法播放此曲目";
 "playback_error_format" = "不支援的音訊格式";
-"playback_error_apple_music_generic" = "Apple Music 播放失敗，請檢查訂閱狀態或網路";
+"playback_error_apple_music_generic" = "Apple Music 無法播放此歌曲。請先在「音樂」App 中確認該歌曲可以播放，再試一次。";
 "gapless_not_available" = "無縫播放已可用於佇列曲目；開啟淡入淡出會自動將其關閉。";
 "clear_metadata" = "清除封面與歌詞";
 "clear_metadata_confirm" = "將刪除所有已快取的封面和歌詞。需要時會從音樂來源重新取得。";
@@ -3641,6 +3641,9 @@
 "library_quick_access_cover_collage" = "統一多圖合併";
 "library_quick_access_cover_description" = "套用至首頁和資料庫的快捷收藏。預設保留現有樣式；統一樣式會為「我喜歡的」使用歌曲封面，多圖不足四張時重複補齊。";
 
+"playback_error_local_audio" = "無法解碼此音訊檔案，檔案可能已損壞或使用不支援的編碼。";
+"apple_music_subscription_check_failed" = "暫時無法確認 Apple Music 播放權限。請檢查網路後再試。";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "首頁";
 "carplay_layout_title" = "佈局預設";
@@ -3675,6 +3678,7 @@
 "carplay_parent_folder" = "上一層目錄";
 "carplay_play_all" = "播放全部";
 "carplay_shuffle_all" = "隨機播放";
+
 "carplay_block_custom" = "自選內容";
 "carplay_content_unavailable" = "內容無法使用";
 "carplay_save_preset" = "儲存預設";

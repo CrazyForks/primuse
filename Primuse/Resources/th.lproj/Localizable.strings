@@ -2097,7 +2097,7 @@
 "play_similar_radio" = "เล่นวิทยุที่คล้ายกัน";
 "playable_songs_count_format" = "%d เพลงที่เล่นได้";
 "playback" = "การเล่น";
-"playback_error_apple_music_generic" = "Apple Music การเล่นล้มเหลว ตรวจสอบการสมัครสมาชิกหรือเครือข่ายของคุณ";
+"playback_error_apple_music_generic" = "Apple Music ไม่สามารถเล่นเพลงนี้ได้ โปรดตรวจสอบว่าเล่นได้ในแอปเพลง แล้วลองอีกครั้ง";
 "playback_error_connection" = "ไม่สามารถเชื่อมต่อกับแหล่งสัญญาณได้";
 "playback_error_decode" = "ไม่สามารถเล่นแทร็กนี้ได้";
 "playback_error_format" = "รูปแบบเสียงที่ไม่รองรับ";
@@ -3570,6 +3570,9 @@
 "library_quick_access_cover_collage" = "ภาพปะติดทั้งหมด";
 "library_quick_access_cover_description" = "ใช้กับการเข้าถึงด่วนในหน้าหลักและคลัง ค่าเริ่มต้นคงรูปแบบเดิม รูปแบบเดียวกันใช้ภาพเพลงสำหรับเพลงที่ชอบ และภาพปะติดจะใช้ภาพที่มีซ้ำเพื่อเติมให้ครบสี่ช่อง";
 
+"playback_error_local_audio" = "ไม่สามารถถอดรหัสไฟล์เสียงนี้ได้ ไฟล์อาจเสียหายหรือใช้การเข้ารหัสที่ไม่รองรับ";
+"apple_music_subscription_check_failed" = "ไม่สามารถตรวจสอบสิทธิ์การเล่น Apple Music ได้ โปรดตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3604,6 +3607,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

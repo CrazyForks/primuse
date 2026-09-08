@@ -110,6 +110,7 @@ struct MacImmersivePlayerView: View {
             }
         }
         .ignoresSafeArea()
+        .macPlaybackErrorFeedback()
         .environment(\.colorScheme, presentationEffect.prefersLightContent ? .light : .dark)
         .animation(.easeInOut(duration: 0.5), value: theme.colorID)
         .focusable()

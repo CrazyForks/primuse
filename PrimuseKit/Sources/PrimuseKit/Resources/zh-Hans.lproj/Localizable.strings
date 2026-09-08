@@ -728,3 +728,10 @@
 "error.songloft.authenticationFailed" = "Songloft 登录失败，请检查账号和密码。";
 "error.songloft.invalidResponse" = "Songloft 返回了不完整或无效的数据，已有曲库保持不变。";
 "error.songloft.http" = "Songloft 服务返回 HTTP %@。";
+
+"appleMusic.localAsset.managedDownload" = "此 Apple Music 下载无法作为本地音频文件播放。请从同步的 Apple Music 歌单播放，或在“音乐”App 中打开。";
+"appleMusic.localAsset.protectedContent" = "此歌曲受版权保护，无法作为本地音频文件播放。请从同步的 Apple Music 歌单播放，或在“音乐”App 中打开。";
+"appleMusic.localAsset.unavailable" = "找不到此歌曲的本地文件。请在“音乐”App 中确认文件位置，再重新扫描此音乐源。";
+"appleMusic.localAsset.unreadable" = "无法读取此歌曲的本地文件。请检查文件的访问权限。";
+"appleMusic.localAsset.invalidFile" = "此项目不是可播放的本地音频文件。请在“音乐”App 中确认后重新扫描此音乐源。";
+"appleMusic.localAsset.libraryUnavailable" = "无法刷新本机音乐资料库。请在“音乐”App 中确认资料库可用后重试。";

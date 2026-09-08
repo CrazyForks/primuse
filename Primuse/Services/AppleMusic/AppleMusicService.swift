@@ -241,6 +241,11 @@ final class AppleMusicService {
         requestID: UUID
     ) async -> Bool {
         guard isPlaybackRequestPending(requestID), !Task.isCancelled else { return false }
+        authState = Self.mapStatus(MusicAuthorization.currentStatus)
+        guard authState == .authorized else {
+            failPlaybackRequest(requestID, message: String(localized: "apple_music_library_not_authorized"))
+            return false
+        }
         guard AppleMusicSubscriptionGatePolicy.requiresCatalogCapability(for: source) else {
             return true
         }
@@ -259,7 +264,7 @@ final class AppleMusicService {
         } catch {
             guard isPlaybackRequestPending(requestID), !Task.isCancelled else { return false }
             plog("⚠️Apple Music subscription check failed: \(error.localizedDescription)")
-            failPlaybackRequest(requestID, message: error.localizedDescription)
+            failPlaybackRequest(requestID, message: String(localized: "apple_music_subscription_check_failed"))
             return false
         }
     }

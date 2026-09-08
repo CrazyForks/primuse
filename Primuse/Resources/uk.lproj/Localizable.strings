@@ -926,7 +926,7 @@
 "immersive_demo_lyric_12" = "Коли падає бас, навіть світло зірок має вагу";
 "Share playlists, smart playlists, and family music sources" = "Діліться списками відтворення, розумними списками відтворення та джерелами сімейної музики";
 "Done" = "Готово";
-"playback_error_apple_music_generic" = "Не вдалося відтворити Apple Music. Перевірте свою підписку або мережу.";
+"playback_error_apple_music_generic" = "Apple Music не вдалося відтворити цю пісню. Перевірте її відтворення в програмі «Музика» та спробуйте ще раз.";
 "ai_primuse_relay_fallback_provider_format" = "Вбудована служба недоступна. Перевірений резервний варіант до “%@”.";
 "radio_connected_for" = "Підключено для";
 "lyrics_source_reload_unchanged" = "Вихідний текст вже збігається з кешованим.";
@@ -3570,6 +3570,9 @@
 "library_quick_access_cover_collage" = "Усі колажі";
 "library_quick_access_cover_description" = "Застосовується до швидкого доступу на головній і в медіатеці. Типовий стиль зберігає поточний вигляд. Єдині стилі використовують обкладинки пісень для улюблених треків; колажі повторюють доступні зображення, заповнюючи чотири клітинки.";
 
+"playback_error_local_audio" = "Не вдалося декодувати аудіофайл. Можливо, його пошкоджено або він використовує непідтримуване кодування.";
+"apple_music_subscription_check_failed" = "Не вдалося перевірити права на відтворення Apple Music. Перевірте підключення та спробуйте ще раз.";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3604,6 +3607,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

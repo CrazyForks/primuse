@@ -678,3 +678,10 @@
 "error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
 "error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
 "error.songloft.http" = "Songloft returned HTTP %@.";
+
+"appleMusic.localAsset.managedDownload" = "ไม่สามารถเล่นรายการดาวน์โหลด Apple Music นี้เป็นไฟล์เสียงในเครื่องได้ โปรดเล่นจากเพลย์ลิสต์ Apple Music ที่ซิงค์แล้ว หรือเปิดในแอปเพลง";
+"appleMusic.localAsset.protectedContent" = "เพลงนี้มีการป้องกันและไม่สามารถเล่นเป็นไฟล์เสียงในเครื่องได้ โปรดเล่นจากเพลย์ลิสต์ Apple Music ที่ซิงค์แล้ว หรือเปิดในแอปเพลง";
+"appleMusic.localAsset.unavailable" = "ไม่พบไฟล์เพลงในเครื่อง โปรดตรวจสอบตำแหน่งไฟล์ในแอปเพลง แล้วสแกนแหล่งเพลงนี้อีกครั้ง";
+"appleMusic.localAsset.unreadable" = "ไม่สามารถอ่านไฟล์เพลงในเครื่องได้ โปรดตรวจสอบสิทธิ์การเข้าถึงไฟล์";
+"appleMusic.localAsset.invalidFile" = "รายการนี้ไม่ใช่ไฟล์เสียงในเครื่องที่เล่นได้ โปรดตรวจสอบในแอปเพลง แล้วสแกนแหล่งเพลงนี้อีกครั้ง";
+"appleMusic.localAsset.libraryUnavailable" = "ไม่สามารถรีเฟรชคลังเพลงในเครื่องได้ โปรดตรวจสอบว่าคลังพร้อมใช้งานในแอปเพลง แล้วลองอีกครั้ง";

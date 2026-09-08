@@ -653,7 +653,7 @@
 "playback_error_source_disabled" = "This music source is disabled";
 "playback_error_decode" = "Cannot play this track";
 "playback_error_format" = "Unsupported audio format";
-"playback_error_apple_music_generic" = "Apple Music playback failed. Check your subscription or network.";
+"playback_error_apple_music_generic" = "Apple Music could not play this song. Check that it plays in the Music app, then try again.";
 
 // MARK: - Gapless
 "gapless_not_available" = "Gapless playback is available for queued tracks. Crossfade turns it off.";
@@ -3442,6 +3442,9 @@
 "library_quick_access_cover_collage" = "Uniform Collages";
 "library_quick_access_cover_description" = "Applies to Quick Access in Home and Library. Default keeps existing styles. Uniform styles use song artwork for Liked Songs; collages repeat available images to fill four tiles.";
 
+"playback_error_local_audio" = "This audio file could not be decoded. It may be damaged or use an unsupported encoding.";
+"apple_music_subscription_check_failed" = "Apple Music playback access could not be verified. Check your connection and try again.";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3476,6 +3479,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

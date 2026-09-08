@@ -2097,7 +2097,7 @@
 "play_similar_radio" = "Reproducir radio similar";
 "playable_songs_count_format" = "Canciones reproducibles de %d";
 "playback" = "Reproducción";
-"playback_error_apple_music_generic" = "Falló la reproducción de Apple Music. Verifique su suscripción o red.";
+"playback_error_apple_music_generic" = "Apple Music no pudo reproducir esta canción. Comprueba que se reproduzca en la app Música e inténtalo de nuevo.";
 "playback_error_connection" = "No se puede conectar a la fuente";
 "playback_error_decode" = "No se puede reproducir esta pista";
 "playback_error_format" = "Formato de audio no compatible";
@@ -3570,6 +3570,9 @@
 "library_quick_access_cover_collage" = "Collages uniformes";
 "library_quick_access_cover_description" = "Se aplica al acceso rápido en Inicio y Biblioteca. El estilo predeterminado conserva el aspecto actual. Los estilos uniformes usan portadas para las canciones favoritas; los collages repiten las imágenes disponibles para llenar cuatro espacios.";
 
+"playback_error_local_audio" = "No se pudo decodificar este archivo de audio. Puede estar dañado o usar una codificación no compatible.";
+"apple_music_subscription_check_failed" = "No se pudo verificar el permiso de reproducción de Apple Music. Revisa tu conexión e inténtalo de nuevo.";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3604,6 +3607,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

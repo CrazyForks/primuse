@@ -678,3 +678,10 @@
 "error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
 "error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
 "error.songloft.http" = "Songloft returned HTTP %@.";
+
+"appleMusic.localAsset.managedDownload" = "इस Apple Music डाउनलोड को स्थानीय ऑडियो फ़ाइल के रूप में नहीं चलाया जा सकता। इसे सिंक की गई Apple Music प्लेलिस्ट से चलाएँ या संगीत ऐप में खोलें।";
+"appleMusic.localAsset.protectedContent" = "यह गीत सुरक्षित है और स्थानीय ऑडियो फ़ाइल के रूप में नहीं चलाया जा सकता। इसे सिंक की गई Apple Music प्लेलिस्ट से चलाएँ या संगीत ऐप में खोलें।";
+"appleMusic.localAsset.unavailable" = "गीत की स्थानीय फ़ाइल नहीं मिली। संगीत ऐप में उसका स्थान जाँचें और इस स्रोत को फिर से स्कैन करें।";
+"appleMusic.localAsset.unreadable" = "गीत की स्थानीय फ़ाइल पढ़ी नहीं जा सकती। फ़ाइल की एक्सेस अनुमतियाँ जाँचें।";
+"appleMusic.localAsset.invalidFile" = "यह आइटम चलाने योग्य स्थानीय ऑडियो फ़ाइल नहीं है। इसे संगीत ऐप में जाँचें और इस स्रोत को फिर से स्कैन करें।";
+"appleMusic.localAsset.libraryUnavailable" = "स्थानीय संगीत लाइब्रेरी रीफ़्रेश नहीं की जा सकी। जाँचें कि वह संगीत ऐप में उपलब्ध है, फिर दोबारा कोशिश करें।";

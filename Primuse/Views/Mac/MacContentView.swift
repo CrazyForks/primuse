@@ -154,6 +154,7 @@ struct MacContentView: View {
             }
         }
         .songBatchRemovalFeedback()
+        .macPlaybackErrorFeedback()
         .environment(\.pmAppearance, preferences.appearance)
         .background(PMColor.bg.ignoresSafeArea())
         .background(PMWindowChromeConfigurator())

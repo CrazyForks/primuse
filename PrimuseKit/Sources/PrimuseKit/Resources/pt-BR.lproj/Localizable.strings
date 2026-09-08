@@ -678,3 +678,10 @@
 "error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
 "error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
 "error.songloft.http" = "Songloft returned HTTP %@.";
+
+"appleMusic.localAsset.managedDownload" = "Este download do Apple Music não pode ser reproduzido como arquivo de áudio local. Reproduza-o em uma playlist sincronizada do Apple Music ou abra-o no app Música.";
+"appleMusic.localAsset.protectedContent" = "Esta música é protegida e não pode ser reproduzida como arquivo de áudio local. Reproduza-a em uma playlist sincronizada do Apple Music ou abra-a no app Música.";
+"appleMusic.localAsset.unavailable" = "O arquivo local da música não foi encontrado. Verifique a localização no app Música e examine esta fonte novamente.";
+"appleMusic.localAsset.unreadable" = "Não foi possível ler o arquivo local da música. Verifique as permissões de acesso ao arquivo.";
+"appleMusic.localAsset.invalidFile" = "Este item não é um arquivo de áudio local reproduzível. Verifique-o no app Música e examine esta fonte novamente.";
+"appleMusic.localAsset.libraryUnavailable" = "Não foi possível atualizar a biblioteca de músicas local. Verifique se ela está disponível no app Música e tente novamente.";

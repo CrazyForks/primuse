@@ -14,14 +14,14 @@ import PrimuseKit
 /// blob is treated as our `filePath`, so a moved-on-disk track keeps the
 /// same Song row across rescans. `localURL(for:)` resolves the persistent
 /// ID back to a file URL through an in-actor cache populated during scan.
-actor AppleMusicLibrarySource: SongScanningConnector {
+actor AppleMusicLibrarySource: ExistingSongAwareScanningConnector {
     let sourceID: String
 
     private var library: ITLibrary?
     /// persistentID (hex string) → on-disk URL, populated during scan so
     /// `localURL(for:)` can answer playback resolution without reopening
     /// the whole library every time.
-    private var locationCache: [String: URL] = [:]
+    private var locationCache: [String: AppleMusicLocalAsset] = [:]
 
     init(sourceID: String) {
         self.sourceID = sourceID
@@ -49,36 +49,61 @@ actor AppleMusicLibrarySource: SongScanningConnector {
     // MARK: - SongScanningConnector
 
     func scanSongs(from path: String) async throws -> AsyncThrowingStream<ConnectorScannedSong, Error> {
+        try await scanSongs(from: path, existingSongs: [])
+    }
+
+    func scanSongs(
+        from path: String,
+        existingSongs: [Song]
+    ) async throws -> AsyncThrowingStream<ConnectorScannedSong, Error> {
         try await connect()
         guard let library else {
-            throw SourceError.connectionFailed("ITLibrary unavailable")
+            throw AppleMusicLocalAssetError.libraryUnavailable
         }
+        // A retained ITLibrary snapshot otherwise keeps importing files that
+        // Music.app has removed or replaced since the previous scan.
+        guard library.reloadData() else { throw AppleMusicLocalAssetError.libraryUnavailable }
         let items = library.allMediaItems
         let sourceID = self.sourceID
+        let existingByPath = Dictionary(
+            existingSongs.filter { $0.sourceID == sourceID }.map { ($0.filePath, $0) },
+            uniquingKeysWith: { existing, _ in existing }
+        )
+        locationCache.removeAll(keepingCapacity: true)
 
         return AsyncThrowingStream { continuation in
             Task {
-                var skippedDRM = 0
+                var skipped: [AppleMusicLocalAssetError: Int] = [:]
+                var retainedUnavailableCount = 0
                 for item in items {
                     // Songs only — skip podcasts, audiobooks, video, voice memos, …
                     guard item.mediaKind == .kindSong else { continue }
-                    // Cloud-only / missing items report nil location; can't play them.
-                    guard let url = item.location, url.isFileURL else { continue }
-
-                    let ext = url.pathExtension.lowercased()
-                    // .m4p = FairPlay-DRM 加密的 Apple Music 订阅下载,只
-                    // Apple 的 Music.app 能解密。任何第三方播放器 (包括我们)
-                    // 都无法解码。直接 skip,免得歌曲出现在列表里却一播
-                    // 就立刻跳过让用户困惑。
-                    if ext == "m4p" {
-                        skippedDRM += 1
+                    let pidKey = persistentKey(item.persistentID)
+                    let asset = Self.localAsset(for: item)
+                    let url: URL
+                    do {
+                        url = try asset.validatedURL()
+                    } catch let reason as AppleMusicLocalAssetError {
+                        skipped[reason, default: 0] += 1
+                        // An unmounted disk or a revoked permission must not
+                        // erase an existing song's library and playlist identity.
+                        if reason == .unavailable || reason == .unreadable,
+                           let existing = existingByPath[pidKey] {
+                            retainedUnavailableCount += 1
+                            continuation.yield(ConnectorScannedSong(
+                                song: existing,
+                                displayName: existing.title,
+                                titleMetadataInspected: false
+                            ))
+                        }
+                        continue
+                    } catch {
                         continue
                     }
 
-                    let pidKey = persistentKey(item.persistentID)
-                    self.locationCache[pidKey] = url
+                    self.locationCache[pidKey] = asset
 
-                    let format = AudioFormat.from(fileExtension: ext) ?? .m4a
+                    let format = AudioFormat.from(fileExtension: url.pathExtension) ?? .m4a
                     let displayName = item.title.isEmpty ? url.lastPathComponent : item.title
 
                     let song = Song(
@@ -110,8 +135,10 @@ actor AppleMusicLibrarySource: SongScanningConnector {
                         titleMetadataInspected: false
                     ))
                 }
-                if skippedDRM > 0 {
-                    plog("🍏 Apple Music scan: skipped \(skippedDRM) DRM-protected (.m4p) tracks — only Apple Music.app can play those.")
+                if !skipped.isEmpty {
+                    let summary = skipped.sorted { $0.key.rawValue < $1.key.rawValue }
+                        .map { "\($0.key.rawValue)=\($0.value)" }.joined(separator: " ")
+                    plog("Apple Music local asset validation: \(summary) retainedUnavailable=\(retainedUnavailableCount)")
                 }
                 continuation.finish()
             }
@@ -153,22 +180,23 @@ actor AppleMusicLibrarySource: SongScanningConnector {
 
     func localURL(for path: String) async throws -> URL {
         if let cached = locationCache[path] {
-            return cached
+            if let url = try? cached.validatedURL() { return url }
+            locationCache.removeValue(forKey: path)
         }
         // Cache miss (e.g. first play after relaunch, before a fresh scan).
         // Reopen the library and look up by persistent ID once.
         try await connect()
         guard let library else {
-            throw SourceError.connectionFailed("ITLibrary unavailable")
+            throw AppleMusicLocalAssetError.libraryUnavailable
         }
+        guard library.reloadData() else { throw AppleMusicLocalAssetError.libraryUnavailable }
         for item in library.allMediaItems where persistentKey(item.persistentID) == path {
-            guard let url = item.location, url.isFileURL else {
-                throw SourceError.fileNotFound(path)
-            }
-            locationCache[path] = url
+            let asset = Self.localAsset(for: item)
+            let url = try asset.validatedURL()
+            locationCache[path] = asset
             return url
         }
-        throw SourceError.fileNotFound(path)
+        throw AppleMusicLocalAssetError.unavailable
     }
 
     func streamData(for path: String) async throws -> AsyncThrowingStream<Data, Error> {
@@ -199,6 +227,15 @@ actor AppleMusicLibrarySource: SongScanningConnector {
     func imageURL(for path: String) async throws -> URL? { nil }
 
     // MARK: - Helpers
+
+    nonisolated static func localAsset(for item: ITLibMediaItem) -> AppleMusicLocalAsset {
+        AppleMusicLocalAsset(
+            url: item.location,
+            isSong: item.mediaKind == .kindSong,
+            isFileLocation: item.locationType == .file,
+            isProtected: item.isDRMProtected
+        )
+    }
 
     private nonisolated func persistentKey(_ id: NSNumber) -> String {
         String(format: "%016llx", id.uint64Value)

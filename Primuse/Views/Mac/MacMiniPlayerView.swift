@@ -89,6 +89,7 @@ struct MacMiniPlayerView: View {
         .frame(width: MiniPlayerWindowController.fixedWidth)
         .frame(maxHeight: .infinity, alignment: .top)
         .pmWindowDragRegion()
+        .macPlaybackErrorFeedback(topInset: 44)
         .task(id: lyricsLoadTaskIdentity) {
             if player.isLiveRadio {
                 lyrics = []

@@ -728,3 +728,10 @@
 "error.songloft.authenticationFailed" = "Songloft 登入失敗，請檢查帳號和密碼。";
 "error.songloft.invalidResponse" = "Songloft 傳回不完整或無效的資料，既有曲庫保持不變。";
 "error.songloft.http" = "Songloft 服務傳回 HTTP %@。";
+
+"appleMusic.localAsset.managedDownload" = "此 Apple Music 下載無法作為本機音訊檔案播放。請從同步的 Apple Music 播放列表播放，或在「音樂」App 中開啟。";
+"appleMusic.localAsset.protectedContent" = "此歌曲受版權保護，無法作為本機音訊檔案播放。請從同步的 Apple Music 播放列表播放，或在「音樂」App 中開啟。";
+"appleMusic.localAsset.unavailable" = "找不到此歌曲的本機檔案。請在「音樂」App 中確認檔案位置，再重新掃描此音樂來源。";
+"appleMusic.localAsset.unreadable" = "無法讀取此歌曲的本機檔案。請檢查檔案的存取權限。";
+"appleMusic.localAsset.invalidFile" = "此項目不是可播放的本機音訊檔案。請在「音樂」App 中確認後重新掃描此音樂來源。";
+"appleMusic.localAsset.libraryUnavailable" = "無法重新整理本機音樂資料庫。請在「音樂」App 中確認資料庫可用後再試。";

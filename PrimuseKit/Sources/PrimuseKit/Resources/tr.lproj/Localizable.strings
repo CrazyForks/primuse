@@ -678,3 +678,10 @@
 "error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
 "error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
 "error.songloft.http" = "Songloft returned HTTP %@.";
+
+"appleMusic.localAsset.managedDownload" = "Bu Apple Music indirmesi yerel ses dosyası olarak çalınamaz. Eşzamanlanmış bir Apple Music listesinden çalın veya Müzik uygulamasında açın.";
+"appleMusic.localAsset.protectedContent" = "Bu şarkı korumalıdır ve yerel ses dosyası olarak çalınamaz. Eşzamanlanmış bir Apple Music listesinden çalın veya Müzik uygulamasında açın.";
+"appleMusic.localAsset.unavailable" = "Şarkının yerel dosyası bulunamadı. Müzik uygulamasında konumunu kontrol edip bu kaynağı yeniden tarayın.";
+"appleMusic.localAsset.unreadable" = "Şarkının yerel dosyası okunamıyor. Dosya erişim izinlerini kontrol edin.";
+"appleMusic.localAsset.invalidFile" = "Bu öğe çalınabilir bir yerel ses dosyası değil. Müzik uygulamasında kontrol edip bu kaynağı yeniden tarayın.";
+"appleMusic.localAsset.libraryUnavailable" = "Yerel müzik arşivi yenilenemedi. Müzik uygulamasında kullanılabilir olduğunu kontrol edip tekrar deneyin.";

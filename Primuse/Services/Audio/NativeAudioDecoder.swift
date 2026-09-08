@@ -37,6 +37,7 @@ final class NativeAudioDecoder: PrimuseAudioDecoder {
         guard url.isFileURL else { return false }
         // SFBAudioEngine supports a huge range of formats
         let ext = url.pathExtension.lowercased()
+        guard ext != "tta" else { return false }
         return SFBAudioEngine.AudioDecoder.handlesPaths(withExtension: ext)
             || SFBAudioEngine.DSDDecoder.handlesPaths(withExtension: ext)
     }
@@ -63,7 +64,7 @@ final class NativeAudioDecoder: PrimuseAudioDecoder {
         }
 
         // Try SFBAudioEngine first for broader format support
-        let decoder = try SFBAudioEngine.AudioDecoder(url: url)
+        let decoder = try Self.makeSafeDecoder(url: url)
         try decoder.open()
         let format = decoder.processingFormat
         let totalFrames = decoder.length
@@ -107,7 +108,7 @@ final class NativeAudioDecoder: PrimuseAudioDecoder {
                         reopenAfterFailedSeek: false,
                         allowDecodeAndDiscardFallback: false
                     ) {
-                        try SFBAudioEngine.AudioDecoder(inputSource: inputBox.value)
+                        try Self.makeSafeDecoder(inputSource: inputBox.value)
                     }
                     try await self.runDecode(
                         decoder: prepared.decoder,
@@ -184,7 +185,7 @@ final class NativeAudioDecoder: PrimuseAudioDecoder {
                                 return try SFBAudioEngine.DSDPCMDecoder(url: url)
                             }
                         }
-                        return try SFBAudioEngine.AudioDecoder(url: url)
+                        return try Self.makeSafeDecoder(url: url)
                     }
                     plog("🎵 SFBDecoder: file=\(url.lastPathComponent)")
                     try await self.runDecode(
@@ -200,6 +201,38 @@ final class NativeAudioDecoder: PrimuseAudioDecoder {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private static let coreAudioPreferredExtensions: Set<String> = ["mp1", "mp2", "mp3", "au", "snd"]
+
+    private static func makeSafeDecoder(url: URL) throws -> SFBAudioEngine.AudioDecoder {
+        if coreAudioPreferredExtensions.contains(url.pathExtension.lowercased()) {
+            return try SFBAudioEngine.AudioDecoder(url: url, decoderName: .coreAudio)
+        }
+        return try requireSafeDecoder(SFBAudioEngine.AudioDecoder(url: url))
+    }
+
+    private static func makeSafeDecoder(inputSource: InputSource) throws -> SFBAudioEngine.AudioDecoder {
+        if let url = inputSource.url,
+           coreAudioPreferredExtensions.contains(url.pathExtension.lowercased()) {
+            return try SFBAudioEngine.AudioDecoder(inputSource: inputSource, decoderName: .coreAudio)
+        }
+        return try requireSafeDecoder(SFBAudioEngine.AudioDecoder(inputSource: inputSource))
+    }
+
+    private static func requireSafeDecoder(_ decoder: SFBAudioEngine.AudioDecoder) throws -> SFBAudioEngine.AudioDecoder {
+        // SFB 0.12.1 can misidentify PCM bytes as MPEG and write beyond its
+        // internal frame buffer. Reject before open; Swift cannot catch that
+        // Objective-C exception, and the existing fallback probes the content.
+        if let mpegClass = NSClassFromString("SFBMPEGDecoder"), decoder.isKind(of: mpegClass) {
+            throw AudioDecoderError.unsupportedFormat("MPEG")
+        }
+        // SFB's packed 24-bit True Audio path crashes during PCM buffer release.
+        // Check the selected decoder too, because extensions can be incorrect.
+        if let trueAudioClass = NSClassFromString("SFBTrueAudioDecoder"), decoder.isKind(of: trueAudioClass) {
+            throw AudioDecoderError.unsupportedFormat("TTA")
+        }
+        return decoder
     }
 
     /// Shared decode loop. Reads PCM from the open `decoder`, converts to

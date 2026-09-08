@@ -731,3 +731,10 @@
 "error.songloft.authenticationFailed" = "Songloft sign-in failed. Check the account and password.";
 "error.songloft.invalidResponse" = "Songloft returned an incomplete or invalid response. The existing library was preserved.";
 "error.songloft.http" = "Songloft returned HTTP %@.";
+
+"appleMusic.localAsset.managedDownload" = "この Apple Music のダウンロードはローカル音声ファイルとして再生できません。同期済みの Apple Music プレイリストから再生するか、ミュージックで開いてください。";
+"appleMusic.localAsset.protectedContent" = "この曲は保護されているため、ローカル音声ファイルとして再生できません。同期済みの Apple Music プレイリストから再生するか、ミュージックで開いてください。";
+"appleMusic.localAsset.unavailable" = "曲のローカルファイルが見つかりません。ミュージックで保存場所を確認し、このソースを再スキャンしてください。";
+"appleMusic.localAsset.unreadable" = "曲のローカルファイルを読み取れません。ファイルのアクセス権を確認してください。";
+"appleMusic.localAsset.invalidFile" = "この項目は再生可能なローカル音声ファイルではありません。ミュージックで確認し、このソースを再スキャンしてください。";
+"appleMusic.localAsset.libraryUnavailable" = "ローカルのミュージックライブラリを更新できませんでした。ミュージックで利用できることを確認してから、もう一度お試しください。";

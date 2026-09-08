@@ -2097,7 +2097,7 @@
 "play_similar_radio" = "समान रेडियो चलाएं";
 "playable_songs_count_format" = "%d बजाने योग्य गाने";
 "playback" = "प्लेबैक";
-"playback_error_apple_music_generic" = "Apple Music प्लेबैक विफल रहा। अपनी सदस्यता या नेटवर्क जांचें.";
+"playback_error_apple_music_generic" = "Apple Music यह गीत नहीं चला सका। जाँचें कि वह संगीत ऐप में चल रहा है, फिर दोबारा कोशिश करें।";
 "playback_error_connection" = "स्रोत से कनेक्ट नहीं हो सकता";
 "playback_error_decode" = "यह ट्रैक नहीं चलाया जा सकता";
 "playback_error_format" = "असमर्थित ऑडियो प्रारूप";
@@ -3570,6 +3570,9 @@
 "library_quick_access_cover_collage" = "सभी कोलाज";
 "library_quick_access_cover_description" = "होम और लाइब्रेरी की त्वरित पहुँच पर लागू होता है। डिफ़ॉल्ट मौजूदा शैली रखता है। एकसमान शैलियाँ पसंदीदा गानों के लिए गाने की तस्वीरें इस्तेमाल करती हैं; कोलाज चार खानों को भरने के लिए उपलब्ध तस्वीरें दोहराता है।";
 
+"playback_error_local_audio" = "इस ऑडियो फ़ाइल को डिकोड नहीं किया जा सका। यह क्षतिग्रस्त हो सकती है या असमर्थित एन्कोडिंग का उपयोग कर सकती है।";
+"apple_music_subscription_check_failed" = "Apple Music की प्लेबैक अनुमति की पुष्टि नहीं हो सकी। अपना कनेक्शन जाँचें और दोबारा कोशिश करें।";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3604,6 +3607,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

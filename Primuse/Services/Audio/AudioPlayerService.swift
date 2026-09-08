@@ -3389,9 +3389,11 @@ final class AudioPlayerService {
         systemAudioPlaybackDidStart = false
     }
 
-    private func showPlaybackError(_ message: String) {
+    private func showPlaybackError(_ message: String, automaticallyDismiss: Bool = true) {
         lastPlaybackError = message
         errorDismissTask?.cancel()
+        errorDismissTask = nil
+        guard automaticallyDismiss else { return }
         let requestID = playID
         errorDismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
@@ -3412,6 +3414,15 @@ final class AudioPlayerService {
         errorDismissTask?.cancel()
         errorDismissTask = nil
         lastPlaybackError = nil
+    }
+
+    func dismissPlaybackError() {
+        beginPlaybackErrorScope()
+    }
+
+    private func suspendPlaybackAfterFailure(reason: String, message: String) {
+        suspendPlaybackPreservingSelection(reason: reason)
+        showPlaybackError(message, automaticallyDismiss: false)
     }
 
     private func awaitFirstBuffer(
@@ -4243,12 +4254,20 @@ final class AudioPlayerService {
         } catch {
             let action = PlaybackPipelineFailurePolicy.action(
                 requestIsCurrent: playID == id,
-                errorIsCancellation: OperationCancellationPolicy.isCancellation(error)
+                error: error
             )
             switch action {
             case .discardStaleResult:
                 return
             case .preserveCurrentItem:
+                if let assetError = error as? AppleMusicLocalAssetError {
+                    plog("Apple Music local playback rejected reason=\(assetError.rawValue)")
+                    suspendPlaybackAfterFailure(
+                        reason: "apple-music-local-asset-unavailable",
+                        message: assetError.localizedDescription
+                    )
+                    return
+                }
                 plog("🛡️ Playback URL resolution cancelled; preserving current item '\(song.title)'")
                 invalidateAutomaticAdvance(reason: "playback-resolution-cancelled")
                 isLoading = false
@@ -4263,6 +4282,13 @@ final class AudioPlayerService {
                 break
             }
             plog("Playback URL resolution error: \(error)")
+            if playbackMetadataSourceType?(song.sourceID) == .appleMusicLibrary {
+                suspendPlaybackAfterFailure(
+                    reason: "apple-music-local-resolution-failure",
+                    message: error.localizedDescription
+                )
+                return
+            }
             showPlaybackError(String(localized: "playback_error_connection"))
             isLoading = false
             let sourceUnavailable = await isSourceWideResolutionFailure(error, sourceID: song.sourceID)
@@ -10427,12 +10453,23 @@ final class AudioPlayerService {
             consume: true,
             transportIsActive: transportIsActive
         ) == .accepted else { return }
+        if let song = currentSong,
+           playbackMetadataSourceType?(song.sourceID) == .appleMusicLibrary {
+            suspendPlaybackAfterFailure(
+                reason: "apple-music-local-playback-failure",
+                message: lastPlaybackError ?? String(localized: "playback_error_local_audio")
+            )
+            return
+        }
         if isDLNACast(currentSong) {
             stop()
             return
         }
         if repeatMode == .one {
-            suspendPlaybackPreservingSelection(reason: "repeat-one-playback-failure")
+            suspendPlaybackAfterFailure(
+                reason: "repeat-one-playback-failure",
+                message: lastPlaybackError ?? String(localized: "playback_error_decode")
+            )
             return
         }
 
@@ -10451,7 +10488,10 @@ final class AudioPlayerService {
         consecutiveFailureAdvanceCount += 1
         guard consecutiveFailureAdvanceCount <= Self.maxConsecutiveFailureAdvances else {
             plog("⏸️ Suspended after \(Self.maxConsecutiveFailureAdvances) consecutive playback failures")
-            suspendPlaybackPreservingSelection(reason: "consecutive-playback-failures")
+            suspendPlaybackAfterFailure(
+                reason: "consecutive-playback-failures",
+                message: lastPlaybackError ?? String(localized: "playback_error_decode")
+            )
             return
         }
 
@@ -10491,7 +10531,10 @@ final class AudioPlayerService {
                 callerLine: 0
             )
         } else {
-            suspendPlaybackPreservingSelection(reason: "queue-tail-playback-failure")
+            suspendPlaybackAfterFailure(
+                reason: "queue-tail-playback-failure",
+                message: lastPlaybackError ?? String(localized: "playback_error_decode")
+            )
         }
     }
 

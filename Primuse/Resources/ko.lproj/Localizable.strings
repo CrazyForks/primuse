@@ -849,7 +849,7 @@
 "playback_error_source_disabled" = "이 음악 소스는 비활성화되어 있습니다";
 "playback_error_decode" = "이 곡을 재생할 수 없습니다";
 "playback_error_format" = "지원되지 않는 오디오 포맷";
-"playback_error_apple_music_generic" = "Apple Music 재생에 실패했습니다. 구독 또는 네트워크를 확인하세요.";
+"playback_error_apple_music_generic" = "Apple Music에서 이 곡을 재생할 수 없습니다. 음악 앱에서 재생되는지 확인한 후 다시 시도하세요.";
 "gapless_not_available" = "끊김 없는 재생은 대기열의 곡에 사용할 수 있습니다. 크로스페이드를 켜면 꺼집니다.";
 "clear_metadata" = "커버 아트 및 가사 지우기";
 "clear_metadata_confirm" = "캐시된 모든 커버 아트와 가사를 삭제합니다. 필요할 때 음악 소스에서 다시 가져옵니다.";
@@ -3664,6 +3664,9 @@
 "library_quick_access_cover_collage" = "모두 콜라주";
 "library_quick_access_cover_description" = "홈과 보관함의 빠른 접근에 적용됩니다. 기본값은 기존 스타일을 유지합니다. 통일된 스타일은 좋아요 표시한 곡에 노래 이미지를 사용하며, 콜라주는 사용 가능한 이미지를 반복하여 네 칸을 채웁니다.";
 
+"playback_error_local_audio" = "이 오디오 파일을 디코딩할 수 없습니다. 파일이 손상되었거나 지원하지 않는 인코딩을 사용했을 수 있습니다.";
+"apple_music_subscription_check_failed" = "Apple Music 재생 권한을 확인할 수 없습니다. 네트워크 연결을 확인한 후 다시 시도하세요.";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3698,6 +3701,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";

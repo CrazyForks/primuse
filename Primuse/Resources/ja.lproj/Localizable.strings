@@ -850,7 +850,7 @@
 "playback_error_source_disabled" = "この音楽ソースは無効です";
 "playback_error_decode" = "この曲を再生できません";
 "playback_error_format" = "サポートされていないオーディオフォーマット";
-"playback_error_apple_music_generic" = "Apple Music の再生に失敗しました。サブスクリプションの状況またはネットワークを確認してください。";
+"playback_error_apple_music_generic" = "Apple Music でこの曲を再生できませんでした。ミュージックアプリで再生できることを確認してから、もう一度お試しください。";
 "gapless_not_available" = "ギャップレス再生は再生キューの曲で利用できます。クロスフェードをオンにするとオフになります。";
 "clear_metadata" = "カバーアートと歌詞を消去";
 "clear_metadata_confirm" = "キャッシュされたすべてのカバーアートと歌詞を削除します。必要なときに音楽ソースから再取得されます。";
@@ -3665,6 +3665,9 @@
 "library_quick_access_cover_collage" = "すべてコラージュ";
 "library_quick_access_cover_description" = "ホームとライブラリのクイックアクセスに適用します。デフォルトは現在のスタイルを維持します。統一スタイルではお気に入りに曲の画像を使用し、コラージュは画像を繰り返して4枠を埋めます。";
 
+"playback_error_local_audio" = "この音声ファイルをデコードできませんでした。ファイルが破損しているか、非対応のエンコードが使用されている可能性があります。";
+"apple_music_subscription_check_failed" = "Apple Music の再生権限を確認できませんでした。ネットワーク接続を確認して、もう一度お試しください。";
+
 "CarPlay" = "CarPlay";
 "carplay_home_title" = "Home";
 "carplay_layout_title" = "Layout Presets";
@@ -3699,6 +3702,7 @@
 "carplay_parent_folder" = "Parent Folder";
 "carplay_play_all" = "Play All";
 "carplay_shuffle_all" = "Shuffle All";
+
 "carplay_block_custom" = "My Collection";
 "carplay_content_unavailable" = "Content Unavailable";
 "carplay_save_preset" = "Save Preset";
