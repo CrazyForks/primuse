@@ -653,8 +653,14 @@ struct ContentView: View {
     @ViewBuilder
     private var minimalBottomChrome: some View {
         if miniPlayerVisible {
-            MinimalNowPlayingAccessory(onTap: presentNowPlaying)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+            Group {
+                if sizeClass == .regular {
+                    PadNowPlayingAccessory(onTap: presentNowPlaying)
+                } else {
+                    MinimalNowPlayingAccessory(onTap: presentNowPlaying)
+                }
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -728,10 +734,6 @@ struct ContentView: View {
         }
     }
 
-    /// iPad 用的 sidebar + detail 双栏布局。sidebar 顶层就是 Home / 资料库 /
-    /// 搜索 / 设置,detail 直接挂对应的现有视图。播放器作为 sidebar 内独立
-    /// 底栏与列表并排布局,既为列表让位,也避免列表手势干扰切歌。
-    @ViewBuilder
     private var padRoot: some View {
         NavigationSplitView {
             let selection = Binding<SidebarItem?>(
@@ -741,35 +743,33 @@ struct ContentView: View {
                     sidebarSelection = v
                 } }
             )
-            VStack(spacing: 0) {
-                List(selection: selection) {
-                    // 顶层 4 项 ── Home / 资料库 / 搜索 / 设置。资料库下面再开 section
-                    // 列子项,让 iPad 用户少一层点击直达。
-                    Section {
-                        ForEach(SidebarItem.topLevel) { item in
-                            Label(String(localized: item.titleKey), systemImage: item.icon)
-                                .tag(item as SidebarItem?)
-                        }
-                    }
-                    Section(String(localized: "library_title")) {
-                        ForEach(librarySidebarItems) { item in
-                            Label(String(localized: item.titleKey), systemImage: item.icon)
-                                .tag(item as SidebarItem?)
-                        }
+            List(selection: selection) {
+                // 顶层 4 项 ── Home / 资料库 / 搜索 / 设置。资料库下面再开 section
+                // 列子项,让 iPad 用户少一层点击直达。
+                Section {
+                    ForEach(SidebarItem.topLevel) { item in
+                        Label(String(localized: item.titleKey), systemImage: item.icon)
+                            .tag(item as SidebarItem?)
                     }
                 }
-                .listStyle(.sidebar)
-
-                if miniPlayerVisible {
-                    SidebarNowPlayingAccessory(onTap: presentNowPlaying)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                Section(String(localized: "library_title")) {
+                    ForEach(librarySidebarItems) { item in
+                        Label(String(localized: item.titleKey), systemImage: item.icon)
+                            .tag(item as SidebarItem?)
+                    }
                 }
             }
+            .listStyle(.sidebar)
             .navigationTitle("Primuse")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
             padDetail(for: sidebarSelection)
                 .environment(\.librarySearchTab, sidebarSelection.rawValueTab)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if miniPlayerVisible {
+                        PadNowPlayingAccessory(onTap: presentNowPlaying)
+                    }
+                }
         }
     }
 
@@ -2061,20 +2061,66 @@ struct MinimalNowPlayingAccessory: View {
     }
 }
 
-struct SidebarNowPlayingAccessory: View {
+struct PadNowPlayingAccessory: View {
     var onTap: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var contentHeight: CGFloat = 44
 
     var body: some View {
-        MiniPlayerView(
-            onTap: onTap,
-            showsNextButton: true,
-            showsSubtitle: true
-        )
-        .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .top) {
-            Divider()
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 8) {
+                    trackInformation
+                    transportControls.frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    trackInformation
+                    transportControls
+                }
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+        .frame(maxWidth: 560)
+        .fixedSize(horizontal: false, vertical: true)
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+            if reduceTransparency {
+                shape.fill(Color(uiColor: .secondarySystemBackground))
+            } else {
+                shape.fill(.regularMaterial)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(.primary.opacity(0.06), lineWidth: 0.5)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.08), radius: 10, y: 3)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+    }
+
+    private var trackInformation: some View {
+        MiniPlayerSwipeContent(
+            onTap: onTap,
+            artworkSize: 30,
+            artworkCornerRadius: 6,
+            artworkTrailingSpacing: 8,
+            titleFont: .subheadline,
+            contentHeight: contentHeight
+        )
+    }
+
+    private var transportControls: some View {
+        MiniPlayerTransportControls(
+            showsNextButton: true,
+            regularIconSize: 18
+        )
     }
 }
 

@@ -33,6 +33,7 @@ struct MiniPlayerSwipeContent: View {
     var artworkTrailingSpacing: CGFloat = 10
     var titleFont: Font
     var showsSubtitle = false
+    var contentHeight: CGFloat = 44
 
     @Environment(AudioPlayerService.self) private var player
     @Environment(MusicLibrary.self) private var library
@@ -89,7 +90,7 @@ struct MiniPlayerSwipeContent: View {
                     .accessibilityHidden(true)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+        .frame(maxWidth: .infinity, minHeight: contentHeight, maxHeight: contentHeight)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
         } action: { width in
