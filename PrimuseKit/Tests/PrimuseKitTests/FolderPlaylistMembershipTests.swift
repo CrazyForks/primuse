@@ -4,6 +4,29 @@ import Testing
 
 @Suite("Folder playlist membership")
 struct FolderPlaylistMembershipTests {
+    @Test("Native filename repairs retain existing root bindings and distinguish literal percent directories")
+    func nativePathsPreserveBoundFolderMembership() throws {
+        let source = MusicSource(id: "nas", name: "Music", type: .local, extraConfig: "[\"/\"]")
+        let rootID = LibraryFolderNodeID(sourceID: "nas", kind: .scanRoot, normalizedRelativePath: "/")
+        let sourceID = LibraryFolderNodeID(sourceID: "nas", kind: .source, normalizedRelativePath: "")
+        let literalID = LibraryFolderNodeID(sourceID: "nas", kind: .folder, normalizedRelativePath: "/a%2fb")
+        let nestedID = LibraryFolderNodeID(sourceID: "nas", kind: .folder, normalizedRelativePath: "/a/b")
+        let songs = [song("normal", "/normal.mp3"), song("special", "/Live #1?@%2F.mp3"),
+                     song("literal", "/A%2FB/song.mp3"), song("nested", "/A/B/song.mp3")]
+        let bindings = ["root": PlaylistFolderBinding(nodeID: rootID),
+                        "source": PlaylistFolderBinding(nodeID: sourceID),
+                        "literal": PlaylistFolderBinding(nodeID: literalID),
+                        "nested": PlaylistFolderBinding(nodeID: nestedID)]
+        let members = FolderPlaylistMembershipPolicy.memberships(bindings: bindings, source: source, songs: songs, syncIndex: nil)
+        #expect(Set(try #require(members["root"])) == Set(songs.map(\.id)))
+        #expect(members["source"] == members["root"])
+        #expect(members["literal"] == ["literal"])
+        #expect(members["nested"] == ["nested"])
+        let refreshed = FolderPlaylistMembershipPolicy.memberships(bindings: bindings, source: source, songs: Array(songs.dropLast()), syncIndex: nil)
+        #expect(refreshed["nested"] == [])
+        #expect(refreshed["literal"] == ["literal"])
+    }
+
     @Test("Rescans add and remove descendants without matching sibling prefixes or other sources")
     func hierarchicalMembershipTracksCurrentDirectory() throws {
         let source = MusicSource(id: "nas", name: "NAS", type: .webdav,

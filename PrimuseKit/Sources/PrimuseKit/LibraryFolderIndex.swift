@@ -10,6 +10,13 @@ public enum LibraryFolderPathSemantics: String, Hashable, Sendable {
     case opaque
 }
 
+public enum LibraryFolderPathEncoding: Hashable, Sendable {
+    case legacyNormalized
+    /// Connectors have already resolved their transport encoding. Percent
+    /// escapes and backslashes here are literal filename characters.
+    case native
+}
+
 /// A selected root in a provider namespace whose identity is intentionally
 /// separate from its user-facing name.
 public struct LibraryFolderProviderRootDescriptor: Hashable, Sendable {
@@ -62,6 +69,7 @@ public struct LibraryFolderSourceDescriptor: Hashable, Sendable {
     public let displayName: String
     public let scanRoots: [String]
     public let pathSemantics: LibraryFolderPathSemantics
+    public let pathEncoding: LibraryFolderPathEncoding
     public let providerHierarchy: LibraryFolderProviderHierarchy?
     public let isEnabled: Bool
 
@@ -70,6 +78,7 @@ public struct LibraryFolderSourceDescriptor: Hashable, Sendable {
         displayName: String,
         scanRoots: [String],
         pathSemantics: LibraryFolderPathSemantics,
+        pathEncoding: LibraryFolderPathEncoding = .legacyNormalized,
         providerHierarchy: LibraryFolderProviderHierarchy? = nil,
         isEnabled: Bool = true
     ) {
@@ -77,6 +86,7 @@ public struct LibraryFolderSourceDescriptor: Hashable, Sendable {
         self.displayName = displayName
         self.scanRoots = scanRoots
         self.pathSemantics = pathSemantics
+        self.pathEncoding = pathEncoding
         self.providerHierarchy = providerHierarchy
         self.isEnabled = isEnabled
     }
@@ -91,6 +101,7 @@ public struct LibraryFolderSourceDescriptor: Hashable, Sendable {
             displayName: displayName,
             scanRoots: source.scannedDirectories,
             pathSemantics: source.type.libraryFolderPathSemantics,
+            pathEncoding: source.type.libraryFolderPathEncoding,
             providerHierarchy: nil,
             isEnabled: source.isEnabled && !source.isDeleted
         )
@@ -104,6 +115,7 @@ public struct LibraryFolderSourceDescriptor: Hashable, Sendable {
             displayName: displayName,
             scanRoots: scanRoots,
             pathSemantics: pathSemantics,
+            pathEncoding: pathEncoding,
             providerHierarchy: hierarchy,
             isEnabled: isEnabled
         )
@@ -146,6 +158,16 @@ public struct LibraryFolderSourceDescriptor: Hashable, Sendable {
 }
 
 private extension MusicSourceType {
+    var libraryFolderPathEncoding: LibraryFolderPathEncoding {
+        switch self {
+        case .local, .smb, .webdav, .sftp, .ftp, .s3,
+             .synology, .baiduPan, .dropbox:
+            return .native
+        default:
+            return .legacyNormalized
+        }
+    }
+
     var libraryFolderPathSemantics: LibraryFolderPathSemantics {
         switch self {
         case .upnp,
@@ -212,15 +234,18 @@ public struct LibraryFolderPathPlacement: Hashable, Sendable {
 
 public struct LibraryFolderPathPolicy: Hashable, Sendable {
     public let semantics: LibraryFolderPathSemantics
+    public let encoding: LibraryFolderPathEncoding
     public let scanRoots: [LibraryFolderScanRoot]
 
     private let matchingRoots: [LibraryFolderScanRoot]
 
     public init(
         scanRoots: [String],
-        semantics: LibraryFolderPathSemantics = .hierarchical
+        semantics: LibraryFolderPathSemantics = .hierarchical,
+        encoding: LibraryFolderPathEncoding = .legacyNormalized
     ) {
         self.semantics = semantics
+        self.encoding = encoding
 
         guard semantics == .hierarchical else {
             self.scanRoots = []
@@ -235,7 +260,8 @@ public struct LibraryFolderPathPolicy: Hashable, Sendable {
         for rawRoot in scanRoots {
             guard let path = NormalizedLibraryFolderPath.parse(
                 rawRoot,
-                emptyMeansRoot: true
+                emptyMeansRoot: true,
+                encoding: encoding
             ), seenIdentities.insert(path.identityPath).inserted else {
                 continue
             }
@@ -261,11 +287,14 @@ public struct LibraryFolderPathPolicy: Hashable, Sendable {
         guard semantics == .hierarchical else { return .uncategorized }
         guard !scanRoots.isEmpty else { return .uncategorized }
 
-        let trimmedPath = filePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPath = encoding == .native
+            ? filePath
+            : filePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPath.isEmpty else { return .uncategorized }
         guard let path = NormalizedLibraryFolderPath.parse(
             trimmedPath,
-            emptyMeansRoot: false
+            emptyMeansRoot: false,
+            encoding: encoding
         ) else {
             return .other
         }
@@ -374,7 +403,14 @@ private struct NormalizedLibraryFolderPath {
         return zip(prefix, identityComponents).allSatisfy { $0.0 == $0.1 }
     }
 
-    static func parse(_ rawValue: String, emptyMeansRoot: Bool) -> Self? {
+    static func parse(
+        _ rawValue: String,
+        emptyMeansRoot: Bool,
+        encoding: LibraryFolderPathEncoding
+    ) -> Self? {
+        if encoding == .native {
+            return parseNative(rawValue, emptyMeansRoot: emptyMeansRoot)
+        }
         var value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty {
             return emptyMeansRoot ? Self(components: [], identityComponents: []) : nil
@@ -422,6 +458,29 @@ private struct NormalizedLibraryFolderPath {
         return Self(components: components, identityComponents: identityComponents)
     }
 
+    private static func parseNative(_ value: String, emptyMeansRoot: Bool) -> Self? {
+        if value.isEmpty {
+            return emptyMeansRoot ? Self(components: [], identityComponents: []) : nil
+        }
+        guard !value.hasPrefix("//"), !value.hasPrefix("\\\\"),
+              !value.utf8.contains(0) else { return nil }
+        if hasURLScheme(value), let colon = value.firstIndex(of: ":") {
+            let remainder = value[value.index(after: colon)...]
+            if remainder.hasPrefix("/") || remainder.hasPrefix("\\") { return nil }
+        }
+
+        var components: [String] = []
+        for rawComponent in value.split(separator: "/", omittingEmptySubsequences: true) {
+            let component = String(rawComponent).precomposedStringWithCanonicalMapping
+            if component == "." { continue }
+            guard component != "..", !isWindowsDrive(component, at: components.count) else { return nil }
+            components.append(component)
+        }
+        let identityComponents = components.map(identityComponent)
+        guard !isSensitiveLocalCachePath(identityComponents) else { return nil }
+        return Self(components: components, identityComponents: identityComponents)
+    }
+
     static func path(from components: [String]) -> String {
         components.isEmpty ? "/" : "/" + components.joined(separator: "/")
     }
@@ -430,6 +489,10 @@ private struct NormalizedLibraryFolderPath {
         if value.hasPrefix("//") || value.hasPrefix("\\\\") { return true }
         if value.contains("?") || value.contains("#") { return true }
 
+        return hasURLScheme(value)
+    }
+
+    private static func hasURLScheme(_ value: String) -> Bool {
         guard let colon = value.firstIndex(of: ":") else { return false }
         let scheme = value[..<colon]
         guard !scheme.isEmpty, scheme.first?.isLetter == true else { return false }
@@ -665,7 +728,8 @@ public extension LibraryFolderSourceDescriptor {
         }
         return LibraryFolderPathPolicy(
             scanRoots: scanRoots,
-            semantics: pathSemantics
+            semantics: pathSemantics,
+            encoding: pathEncoding
         ).nodeID(sourceID: sourceID, for: song.filePath)
     }
 }
@@ -823,6 +887,56 @@ public final class LibraryFolderIndex: Sendable {
 /// source wrapper, while playback uses only the songs directly visible in the
 /// current folder and folder actions include every descendant.
 public enum LibraryFolderBrowsePolicy {
+    public static func sortedSongs(_ songs: [Song]) -> [Song] {
+        songs.sorted {
+            if ($0.discNumber ?? 0) != ($1.discNumber ?? 0) { return ($0.discNumber ?? 0) < ($1.discNumber ?? 0) }
+            if ($0.trackNumber ?? 0) != ($1.trackNumber ?? 0) { return ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
+            let titleOrder = $0.title.localizedStandardCompare($1.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return $0.id < $1.id
+        }
+    }
+
+    public static func collapsedScanRoot(
+        in index: LibraryFolderIndex,
+        for nodeID: LibraryFolderNodeID
+    ) -> LibraryFolderNode? {
+        guard nodeID.kind == .source else { return nil }
+        let roots = index.children(of: nodeID).filter { $0.kind == .scanRoot }
+        return roots.count == 1 ? roots[0] : nil
+    }
+
+    /// Flatten navigation without changing persisted folder identities or
+    /// assigning an unresolved song to a physical directory.
+    public static func displayedChildren(
+        in index: LibraryFolderIndex,
+        of nodeID: LibraryFolderNodeID
+    ) -> [LibraryFolderNode] {
+        let children = index.children(of: nodeID)
+        guard nodeID.kind == .source else { return children }
+        let root = collapsedScanRoot(in: index, for: nodeID)
+        return children.flatMap { child -> [LibraryFolderNode] in
+            if child.kind == .other || child.kind == .uncategorized { return [] }
+            if child.id == root?.id { return index.children(of: child.id) }
+            return [child]
+        }
+    }
+
+    public static func displayedSongIDs(
+        in index: LibraryFolderIndex,
+        of nodeID: LibraryFolderNodeID
+    ) -> [String] {
+        var result = index.directSongIDs(in: nodeID)
+        guard nodeID.kind == .source else { return result }
+        let root = collapsedScanRoot(in: index, for: nodeID)
+        for child in index.children(of: nodeID) {
+            if child.id == root?.id || child.kind == .other || child.kind == .uncategorized {
+                result.append(contentsOf: index.directSongIDs(in: child.id))
+            }
+        }
+        return result
+    }
+
     public static func rootNodes(
         in index: LibraryFolderIndex,
         sourceID: String?
@@ -920,7 +1034,8 @@ public enum LibraryFolderIndexBuilder {
         var nodeIDBySongID: [String: LibraryFolderNodeID] = [:]
         let policy = LibraryFolderPathPolicy(
             scanRoots: source.scanRoots,
-            semantics: source.pathSemantics
+            semantics: source.pathSemantics,
+            encoding: source.pathEncoding
         )
         let providerResolver = source.providerHierarchy.map(
             LibraryFolderProviderHierarchyResolver.init
@@ -952,7 +1067,7 @@ public enum LibraryFolderIndexBuilder {
                 _ = ensureAccumulator(
                     id: rootID,
                     parent: sourceAccumulator,
-                    displayName: root.displayName,
+                    displayName: root.displayName ?? (source.pathEncoding == .native ? source.displayName : nil),
                     accumulators: &accumulators
                 )
             }
@@ -1026,7 +1141,7 @@ public enum LibraryFolderIndexBuilder {
                         let rootAccumulator = ensureAccumulator(
                             id: rootID,
                             parent: sourceAccumulator,
-                            displayName: root.displayName,
+                            displayName: root.displayName ?? (source.pathEncoding == .native ? source.displayName : nil),
                             accumulators: &accumulators
                         )
                         var parent = rootAccumulator

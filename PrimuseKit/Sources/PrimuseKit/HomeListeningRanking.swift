@@ -220,22 +220,48 @@ public enum HomeFolderPinStorage {
     public static func resolvedPins(
         _ value: String, index: LibraryFolderIndex?, defaultCount: Int
     ) -> [LibraryFolderNodeID] {
-        guard value.isEmpty else {
-            let saved = decode(value)
-            guard let index else { return saved }
-            return saved.filter { index.node(withID: $0) != nil }
-        }
+        let saved = storedPins(value, index: index, defaultCount: defaultCount)
+        guard let index else { return saved }
+        return saved.filter { index.node(withID: $0) != nil }
+    }
+
+    public static func storedPins(
+        _ value: String, index: LibraryFolderIndex?, defaultCount: Int
+    ) -> [LibraryFolderNodeID] {
+        guard value.isEmpty else { return decode(value) }
         guard let index else { return [] }
         var result: [LibraryFolderNodeID] = []
         for source in index.sourceNodes {
-            for node in index.children(of: source.id) {
-                guard node.kind == .scanRoot || node.kind == .folder,
-                      node.descendantSongCount > 0 else { continue }
+            let candidates = LibraryFolderBrowsePolicy.collapsedScanRoot(in: index, for: source.id) != nil
+                ? [source]
+                : index.children(of: source.id).filter { $0.kind == .scanRoot || $0.kind == .folder }
+            for node in candidates {
+                guard node.descendantSongCount > 0 else { continue }
                 result.append(node.id)
                 if result.count == displayCount(defaultCount) { return result }
             }
         }
         return result
+    }
+
+    /// Edits the visible slots while keeping unavailable directories in their
+    /// saved positions, so disabling a source never erases its pins.
+    public static func replacingVisiblePins(
+        in value: String,
+        with updatedPins: [LibraryFolderNodeID],
+        index: LibraryFolderIndex?,
+        defaultCount: Int = defaultDisplayCount
+    ) -> String {
+        let saved = storedPins(value, index: index, defaultCount: defaultCount)
+        let visible = Set(resolvedPins(value, index: index, defaultCount: defaultCount))
+        var seen = Set<LibraryFolderNodeID>()
+        let updated = updatedPins.filter { seen.insert($0).inserted }
+        var remaining = updated.makeIterator()
+        var result = saved.compactMap { id in
+            visible.contains(id) ? remaining.next() : id
+        }
+        result.append(contentsOf: remaining)
+        return encode(result)
     }
 
     private struct Record: Codable {

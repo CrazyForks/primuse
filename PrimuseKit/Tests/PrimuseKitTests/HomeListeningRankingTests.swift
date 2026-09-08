@@ -167,4 +167,39 @@ struct HomeListeningRankingTests {
         #expect(HomeFolderPinStorage.resolvedPins(saved, index: rescanned, defaultCount: 3).isEmpty)
         #expect(HomeFolderPinStorage.decode(saved) == [id])
     }
+
+    @Test func editingVisiblePinsPreservesDisabledSourcesThroughRestoration() throws {
+        let sources = ["a", "b", "c", "d"].map {
+            LibraryFolderSourceDescriptor(sourceID: $0, displayName: $0, scanRoots: ["/Music"], pathSemantics: .hierarchical)
+        }
+        let songs = sources.map { song($0.sourceID, source: $0.sourceID) }
+        let full = LibraryFolderIndexBuilder.build(sources: sources, songs: songs)
+        let ids = try sources.map { try #require(full.nodeID(containingSongID: $0.sourceID)) }
+        let hidden = full.removingSource("a").removingSource("c")
+        let saved = HomeFolderPinStorage.encode([ids[0], ids[1], ids[2]])
+        #expect(HomeFolderPinStorage.resolvedPins(saved, index: hidden, defaultCount: 3) == [ids[1]])
+        let added = HomeFolderPinStorage.replacingVisiblePins(in: saved, with: [ids[3], ids[1]], index: hidden)
+        #expect(HomeFolderPinStorage.decode(added) == [ids[0], ids[3], ids[2], ids[1]])
+        let reordered = HomeFolderPinStorage.replacingVisiblePins(in: added, with: [ids[1], ids[3]], index: hidden)
+        #expect(HomeFolderPinStorage.decode(reordered) == [ids[0], ids[1], ids[2], ids[3]])
+        let removed = HomeFolderPinStorage.replacingVisiblePins(in: reordered, with: [ids[3]], index: hidden)
+        #expect(HomeFolderPinStorage.decode(removed) == [ids[0], ids[3], ids[2]])
+        #expect(HomeFolderPinStorage.resolvedPins(removed, index: full, defaultCount: 3) == [ids[0], ids[3], ids[2]])
+        let clearedVisible = HomeFolderPinStorage.replacingVisiblePins(in: removed, with: [], index: hidden)
+        #expect(HomeFolderPinStorage.decode(clearedVisible) == [ids[0], ids[2]])
+    }
+
+    @Test func pinEditingKeepsExplicitEmptySelectionAndInitializesAllDefaultPins() {
+        let sources = (1...6).map {
+            LibraryFolderSourceDescriptor(sourceID: "nas\($0)", displayName: "NAS \($0)", scanRoots: ["/Music"], pathSemantics: .hierarchical)
+        }
+        let index = LibraryFolderIndexBuilder.build(sources: sources, songs: (1...6).map { song("song\($0)", source: "nas\($0)") })
+        let defaults = HomeFolderPinStorage.resolvedPins("", index: index, defaultCount: 6)
+        #expect(defaults.map(\.kind) == Array(repeating: .source, count: 6))
+        let edited = HomeFolderPinStorage.replacingVisiblePins(in: "", with: Array(defaults.reversed()), index: index, defaultCount: 6)
+        #expect(HomeFolderPinStorage.decode(edited) == Array(defaults.reversed()))
+        #expect(HomeFolderPinStorage.replacingVisiblePins(in: "", with: [], index: index, defaultCount: 6) == "[]")
+        #expect(HomeFolderPinStorage.storedPins("[]", index: index, defaultCount: 6).isEmpty)
+        #expect(HomeFolderPinStorage.resolvedPins(edited, index: nil, defaultCount: 3) == Array(defaults.reversed()))
+    }
 }

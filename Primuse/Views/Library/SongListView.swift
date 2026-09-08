@@ -5534,7 +5534,9 @@ private struct LibraryFolderNormalToolbarMenu: View {
                 Button(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"), systemImage: pinned ? "pin.slash" : "pin") {
                     var updated = pins
                     if pinned { updated.removeAll { $0 == nodeID } } else { updated.insert(nodeID, at: 0) }
-                    pinsRawValue = HomeFolderPinStorage.encode(updated)
+                    pinsRawValue = HomeFolderPinStorage.replacingVisiblePins(
+                        in: pinsRawValue, with: updated, index: index, defaultCount: displayCount
+                    )
                 }
                 .disabled(index?.node(withID: nodeID) == nil)
                 .accessibilityIdentifier("libraryFolder.pinToHome")

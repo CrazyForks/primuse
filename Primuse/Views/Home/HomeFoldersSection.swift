@@ -1,6 +1,13 @@
 import SwiftUI
 import PrimuseKit
 
+private extension LibraryFolderNode {
+    func displayedChildCount(in index: LibraryFolderIndex?) -> Int {
+        guard kind == .source, let index else { return childNodeCount }
+        return LibraryFolderBrowsePolicy.displayedChildren(in: index, of: id).count
+    }
+}
+
 #if os(macOS)
 private struct MacFolderLibraryLocationActionKey: EnvironmentKey {
     static let defaultValue: (@MainActor (Song) -> Void)? = nil
@@ -166,7 +173,13 @@ private struct HomeFolderRow: View {
             Button("play", systemImage: "play.fill") { play(shuffle: false) }
             Button("shuffle", systemImage: "shuffle") { play(shuffle: true) }
             Button(HomeDiscoveryText.string("unpin_folder"), systemImage: "pin.slash") {
-                pinsRawValue = HomeFolderPinStorage.encode(model.pins(from: pinsRawValue).filter { $0 != node.id })
+                pinsRawValue = HomeFolderPinStorage.replacingVisiblePins(
+                    in: pinsRawValue,
+                    with: model.pins(from: pinsRawValue).filter { $0 != node.id },
+                    index: model.index,
+                    defaultCount: UserDefaults.standard.object(forKey: HomeFolderPinStorage.displayCountKey) as? Int
+                        ?? HomeFolderPinStorage.defaultDisplayCount
+                )
             }
         }
     }
@@ -199,10 +212,11 @@ private struct HomeFolderRow: View {
     }
 
     private var songCount: some View {
-        let counts = node.childNodeCount > 0
-            ? String(format: HomeDiscoveryText.string("folder_counts"), node.childNodeCount, node.descendantSongCount)
+        let childCount = node.displayedChildCount(in: model.index)
+        let counts = childCount > 0
+            ? String(format: HomeDiscoveryText.string("folder_counts"), childCount, node.descendantSongCount)
             : "\(node.descendantSongCount.formatted()) \(String(localized: "songs_count"))"
-        let lastPlayed = node.childNodeCount == 0 ? model.lastPlayedByFolder[node.id] : nil
+        let lastPlayed = childCount == 0 ? model.lastPlayedByFolder[node.id] : nil
         let suffix = lastPlayed.map { " · " + $0.formatted(.relative(presentation: .named)) } ?? ""
         return Text(counts + suffix)
             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -253,8 +267,26 @@ struct HomeFolderBrowser: View {
     private var node: LibraryFolderNode? { currentNodeID.flatMap { model.index?.node(withID: $0) } }
     private var pins: [LibraryFolderNodeID] { model.pins(from: pinsRawValue) }
     private var children: [LibraryFolderNode] {
-        if let currentNodeID { return model.index?.children(of: currentNodeID) ?? [] }
+        if let currentNodeID, let index = model.index {
+            return LibraryFolderBrowsePolicy.displayedChildren(in: index, of: currentNodeID)
+        }
         return model.index?.sourceNodes ?? []
+    }
+
+    private func directSongs(in nodeID: LibraryFolderNodeID) -> [Song] {
+        guard let index = model.index else { return [] }
+        return LibraryFolderBrowsePolicy.sortedSongs(
+            LibraryFolderBrowsePolicy.displayedSongIDs(in: index, of: nodeID)
+                .compactMap { library.unobservedVisibleSong(id: $0) }
+        )
+    }
+
+    private func savePins(_ updated: [LibraryFolderNodeID]) {
+        pinsRawValue = HomeFolderPinStorage.replacingVisiblePins(
+            in: pinsRawValue, with: updated, index: model.index,
+            defaultCount: UserDefaults.standard.object(forKey: HomeFolderPinStorage.displayCountKey) as? Int
+                ?? HomeFolderPinStorage.defaultDisplayCount
+        )
     }
 
     private var legacyBottomClearance: CGFloat {
@@ -320,12 +352,12 @@ struct HomeFolderBrowser: View {
                     .onMove { from, to in
                         var updated = pins
                         updated.move(fromOffsets: from, toOffset: to)
-                        pinsRawValue = HomeFolderPinStorage.encode(updated)
+                        savePins(updated)
                     }
                     .onDelete { offsets in
                         var updated = pins
                         updated.remove(atOffsets: offsets)
-                        pinsRawValue = HomeFolderPinStorage.encode(updated)
+                        savePins(updated)
                         #if os(iOS)
                         if usesInlineControls, updated.isEmpty {
                             editMode?.wrappedValue = .inactive
@@ -358,9 +390,8 @@ struct HomeFolderBrowser: View {
             }
 
             if let nodeID {
-                let ids = model.index?.directSongIDs(in: nodeID) ?? []
-                // 先过滤缺失歌曲，让 List 的每个元素固定生成一行，保留按需加载。
-                let songs = ids.compactMap { library.unobservedVisibleSong(id: $0) }
+                let songs = directSongs(in: nodeID)
+                let ids = songs.map(\.id)
                 if !songs.isEmpty {
                     Section("tab_songs") {
                         ForEach(songs) { song in
@@ -384,7 +415,7 @@ struct HomeFolderBrowser: View {
         .overlay {
             if model.index == nil {
                 ProgressView()
-            } else if children.isEmpty && (node?.directSongCount ?? 0) == 0 {
+            } else if children.isEmpty && (node?.descendantSongCount ?? 0) == 0 {
                 ContentUnavailableView(
                     HomeDiscoveryText.string(nodeID == nil ? "no_folders" : "folder_unavailable"),
                     systemImage: "folder",
@@ -433,7 +464,7 @@ struct HomeFolderBrowser: View {
                     MacFolderPinnedCard(
                         title: HomeDiscoveryText.folderTitle(folder),
                         source: model.index?.sourceNode(for: folder.sourceID).map(HomeDiscoveryText.folderTitle) ?? "",
-                        detail: String(format: HomeDiscoveryText.string("folder_counts"), folder.childNodeCount, folder.descendantSongCount),
+                        detail: String(format: HomeDiscoveryText.string("folder_counts"), folder.displayedChildCount(in: model.index), folder.descendantSongCount),
                         canPlay: folder.descendantSongCount > 0,
                         onOpen: { openMacFolder(id) },
                         onPlay: { playFolder(id, shuffle: false) }
@@ -487,7 +518,7 @@ struct HomeFolderBrowser: View {
         var updated = pins
         guard let index = updated.firstIndex(of: id), updated.indices.contains(index + offset) else { return }
         updated.swapAt(index, index + offset)
-        pinsRawValue = HomeFolderPinStorage.encode(updated)
+        savePins(updated)
     }
 
     private var macBreadcrumbs: [LibraryFolderNode] {
@@ -496,7 +527,12 @@ struct HomeFolderBrowser: View {
         var cursor = currentNodeID
         while let id = cursor, visited.insert(id).inserted,
               let folder = model.index?.node(withID: id) {
-            result.append(folder)
+            let isCollapsedAncestor = id != currentNodeID
+                && folder.kind == .scanRoot
+                && folder.parentID.flatMap { parentID in
+                    model.index.flatMap { LibraryFolderBrowsePolicy.collapsedScanRoot(in: $0, for: parentID) }
+                }?.id == id
+            if !isCollapsedAncestor { result.append(folder) }
             cursor = folder.parentID
         }
         return result.reversed()
@@ -538,7 +574,7 @@ struct HomeFolderBrowser: View {
 
     private func macFolderContents(nodeID: LibraryFolderNodeID, width: CGFloat) -> some View {
         let folders = children
-        let songIDs = model.index?.directSongIDs(in: nodeID) ?? []
+        let songIDs = directSongs(in: nodeID).map(\.id)
         let folderColumns = max(1, Int((width + 12) / 272))
         let folderRows = (folders.count + folderColumns - 1) / folderColumns
         let folderWidth = min(360, max(0, (width - CGFloat(folderColumns - 1) * 12) / CGFloat(folderColumns)))
@@ -572,8 +608,8 @@ struct HomeFolderBrowser: View {
                         let folder = folders[index]
                         MacFolderChildCard(
                             title: HomeDiscoveryText.folderTitle(folder),
-                            detail: folder.childNodeCount > 0
-                                ? String(format: HomeDiscoveryText.string("folder_counts"), folder.childNodeCount, folder.descendantSongCount)
+                            detail: folder.displayedChildCount(in: model.index) > 0
+                                ? String(format: HomeDiscoveryText.string("folder_counts"), folder.displayedChildCount(in: model.index), folder.descendantSongCount)
                                 : "\(folder.descendantSongCount.formatted()) \(String(localized: "songs_count"))",
                             compact: !songIDs.isEmpty,
                             onOpen: { openMacFolder(folder.id) }
@@ -623,8 +659,8 @@ struct HomeFolderBrowser: View {
         if let node {
             MacFolderDetailHeader(
                 title: HomeDiscoveryText.folderTitle(node),
-                detail: node.childNodeCount > 0
-                    ? String(format: HomeDiscoveryText.string("folder_counts"), node.childNodeCount, node.descendantSongCount)
+                detail: node.displayedChildCount(in: model.index) > 0
+                    ? String(format: HomeDiscoveryText.string("folder_counts"), node.displayedChildCount(in: model.index), node.descendantSongCount)
                     : "\(node.descendantSongCount.formatted()) \(String(localized: "songs_count"))",
                 isSource: node.kind == .source
             ) {
@@ -811,7 +847,7 @@ struct HomeFolderBrowser: View {
             #if os(macOS)
             MacFolderDirectoryRow(
                 title: HomeDiscoveryText.folderTitle(child),
-                folderCount: child.childNodeCount,
+                folderCount: child.displayedChildCount(in: model.index),
                 songCount: child.descendantSongCount,
                 isSource: child.kind == .source,
                 onOpen: { openMacFolder(child.id) },
@@ -824,7 +860,7 @@ struct HomeFolderBrowser: View {
             } label: {
                 HomeFolderChildLabel(node: child)
             }
-            if child.kind != .source { pinButton(child.id) }
+            pinButton(child.id)
             #endif
         }
         #if os(macOS)
@@ -852,7 +888,7 @@ struct HomeFolderBrowser: View {
     private func togglePin(_ id: LibraryFolderNodeID) {
         var updated = pins
         if updated.contains(id) { updated.removeAll { $0 == id } } else { updated.insert(id, at: 0) }
-        pinsRawValue = HomeFolderPinStorage.encode(updated)
+        savePins(updated)
     }
 
     private func playFolder(_ id: LibraryFolderNodeID, shuffle: Bool) {

@@ -4,6 +4,67 @@ import Testing
 
 @Suite("Library folder path policy")
 struct LibraryFolderPathPolicyTests {
+    @Test("Native media filenames do not change their containing directory", arguments: [
+        "Normal.flac", "Live #1.flac", "Why?.flac", "Live@Home.flac",
+        "A%2FB.flac", "A%252FB.flac", "Why%3F.flac", "Live%40Home.flac",
+        "100%.flac", "A\\B.flac", "雨一直下.flac", " Cafe\u{301}.flac ",
+        "Live\n2026.flac", "Live:Studio.flac",
+    ])
+    func nativeFilenamesKeepTheirDirectory(_ filename: String) {
+        let policy = LibraryFolderPathPolicy(scanRoots: ["/"], encoding: .native)
+        let placement = policy.placement(for: "/" + filename)
+        #expect(placement.category == .folder)
+        #expect(placement.normalizedFolderPath == "/")
+        #expect(placement.folderComponents.isEmpty)
+    }
+
+    @Test("Native directory names preserve literal escapes, separators, and whitespace")
+    func nativeDirectoryNamesAreNotURLDecoded() {
+        let policy = LibraryFolderPathPolicy(scanRoots: ["/"], encoding: .native)
+        for name in ["Live @Home #1?", "A%2FB", "A%252FB", "A\\B", "%2e%2e", "  Music  ", "Cafe\u{301}"] {
+            let placement = policy.placement(for: "/\(name)/song.flac")
+            #expect(placement.category == .folder)
+            #expect(placement.folderComponents == [name.precomposedStringWithCanonicalMapping])
+        }
+        #expect(policy.placement(for: "Music:Live/song.flac").folderComponents == ["Music:Live"])
+        let scoped = LibraryFolderPathPolicy(scanRoots: ["/Music #1?/A%2FB"], encoding: .native)
+        #expect(scoped.placement(for: "/Music #1?/A%2FB/Live/song.flac").folderComponents == ["Live"])
+        #expect(scoped.placement(for: "/Music #1?/A/B/song.flac").category == .other)
+    }
+
+    @Test("Native paths still reject real external locations and parent traversal")
+    func nativePathsKeepExternalLocationBoundaries() {
+        let policy = LibraryFolderPathPolicy(scanRoots: ["/"], encoding: .native)
+        for path in [
+            "https://user:password@example.test/Music/song.flac?signature=secret",
+            "smb://user:password@nas.local/share/song.flac",
+            "file:///Users/alice/Music/song.flac", "\\\\nas.local\\Music\\song.flac",
+            "C:\\Users\\alice\\Music\\song.flac", "/Music/../private/song.flac",
+            "/Users/alice/Library/Caches/Primuse/song.flac", "/private/var/folders/cache/song.flac",
+            "/bad\u{0}/song.flac",
+        ] {
+            #expect(policy.placement(for: path).category == .other)
+        }
+        #expect(policy.placement(for: "/Music/user@example.test/song.flac").category == .folder)
+        #expect(LibraryFolderPathPolicy(scanRoots: ["/"], semantics: .opaque, encoding: .native)
+            .placement(for: "/not/a/folder/song.flac").category == .uncategorized)
+    }
+
+    @Test("File connectors use native paths without changing opaque or encoded providers", arguments: [
+        MusicSourceType.local, .smb, .webdav, .sftp, .ftp, .s3, .synology, .baiduPan, .dropbox,
+    ])
+    func fileConnectorDescriptorsUseNativePaths(_ type: MusicSourceType) {
+        let source = LibraryFolderSourceDescriptor(source: MusicSource(
+            id: "source", name: "Music", type: type,
+            extraConfig: MusicSource.encodeScannedDirectories(["/"], into: nil, type: type)
+        ))
+        #expect(source.pathEncoding == .native)
+        #expect(source.placementNodeID(for: testSong(id: "song", path: "/Live #1?@%2F.flac", sourceID: "source"))
+            == LibraryFolderNodeID(sourceID: "source", kind: .scanRoot, normalizedRelativePath: "/"))
+        #expect(source.withProviderHierarchy(LibraryFolderProviderHierarchy(roots: [], items: [])).pathEncoding == .native)
+        #expect(LibraryFolderSourceDescriptor(source: MusicSource(id: "nfs", name: "NFS", type: .nfs)).pathEncoding == .legacyNormalized)
+    }
+
     @Test("Normalizes separators, dot segments, percent encoding, Unicode, and case")
     func normalizesPathRepresentations() throws {
         let policy = LibraryFolderPathPolicy(scanRoots: ["/Music/Café/"])
@@ -161,6 +222,91 @@ struct LibraryFolderPathPolicyTests {
 
 @Suite("Immutable library folder index")
 struct LibraryFolderIndexTests {
+    @Test("One iCloud folder keeps all 211 tracks together after rebuilding the index")
+    func rebuildsOneNativeDirectoryWithoutSplittingSongs() throws {
+        let source = LibraryFolderSourceDescriptor(source: MusicSource(
+            id: "icloud", name: "Music", type: .local, extraConfig: "[\"/\"]"
+        ))
+        let filenames = (0..<206).map { "track-\($0).flac" }
+            + ["Live #1.flac", "Why?.flac", "Live@Home.flac", "A%2FB.flac", "A\\B.flac"]
+        let songs = filenames.enumerated().map {
+            testSong(id: "song-\($0.offset)", path: "/" + $0.element, sourceID: "icloud")
+        }
+        let index = LibraryFolderIndexBuilder.build(sources: [source], songs: songs)
+        let sourceNode = try #require(index.sourceNode(for: "icloud"))
+        let root = try #require(index.children(of: sourceNode.id).first)
+        #expect(index.children(of: sourceNode.id).map(\.kind) == [.scanRoot])
+        #expect(root.id == LibraryFolderNodeID(sourceID: "icloud", kind: .scanRoot, normalizedRelativePath: "/"))
+        #expect(root.directSongCount == 211)
+        #expect(root.displayName == "Music")
+        #expect(index.children(of: root.id).isEmpty)
+        #expect(LibraryFolderBrowsePolicy.displayedChildren(in: index, of: sourceNode.id).isEmpty)
+        #expect(Set(LibraryFolderBrowsePolicy.displayedSongIDs(in: index, of: sourceNode.id)) == Set(songs.map(\.id)))
+        for song in songs { #expect(source.placementNodeID(for: song) == root.id) }
+        let updated = index.replacingSource(source, songs: Array(songs.dropLast()))
+        #expect(updated.node(withID: root.id)?.directSongCount == 210)
+        #expect(updated.directSongIDs(in: root.id) == songs.dropLast().map(\.id))
+    }
+
+    @Test("Flattened source pages keep real folders and unresolved songs accessible")
+    func projectsSingleRootWithoutChangingMembership() throws {
+        let source = LibraryFolderSourceDescriptor(sourceID: "local", displayName: "Music", scanRoots: ["/"], pathSemantics: .hierarchical, pathEncoding: .native)
+        let index = LibraryFolderIndexBuilder.build(sources: [source], songs: [
+            testSong(id: "root", path: "/root.flac", sourceID: "local"),
+            testSong(id: "nested", path: "/Album/song.flac", sourceID: "local"),
+            testSong(id: "unknown", path: "", sourceID: "local"),
+            testSong(id: "outside", path: "../song.flac", sourceID: "local"),
+        ])
+        let sourceNode = try #require(index.sourceNode(for: "local"))
+        let root = try #require(LibraryFolderBrowsePolicy.collapsedScanRoot(in: index, for: sourceNode.id))
+        let folders = LibraryFolderBrowsePolicy.displayedChildren(in: index, of: sourceNode.id)
+        #expect(folders.map(\.displayName) == ["Album"])
+        #expect(Set(LibraryFolderBrowsePolicy.displayedSongIDs(in: index, of: sourceNode.id)) == ["root", "unknown", "outside"])
+        #expect(index.songIDs(in: root.id, scope: .descendants) == ["root", "nested"])
+        #expect(index.node(withID: root.id) != nil)
+        #expect(folders.first?.parentID == root.id)
+        #expect(index.sourceNode(for: "local")?.descendantSongCount == 4)
+    }
+
+    @Test("Multiple roots and virtual playlists retain their distinct navigation and membership")
+    func keepsDistinctRootsAndVirtualCollections() throws {
+        let source = LibraryFolderSourceDescriptor(sourceID: "local", displayName: "Music", scanRoots: ["/One", "/Two"], pathSemantics: .hierarchical, pathEncoding: .native)
+        let index = LibraryFolderIndexBuilder.build(sources: [source], songs: [
+            testSong(id: "one", path: "/One/song.flac", sourceID: "local"),
+            testSong(id: "two", path: "/Two/song.flac", sourceID: "local"),
+            testSong(id: "unknown", path: "", sourceID: "local"),
+        ])
+        let sourceNode = try #require(index.sourceNode(for: "local"))
+        #expect(LibraryFolderBrowsePolicy.collapsedScanRoot(in: index, for: sourceNode.id) == nil)
+        #expect(LibraryFolderBrowsePolicy.displayedChildren(in: index, of: sourceNode.id).map(\.displayName) == ["One", "Two"])
+        #expect(LibraryFolderBrowsePolicy.displayedSongIDs(in: index, of: sourceNode.id) == ["unknown"])
+        let virtual = LibraryFolderIndexBuilder.build(sources: [source], songs: [testSong(id: "one", path: "opaque", sourceID: "local")], virtualCollections: [
+            LibraryFolderVirtualCollectionDescriptor(sourceID: "local", identity: "all", displayName: "Songs", kind: .librarySongs, songIDs: ["one"]),
+            LibraryFolderVirtualCollectionDescriptor(sourceID: "local", identity: "favorites", displayName: "Favorites", kind: .playlist, songIDs: ["one"]),
+        ])
+        #expect(LibraryFolderBrowsePolicy.displayedChildren(in: virtual, of: sourceNode.id).count == 2)
+        #expect(LibraryFolderBrowsePolicy.displayedSongIDs(in: virtual, of: sourceNode.id).isEmpty)
+    }
+
+    @Test("Displayed songs and folder playback share a deterministic disc, track and title order")
+    func ordersFolderSongsConsistently() {
+        var second = testSong(id: "second", title: "B", path: "/B.flac", sourceID: "local")
+        second.trackNumber = 2
+        var first = testSong(id: "first", title: "A", path: "/A.flac", sourceID: "local")
+        first.trackNumber = 1
+        var nextDisc = first
+        nextDisc.id = "next-disc"
+        nextDisc.discNumber = 2
+        let duplicateA = testSong(id: "tie-a", title: "Same", path: "/same.flac", sourceID: "local")
+        var duplicateB = duplicateA
+        duplicateB.id = "tie-b"
+        duplicateB.trackNumber = 0
+        let songs = [second, duplicateB, nextDisc, duplicateA, first]
+        let order = LibraryFolderBrowsePolicy.sortedSongs(songs).map(\.id)
+        #expect(order == ["tie-a", "tie-b", "first", "second", "next-disc"])
+        #expect(LibraryFolderBrowsePolicy.sortedSongs(Array(songs.reversed())).map(\.id) == order)
+    }
+
     @Test("Supports multiple roots, root files, duplicate names, and safe fallbacks")
     func buildsMultipleScanRoots() throws {
         let source = LibraryFolderSourceDescriptor(

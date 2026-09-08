@@ -73,12 +73,9 @@ final class HomeDiscoveryModel {
     }
 
     func songs(in id: LibraryFolderNodeID, scope: LibraryFolderSongScope = .descendants) -> [Song] {
-        (index?.songIDs(in: id, scope: scope) ?? []).compactMap { songsByID[$0] }
-            .sorted {
-                if $0.discNumber != $1.discNumber { return ($0.discNumber ?? 0) < ($1.discNumber ?? 0) }
-                if $0.trackNumber != $1.trackNumber { return ($0.trackNumber ?? 0) < ($1.trackNumber ?? 0) }
-                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-            }
+        LibraryFolderBrowsePolicy.sortedSongs(
+            (index?.songIDs(in: id, scope: scope) ?? []).compactMap { songsByID[$0] }
+        )
     }
 }
 
