@@ -2009,6 +2009,7 @@ final class SourceManager {
     @ObservationIgnored private var connectorSourceModifiedAtByID: [String: Date] = [:]
     @ObservationIgnored private var connectorScopeValidationPendingSourceIDs: Set<String> = []
     @ObservationIgnored private var connectorScopeValidationGenerationBySourceID: [String: Int] = [:]
+    @ObservationIgnored private var playbackSourceAvailability = PlaybackSourceAvailabilityPolicy()
     private struct UnavailableConnectorCacheEntry {
         let connector: any MusicSourceConnector
         let capturedAt: Date
@@ -3357,6 +3358,9 @@ final class SourceManager {
            let cached = await cachedURLWithPlaybackLease(for: song) {
             return cached
         }
+        if !acquirePlaybackCacheLease, let cached = cachedURL(for: song) {
+            return cached
+        }
 
         let sources = try await sourcesProvider()
         guard let source = sources.first(where: { $0.id == song.sourceID }) else {
@@ -3370,6 +3374,10 @@ final class SourceManager {
             streamEpoch: streamEpoch
         )
 
+        if await playbackSourceEndpointsAreUnavailable(for: source) {
+            throw SourceError.connectionFailed(String(localized: "status_network_unavailable"))
+        }
+        try Task.checkCancellation()
         let conn = connector(for: source)
         try await conn.connect()
         try await ensureCurrentPlaybackResolutionScope(
@@ -4400,6 +4408,7 @@ final class SourceManager {
         scheduleValidation: Bool = true
     ) {
         for sourceID in sourceIDs {
+            playbackSourceAvailability.invalidate(sourceID: sourceID)
             CloudPlaybackSource.cancelSessions(sourceID: sourceID)
             let generation = (connectorScopeValidationGenerationBySourceID[sourceID] ?? 0) &+ 1
             connectorScopeValidationGenerationBySourceID[sourceID] = generation
@@ -4792,6 +4801,22 @@ final class SourceManager {
         }
         Task { await AudioCacheManager.shared.recordAccess(path: relativePath) }
         return fileURL
+    }
+
+    /// Queue traversal must not migrate files, publish cache state or record an
+    /// access on every candidate. Resolution still acquires and validates the
+    /// selected file's normal security-scoped playback lease.
+    func hasUsableCachedAudioForPlayback(_ song: Song) -> Bool {
+        let relativePath = audioCacheRelativePath(for: song)
+        guard audioCacheReadsAreAllowed(for: song.sourceID),
+              !blockedUntrustedAudioCachePaths.contains(relativePath) else { return false }
+        let preservesExistingArtifact = preservingAutomaticRefreshPaths.contains(relativePath)
+            || contentChangeProtectionPendingPaths.contains(relativePath)
+            || (activePlaybackAudioCachePaths[relativePath] ?? 0) > 0
+        return Self.isUsableCacheFile(
+            at: cacheURL(for: song),
+            expectedSize: preservesExistingArtifact ? 0 : song.fileSize
+        )
     }
 
     /// A sparse range cache is excellent for linear playback, but some
@@ -7646,6 +7671,8 @@ final class SourceManager {
                 return
             }
 
+            guard !(await playbackSourceEndpointsAreUnavailable(for: source)) else { return }
+            try Task.checkCancellation()
             let conn = connector(for: source)
             try await conn.connect()
             try Task.checkCancellation()
@@ -8413,6 +8440,79 @@ final class SourceManager {
             releaseAudioCacheLeaseForPlayback(songID: song.id)
         }
         return inputSource
+    }
+
+    func isSourceKnownUnavailableForPlayback(_ sourceID: String) -> Bool {
+        playbackSourceAvailability.cachedUnavailability(
+            sourceID: sourceID,
+            networkGeneration: NetworkMonitor.shared.pathGeneration,
+            sourceGeneration: connectorScopeValidationGenerationBySourceID[sourceID] ?? 0,
+            now: ProcessInfo.processInfo.systemUptime
+        ) == true
+    }
+
+    func playbackSourceIsUnavailable(for song: Song, retryKnownUnavailable: Bool = false) async -> Bool {
+        // Cold-start cache trust is established asynchronously. Do not probe a
+        // disconnected NAS while a valid offline copy is waiting for that check.
+        _ = await ensureAudioCacheScopeValidated(for: song.sourceID)
+        guard cachedURL(for: song) == nil else { return false }
+        return await playbackSourceEndpointsAreUnavailable(
+            sourceID: song.sourceID,
+            refresh: retryKnownUnavailable && isSourceKnownUnavailableForPlayback(song.sourceID)
+        )
+    }
+
+    func playbackSourceEndpointsAreUnavailable(
+        sourceID: String,
+        refresh: Bool = false,
+        probe: SourceNetworkFailurePolicy.EndpointProbe = SourceConnectionPreflight.check
+    ) async -> Bool {
+        guard !Task.isCancelled,
+              let sources = try? await sourcesProvider(),
+              let source = sources.first(where: { $0.id == sourceID && !$0.isDeleted }) else {
+            return false
+        }
+        return await playbackSourceEndpointsAreUnavailable(for: source, refresh: refresh, probe: probe)
+    }
+
+    private func playbackSourceEndpointsAreUnavailable(
+        for source: MusicSource,
+        refresh: Bool = false,
+        probe: SourceNetworkFailurePolicy.EndpointProbe = SourceConnectionPreflight.check
+    ) async -> Bool {
+        let networkGeneration = NetworkMonitor.shared.pathGeneration
+        let sourceGeneration = connectorScopeValidationGenerationBySourceID[source.id] ?? 0
+        if !refresh, let cached = playbackSourceAvailability.cachedUnavailability(
+            sourceID: source.id,
+            networkGeneration: networkGeneration,
+            sourceGeneration: sourceGeneration,
+            now: ProcessInfo.processInfo.systemUptime
+        ) { return cached }
+
+        let preferredKind = activeConnectionRoutes[source.id]
+            ?? (NetworkMonitor.shared.prefersLocalConnections ? .localAddress : .publicAddress)
+        let candidates = source.connectionCandidates.sorted { lhs, rhs in
+            lhs.kind == preferredKind && rhs.kind != preferredKind
+        }
+        let unavailable = await SourceNetworkFailurePolicy.allEndpointsAreUnreachable(
+            candidates.map(\.endpoint), probe: probe
+        )
+        guard !Task.isCancelled,
+              NetworkMonitor.shared.pathGeneration == networkGeneration,
+              (connectorScopeValidationGenerationBySourceID[source.id] ?? 0) == sourceGeneration else {
+            return false
+        }
+        playbackSourceAvailability.record(
+            isUnreachable: unavailable,
+            sourceID: source.id,
+            networkGeneration: networkGeneration,
+            sourceGeneration: sourceGeneration,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        if unavailable {
+            plog("Playback source unavailable source=\(source.id.prefix(8)) type=\(source.type.rawValue) networkGeneration=\(networkGeneration) endpointProbe=all-unreachable")
+        }
+        return unavailable
     }
 
     func metadataSourceEndpointsAreUnavailable(sourceID: String) async -> Bool {
@@ -9386,6 +9486,7 @@ final class SourceManager {
         connectorScopeValidationGenerationBySourceID.removeAll()
         activeConnectionRoutes.removeAll()
         lastSuccessfulConnectionRoutes.removeAll()
+        playbackSourceAvailability = PlaybackSourceAvailabilityPolicy()
     }
 
     private func setActiveConnectionRoute(

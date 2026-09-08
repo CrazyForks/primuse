@@ -2670,6 +2670,12 @@ final class ScanService {
             // did not change. Persisting the whole JSON library here turns a
             // no-op sync of a large catalog into an avoidable full rewrite.
             try await persistSyncState(candidateState)
+            try await refreshFolderPlaylistsForCommittedScan(
+                source: source, generation: generation,
+                scopeFingerprint: Self.scopeFingerprint(for: source, directories: directories),
+                directories: directories, syncState: candidateState,
+                library: library, sourceStore: sourceStore
+            )
             let acceptedCount = library.songs.filter { $0.sourceID == source.id }.count
             sourceStore.updateLocal(source.id) {
                 $0.songCount = acceptedCount
@@ -2878,6 +2884,15 @@ final class ScanService {
                 )
             )
         }
+        let previousFolderMemberships: [String: [String]]
+        if let source {
+            previousFolderMemberships = library.folderPlaylistBindings(for: source)
+                .reduce(into: [:]) { result, entry in
+                    result[entry.key] = library.rawSongIDs(forPlaylist: entry.key)
+                }
+        } else {
+            previousFolderMemberships = [:]
+        }
         if commitsCatalogSnapshot {
             library.addSongs(
                 catalogSongs,
@@ -2911,6 +2926,14 @@ final class ScanService {
             expectedScopeDirectories: expectedScopeDirectories,
             sourceStore: sourceStore
         )
+        if pruneMissingSongs, let source {
+            try await refreshFolderPlaylistsForCommittedScan(
+                source: source, generation: generation,
+                scopeFingerprint: expectedScopeFingerprint, directories: expectedScopeDirectories,
+                syncState: syncState, library: library, sourceStore: sourceStore,
+                previousMemberships: previousFolderMemberships
+            )
+        }
         // Use the post-tombstone count from the library, not the raw scan
         // count — otherwise a deleted-then-rescanned song shows as still
         // present in the source card while the library actually filters it.
@@ -3114,6 +3137,55 @@ final class ScanService {
                 hasPendingWork: true
             )
         }
+    }
+
+    private func refreshFolderPlaylistsForCommittedScan(
+        source: MusicSource,
+        generation: Int,
+        scopeFingerprint: String?,
+        directories: [String],
+        syncState: SourceSyncState?,
+        library: MusicLibrary,
+        sourceStore: SourcesStore,
+        previousMemberships: [String: [String]] = [:]
+    ) async throws {
+        guard syncState?.reconciliation == nil else { return }
+        let bindings = library.folderPlaylistBindings(for: source)
+        guard !bindings.isEmpty else { return }
+        let committedSongs = library.songs
+        let committedIndex = syncState?.index
+        let task = Task.detached(priority: .utility) {
+            FolderPlaylistMembershipPolicy.memberships(
+                bindings: bindings, source: source,
+                songs: committedSongs, syncIndex: committedIndex
+            )
+        }
+        let memberships = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        try Task.checkCancellation()
+        try checkScanCommitFence(
+            sourceID: source.id, generation: generation,
+            expectedScopeFingerprint: scopeFingerprint, expectedScopeDirectories: directories,
+            sourceStore: sourceStore
+        )
+        guard !memberships.isEmpty else { return }
+        library.applyFolderPlaylistMemberships(
+            memberships, expectedBindings: bindings, previousMemberships: previousMemberships
+        )
+        // Membership is stored in the playlist snapshot, not the incremental
+        // song database. Its generation check also retries a prior failed write
+        // without rewriting an already durable, unchanged snapshot.
+        guard case .success = await library.persistNowAndWait() else {
+            throw SourceError.connectionFailed("Unable to persist folder playlists")
+        }
+        try checkScanCommitFence(
+            sourceID: source.id, generation: generation,
+            expectedScopeFingerprint: scopeFingerprint, expectedScopeDirectories: directories,
+            sourceStore: sourceStore
+        )
     }
 
     private func loadSyncStates() -> Bool {

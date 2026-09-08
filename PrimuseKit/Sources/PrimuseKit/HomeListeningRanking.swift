@@ -220,7 +220,11 @@ public enum HomeFolderPinStorage {
     public static func resolvedPins(
         _ value: String, index: LibraryFolderIndex?, defaultCount: Int
     ) -> [LibraryFolderNodeID] {
-        guard value.isEmpty else { return decode(value) }
+        guard value.isEmpty else {
+            let saved = decode(value)
+            guard let index else { return saved }
+            return saved.filter { index.node(withID: $0) != nil }
+        }
         guard let index else { return [] }
         var result: [LibraryFolderNodeID] = []
         for source in index.sourceNodes {

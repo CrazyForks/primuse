@@ -98,6 +98,10 @@ actor ConnectorScanner {
         // the provider snapshot and the authoritative parent re-list, it must
         // recover its existing Song ID instead of being recreated.
         let reconciliationBaseline = existingIndex
+        let confirmedDeletedDirectoryPaths = SourceSyncDirectoryPruningPolicy.confirmedDeletedDirectoryPaths(
+            index: reconciliationBaseline,
+            deletedKeys: deletedStableKeys
+        )
         var observedStablePaths: [String: String] = [:]
 
         for key in deletedStableKeys {
@@ -122,6 +126,13 @@ actor ConnectorScanner {
             do {
                 siblings = try await connector.listFiles(at: directory)
             } catch {
+                if !requiresCompleteListings,
+                   isMissingPathError(error),
+                   confirmedDeletedDirectoryPaths.contains(directory) {
+                    completedDirectoryCount += 1
+                    await progress?(completedDirectoryCount, orderedDirectories.count, directory)
+                    continue
+                }
                 let unconfirmedMissing = BaiduSnapshotDirectoryReconciliationPolicy
                     .unconfirmedMissingKeys(
                         expectedKeys: Set(oldEntries.keys),
@@ -343,6 +354,16 @@ actor ConnectorScanner {
                 )
             }
         }
+
+        let orphanedKeys = SourceSyncDirectoryPruningPolicy.orphanedDescendantKeys(
+            baseline: reconciliationBaseline,
+            current: index
+        )
+        for key in orphanedKeys {
+            guard let entry = index.removeValue(forKey: key) else { continue }
+            for id in entry.songIDs { songsByID[id] = nil }
+        }
+        changedCount += orphanedKeys.count
 
         var remaining = songsByID
         var orderedSongs: [Song] = []

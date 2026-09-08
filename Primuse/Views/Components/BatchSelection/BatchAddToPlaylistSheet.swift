@@ -20,7 +20,7 @@ struct BatchAddToPlaylistSheet: View {
     /// 目标。「我喜欢」仍是本地可编辑歌单，批量加入与逐曲点心形使用同一份成员关系。
     private var targetPlaylists: [Playlist] {
         library.playlists.filter {
-            !MirrorPlaylistIdentity.isMirrorPlaylist($0.id)
+            $0.allowsManualSongMembership
         }
     }
 

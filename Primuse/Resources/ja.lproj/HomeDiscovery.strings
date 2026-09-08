@@ -22,3 +22,4 @@
 "manage_folders" = "ディレクトリの管理と並べ替え";
 "no_pinned_folders" = "「すべて見る」でディレクトリを選択できます。";
 "folder_ranking_scope" = "ディレクトリのランキングには、現在の保存先を確認できる曲が含まれます。";
+"folder_as_playlist" = "Use as Playlist";

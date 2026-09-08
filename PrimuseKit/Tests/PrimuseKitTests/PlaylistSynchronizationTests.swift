@@ -145,6 +145,14 @@ struct PlaylistSynchronizationTests {
             #expect(legacy?.isDeleted == false)
             #expect(legacy?.syncRevision == 0)
             #expect(legacy?.hasDedicatedCoverArt == false)
+            #expect(legacy?.folderBinding == nil)
+
+            let binding = PlaylistFolderBinding(nodeID: LibraryFolderNodeID(
+                sourceID: "source", kind: .folder, normalizedRelativePath: "/music/live"
+            ))
+            let folderPlaylist = Playlist(id: "folder", name: "Live", folderBinding: binding)
+            try folderPlaylist.save(db)
+            #expect(try Playlist.fetchOne(db, key: "folder")?.folderBinding == binding)
 
             let tombstone = makePlaylist(
                 id: "deleted",

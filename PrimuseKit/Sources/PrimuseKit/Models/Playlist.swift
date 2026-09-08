@@ -12,6 +12,11 @@ public struct Playlist: Codable, Identifiable, Hashable, Sendable {
     /// Older snapshots decode this as `false`, so stale first-song artwork is
     /// never mistaken for a dedicated playlist cover after upgrading.
     public var hasDedicatedCoverArt: Bool
+    public var folderBinding: PlaylistFolderBinding?
+
+    public var allowsManualSongMembership: Bool {
+        folderBinding == nil && !MirrorPlaylistIdentity.isMirrorPlaylist(id)
+    }
     /// Soft-delete flag. When true, the playlist is hidden from the regular UI
     /// but kept on disk + in CloudKit so other devices can converge before the
     /// 30-day prune sweeps it for good.
@@ -48,7 +53,8 @@ public struct Playlist: Codable, Identifiable, Hashable, Sendable {
         syncOperationID: String = "",
         deleteOperationID: String? = nil,
         restoredDeleteOperationID: String? = nil,
-        isPurged: Bool = false
+        isPurged: Bool = false,
+        folderBinding: PlaylistFolderBinding? = nil
     ) {
         self.id = id
         self.name = name
@@ -56,6 +62,7 @@ public struct Playlist: Codable, Identifiable, Hashable, Sendable {
         self.updatedAt = updatedAt
         self.coverArtPath = coverArtPath
         self.hasDedicatedCoverArt = hasDedicatedCoverArt
+        self.folderBinding = folderBinding
         self.isDeleted = isDeleted
         self.deletedAt = deletedAt
         self.syncRevision = syncRevision
@@ -77,6 +84,7 @@ public struct Playlist: Codable, Identifiable, Hashable, Sendable {
             Bool.self,
             forKey: .hasDedicatedCoverArt
         ) ?? false
+        self.folderBinding = try c.decodeIfPresent(PlaylistFolderBinding.self, forKey: .folderBinding)
         self.isDeleted = try c.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
         self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
         self.syncRevision = try c.decodeIfPresent(Int64.self, forKey: .syncRevision) ?? 0
@@ -416,6 +424,9 @@ public enum PlaylistDatabaseMigration {
                 table.add(column: "hasDedicatedCoverArt", .boolean)
                     .notNull()
                     .defaults(to: false)
+            }
+            if !names.contains("folderBinding") {
+                table.add(column: "folderBinding", .text)
             }
         }
     }

@@ -364,7 +364,11 @@ struct HomeFolderBrowser: View {
                 if !songs.isEmpty {
                     Section("tab_songs") {
                         ForEach(songs) { song in
-                            SongRowView(song: song, isPlaying: player.currentSong?.id == song.id)
+                            // A fixed row container prevents List from expanding
+                            // SongRowView's conditional menu tree for every song.
+                            HStack(spacing: 0) {
+                                SongRowView(song: song, isPlaying: player.currentSong?.id == song.id)
+                            }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     HomeDiscoveryPlayback.play(ids: ids, startingAt: song.id, library: library, player: player)
@@ -406,6 +410,12 @@ struct HomeFolderBrowser: View {
                     } label: { Image(systemName: "play.circle") }
                     .disabled(node.descendantSongCount == 0)
                     .accessibilityLabel("play")
+                    if FolderPlaylistMenuButton.supports(node) {
+                        Menu {
+                            FolderPlaylistMenuButton(node: node, index: model.index)
+                        } label: { Image(systemName: "ellipsis") }
+                        .accessibilityLabel("a11y_more_actions")
+                    }
                 }
             }
             if node == nil, !usesInlineControls {
@@ -464,6 +474,7 @@ struct HomeFolderBrowser: View {
             .disabled(folder.descendantSongCount == 0)
         Button("shuffle", systemImage: "shuffle") { playFolder(folder.id, shuffle: true) }
             .disabled(folder.descendantSongCount == 0)
+        FolderPlaylistMenuButton(node: folder, index: model.index)
         Divider()
         Button("ai_move_up", systemImage: "arrow.up") { moveMacPin(folder.id, by: -1) }
             .disabled(pins.first == folder.id)
@@ -641,6 +652,13 @@ struct HomeFolderBrowser: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("search_title")
                     pinButton(node.id)
+                    if FolderPlaylistMenuButton.supports(node) {
+                        Menu {
+                            FolderPlaylistMenuButton(node: node, index: model.index)
+                        } label: { Image(systemName: "ellipsis").frame(width: 30, height: 30) }
+                        .menuStyle(.borderlessButton)
+                        .accessibilityLabel("a11y_more_actions")
+                    }
                 }
             } playback: {
                 Button("shuffle", systemImage: "shuffle") {
@@ -701,6 +719,7 @@ struct HomeFolderBrowser: View {
             .disabled(child.descendantSongCount == 0)
         Button("shuffle", systemImage: "shuffle") { playFolder(child.id, shuffle: true) }
             .disabled(child.descendantSongCount == 0)
+        FolderPlaylistMenuButton(node: child, index: model.index)
         if child.kind != .source {
             let pinned = pins.contains(child.id)
             Button(HomeDiscoveryText.string(pinned ? "unpin_folder" : "pin_folder"),
@@ -838,6 +857,39 @@ struct HomeFolderBrowser: View {
 
     private func playFolder(_ id: LibraryFolderNodeID, shuffle: Bool) {
         HomeDiscoveryPlayback.play(ids: model.songs(in: id).map(\.id), shuffle: shuffle, library: library, player: player)
+    }
+}
+
+struct FolderPlaylistMenuButton: View {
+    let node: LibraryFolderNode
+    let index: LibraryFolderIndex?
+    @Environment(MusicLibrary.self) private var library
+    @Environment(SourcesStore.self) private var sourcesStore
+
+    static func supports(_ node: LibraryFolderNode) -> Bool {
+        (node.kind == .folder || node.kind == .scanRoot || node.kind == .source)
+            && node.sourceID != AppleMusicLibraryIdentity.sourceID
+    }
+
+    var body: some View {
+        if Self.supports(node),
+           let source = sourcesStore.source(id: node.sourceID) {
+            let binding = PlaylistFolderBinding(nodeID: node.id, cloudAccountID: source.cloudAccountID)
+            let exists = library.playlists.contains { $0.folderBinding == binding }
+            Button(
+                HomeDiscoveryText.string("folder_as_playlist"),
+                systemImage: exists ? "checkmark" : "music.note.list"
+            ) {
+                guard let index, index.node(withID: node.id) != nil else { return }
+                library.createFolderPlaylist(
+                    name: HomeDiscoveryText.folderTitle(node), nodeID: node.id,
+                    cloudAccountID: source.cloudAccountID,
+                    songIDs: index.songIDs(in: node.id, scope: .descendants)
+                )
+            }
+            .disabled(exists || index?.node(withID: node.id) == nil)
+            .accessibilityIdentifier("folder.createPlaylist")
+        }
     }
 }
 

@@ -1112,6 +1112,9 @@ final class AudioPlayerService {
     private var decodedBufferHealthySampleCount = 0
     private var decodedBufferRecoveryAttempts = 0
     private var decodedBufferRecoveryInProgress = false
+    private var lastDecodedBufferSampleUptime: TimeInterval?
+    private var decodedBufferDiagnosticUnderflowStartedAt: TimeInterval?
+    private var decodedBufferDiagnosticEpisodeCount = 0
     private var lastDecodedBufferRecoveryAt: Date?
 
     private var errorDismissTask: Task<Void, Never>?
@@ -4051,7 +4054,7 @@ final class AudioPlayerService {
     }
 
     func play(song: Song, caller: String = #fileID, callerLine: Int = #line) async {
-        guard isSongAvailableForNewPlayback(song) else {
+        guard isSourceEnabledForPlayback(song.sourceID) else {
             plog("⛔ Playback ignored for disabled source id=\(song.sourceID.prefix(8))… song=\(song.id.prefix(8))…")
             showPlaybackError(String(localized: "playback_error_source_disabled"))
             return
@@ -4189,14 +4192,27 @@ final class AudioPlayerService {
         updateNowPlayingArtworkIfNeeded()
         updatePlaybackState()
 
-        let musicVideoStartResult = await startMusicVideoPlaybackIfAvailable(for: song, playID: id)
-        if case .started = musicVideoStartResult {
-            sourceManager?.cancelBackgroundAudioCaching(keeping: [])
-            return
-        }
-        if case .cancelled = musicVideoStartResult { return }
-
         do {
+            // Traversal excludes known outages; directly selecting one of
+            // those entries retries its source without rebuilding the queue.
+            if await sourceManager?.playbackSourceIsUnavailable(
+                for: song, retryKnownUnavailable: true
+            ) == true {
+                throw SourceError.connectionFailed(String(localized: "status_network_unavailable"))
+            }
+            guard isLocalTransportStartAuthorized(
+                playID: id,
+                itemID: song.id,
+                trigger: "play-after-source-probe",
+                expectedTicket: transportTicket
+            ) else { return }
+            let musicVideoStartResult = await startMusicVideoPlaybackIfAvailable(for: song, playID: id)
+            if case .started = musicVideoStartResult {
+                sourceManager?.cancelBackgroundAudioCaching(keeping: [])
+                return
+            }
+            if case .cancelled = musicVideoStartResult { return }
+
             let sourceStreamEpoch = CloudPlaybackSource.streamEpochTicket(
                 sourceID: song.sourceID
             )
@@ -4249,7 +4265,9 @@ final class AudioPlayerService {
             plog("Playback URL resolution error: \(error)")
             showPlaybackError(String(localized: "playback_error_connection"))
             isLoading = false
-            if isSourceWideResolutionFailure(error) {
+            let sourceUnavailable = await isSourceWideResolutionFailure(error, sourceID: song.sourceID)
+            guard playID == id else { return }
+            if sourceUnavailable {
                 plog("⏭️ Source-wide playback failure; skipping unavailable entries from source \(song.sourceID.prefix(8))")
                 await autoAdvanceAfterFailure(skippingSourceID: song.sourceID)
                 return
@@ -4903,21 +4921,38 @@ final class AudioPlayerService {
                         expectedStreamEpoch: sourceStreamEpoch
                     )
                 } catch is CancellationError {
+                    guard playID == id else { return }
                     isLoading = false
                     return
                 } catch let error as OfflineTransferValidationError {
+                    guard playID == id else { return }
                     plog("⚠️ Cloud range cache admission failed: \(error.localizedDescription)")
                     showPlaybackError(String(localized: "offline_download_failed"))
                     isLoading = false
+                    await autoAdvanceAfterFailure()
                     return
                 } catch {
+                    guard !Task.isCancelled, playID == id else { return }
+                    if OperationCancellationPolicy.isCancellation(error) {
+                        isLoading = false
+                        return
+                    }
                     plog("⚠️ Cloud range setup failed: \(error.localizedDescription)")
                     showPlaybackError(String(localized: "playback_error_connection"))
                     isLoading = false
+                    let sourceUnavailable = await isSourceWideResolutionFailure(error, sourceID: song.sourceID)
+                    guard playID == id else { return }
+                    await autoAdvanceAfterFailure(skippingSourceID: sourceUnavailable ? song.sourceID : nil)
                     return
                 }
                 guard let inputSource else {
+                    guard !Task.isCancelled, playID == id else { return }
                     isLoading = false
+                    if CloudPlaybackSource.isStreamEpochTicketCurrent(
+                        sourceID: song.sourceID, ticket: sourceStreamEpoch
+                    ) {
+                        await autoAdvanceAfterFailure()
+                    }
                     return
                 }
                 // 解码器选型: 自定义 cloudStreamingScheme (primuse-stream://)
@@ -8793,7 +8828,7 @@ final class AudioPlayerService {
     func playFromQueue(at index: Int) async {
         guard queueEntries.indices.contains(index) else { return }
         let song = queueEntries[index].song
-        guard isSongAvailableForNewPlayback(song) else {
+        guard isSourceEnabledForPlayback(song.sourceID) else {
             showPlaybackError(String(localized: "playback_error_source_disabled"))
             return
         }
@@ -9991,9 +10026,12 @@ final class AudioPlayerService {
         decodedBufferUnhealthySampleCount = 0
         decodedBufferHealthySampleCount = 0
         decodedBufferRecoveryInProgress = false
+        lastDecodedBufferSampleUptime = nil
+        decodedBufferDiagnosticUnderflowStartedAt = nil
         if resetRecoveryAttempts {
             decodedBufferRecoveryAttempts = 0
             lastDecodedBufferRecoveryAt = nil
+            decodedBufferDiagnosticEpisodeCount = 0
         }
     }
 
@@ -10027,6 +10065,7 @@ final class AudioPlayerService {
             && snapshot.bufferedDuration <= Self.decodedBufferEmptyThreshold
         let isUnhealthy = !snapshot.decodingFinished
             && (!audioEngine.isActuallyPlaying || queueIsEmpty)
+        recordDecodedBufferDiagnostic(snapshot: snapshot, isUnhealthy: isUnhealthy, playID: gatePlayID)
         if isUnhealthy {
             decodedBufferUnhealthySampleCount += 1
             decodedBufferHealthySampleCount = 0
@@ -10075,6 +10114,40 @@ final class AudioPlayerService {
         case .stopPlayback:
             stopAfterRepeatedDecodedBufferUnderflow(snapshot: snapshot, playID: gatePlayID)
         }
+    }
+
+    private func recordDecodedBufferDiagnostic(
+        snapshot: AsyncBufferGate.Snapshot,
+        isUnhealthy: Bool,
+        playID id: UUID
+    ) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let sampleGap = lastDecodedBufferSampleUptime.map { max(0, now - $0) } ?? 0
+        lastDecodedBufferSampleUptime = now
+        guard isPlaying, hasPreparedLocalPlayback, !isLoading, !isCrossfading,
+              let song = currentSong else {
+            decodedBufferDiagnosticUnderflowStartedAt = nil
+            return
+        }
+        let event: String
+        if isUnhealthy {
+            guard decodedBufferDiagnosticUnderflowStartedAt == nil else { return }
+            decodedBufferDiagnosticUnderflowStartedAt = now
+            decodedBufferDiagnosticEpisodeCount += 1
+            event = "underflow"
+        } else if let startedAt = decodedBufferDiagnosticUnderflowStartedAt {
+            decodedBufferDiagnosticUnderflowStartedAt = nil
+            event = "recovered after=\(String(format: "%.3f", now - startedAt))s"
+        } else {
+            return
+        }
+        // Brief dropouts never reach the pipeline-rebuild threshold. Record
+        // their onset and recovery too, without producing a per-tick log.
+        guard decodedBufferDiagnosticEpisodeCount <= 8 else { return }
+        let sourceType = playbackMetadataSourceType?(song.sourceID)?.rawValue ?? "unknown"
+        let route = sourceManager?.activeConnectionRoutes[song.sourceID]?.rawValue ?? "unknown"
+        let network = NetworkMonitor.shared
+        plog("Playback buffer \(event) playID=\(id.uuidString.prefix(8)) source=\(song.sourceID.prefix(8)) song=\(song.id.prefix(8)) sourceType=\(sourceType) decoder=\(activeDecoderKind) format=\(song.fileFormat.rawValue) episode=\(decodedBufferDiagnosticEpisodeCount) position=\(String(format: "%.3f", currentTime)) queued=\(String(format: "%.3f", snapshot.bufferedDuration))s/\(snapshot.bufferedBytes)B/\(snapshot.bufferCount) sampleGap=\(String(format: "%.3f", sampleGap))s enginePlaying=\(audioEngine.isActuallyPlaying) route=\(route) networkGeneration=\(network.pathGeneration) reachable=\(network.isReachable) expensive=\(network.isExpensive) thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
     }
 
     private func recoverDecodedBufferUnderflow(
@@ -10388,7 +10461,8 @@ final class AudioPlayerService {
                   SourceFailureAdvancePolicy.shouldSkipCandidate(
                     failedSourceID: failedSourceID,
                     candidateSourceID: candidate.sourceID
-                  ) {
+                  ),
+                  sourceManager?.hasUsableCachedAudioForPlayback(candidate) != true {
                 guard skippedCount < queueEntries.count else {
                     plog("⏸️ No playable provider remains after source-wide failure")
                     suspendPlaybackPreservingSelection(reason: "source-wide-playback-failure")
@@ -10421,22 +10495,31 @@ final class AudioPlayerService {
         }
     }
 
-    /// Authentication, connection and timeout failures normally affect every
-    /// track from the same remote source. The failure path skips queued entries
-    /// from that source before continuing with the next available provider.
-    private func isSourceWideResolutionFailure(_ error: Error) -> Bool {
+    /// A single file request or decoder timeout cannot establish a source
+    /// outage. Only account failures or independently unreachable endpoints
+    /// justify skipping other uncached songs from that provider.
+    private func isSourceWideResolutionFailure(_ error: Error, sourceID: String) async -> Bool {
+        if sourceManager?.isSourceKnownUnavailableForPlayback(sourceID) == true { return true }
         if let sourceError = error as? SourceError {
             switch sourceError {
-            case .authenticationFailed, .credentialUnavailable,
-                 .connectionFailed, .timeout:
+            case .authenticationFailed, .credentialUnavailable:
                 return true
+            case .connectionFailed, .timeout:
+                return await sourceManager?.playbackSourceEndpointsAreUnavailable(
+                    sourceID: sourceID, refresh: true
+                ) == true
             case .pathNotFound, .fileNotFound:
                 return false
             }
         }
+        if SourceNetworkFailurePolicy.isNetworkFailure(error) {
+            return await sourceManager?.playbackSourceEndpointsAreUnavailable(
+                sourceID: sourceID, refresh: true
+            ) == true
+        }
         let nsError = error as NSError
         if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-            return isSourceWideResolutionFailure(underlying)
+            return await isSourceWideResolutionFailure(underlying, sourceID: sourceID)
         }
         return false
     }
@@ -10489,13 +10572,21 @@ final class AudioPlayerService {
         let pendingShuffleRound: [Int]?
     }
 
-    /// Disabling a source hides it without deleting its songs. Queue entries
-    /// therefore stay durable but cannot begin a new transport until the
-    /// source is enabled again. A player created without a library (previews
-    /// and isolated tests) retains its historical permissive behavior.
+    private func isSourceEnabledForPlayback(_ sourceID: String) -> Bool {
+        library?.disabledSourceIDs.contains(sourceID) != true
+    }
+
+    /// Keep durable queue order intact during an outage. Complete local audio
+    /// stays eligible and a changed network path immediately expires old
+    /// reachability evidence, including when moving between two Wi-Fi networks.
     private func isSongAvailableForNewPlayback(_ song: Song) -> Bool {
-        guard let library else { return true }
-        return !library.disabledSourceIDs.contains(song.sourceID)
+        let isUnreachable = sourceManager?.isSourceKnownUnavailableForPlayback(song.sourceID) == true
+        return PlaybackSourceAvailabilityPolicy.allowsPlayback(
+            isSourceEnabled: isSourceEnabledForPlayback(song.sourceID),
+            isSourceUnreachable: isUnreachable,
+            hasUsableLocalAudio: isUnreachable
+                && sourceManager?.hasUsableCachedAudioForPlayback(song) == true
+        )
     }
 
     private func nextQueueEntryInQueue(

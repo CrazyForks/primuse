@@ -144,9 +144,10 @@ final class TVLibraryStateTests: XCTestCase {
         let sourceCacheID = artist.id + "\u{1F}" + thumbnail
         _ = await sender.storeArtistImage(original, forArtistID: artist.id)
         _ = await sender.storeArtistImage(original, forArtistID: sourceCacheID)
-        let transfer = try XCTUnwrap(MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
-            artworkSnapshot([first, second]), assetStore: sender
-        ))
+        let prepared = await MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
+            try artworkSnapshot([first, second]), assetStore: sender
+        )
+        let transfer = try XCTUnwrap(prepared)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: transfer.data) as? [String: Any])
         XCTAssertEqual((object["cachedArtworkAssets"] as? [String: String])?.count, 1)
         XCTAssertEqual((object["artworkCacheReferences"] as? [String: String])?.count, 5)
@@ -175,24 +176,26 @@ final class TVLibraryStateTests: XCTestCase {
         sender.storeCoverSync(try artworkImage(), for: local.id)
         let localArtist = try XCTUnwrap(MusicLibrary.computeAlbumsAndArtists(songs: [local]).artists.first)
         _ = await sender.storeArtistImage(try artworkImage(), forArtistID: localArtist.id)
-        let transfer = try XCTUnwrap(MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
-            artworkSnapshot([local, remote]), cloudSources: [fixture.source, remoteSource], assetStore: sender
-        ))
+        let prepared = await MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
+            try artworkSnapshot([local, remote]), cloudSources: [fixture.source, remoteSource], assetStore: sender
+        )
+        let transfer = try XCTUnwrap(prepared)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: transfer.data) as? [String: Any])
         XCTAssertEqual((object["songs"] as? [[String: Any]])?.compactMap { $0["id"] as? String }, [remote.id])
         XCTAssertNil(object["cachedArtworkAssets"])
         XCTAssertNil(object["artworkCacheReferences"])
     }
 
-    func testPortableArtworkBudgetDoesNotDiscardLibraryMetadata() throws {
+    func testPortableArtworkBudgetDoesNotDiscardLibraryMetadata() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let sender = artworkStore(fixture, name: "sender")
         let song = fixture.song("budget")
         sender.storeCoverSync(try artworkImage(), for: song.id)
-        let transfer = try XCTUnwrap(MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
-            artworkSnapshot([song]), assetStore: sender, maximumArtworkBytes: 0
-        ))
+        let prepared = await MusicLibrary.preparePortableSnapshotDataIncludingArtworkAssets(
+            try artworkSnapshot([song]), assetStore: sender, maximumArtworkBytes: 0
+        )
+        let transfer = try XCTUnwrap(prepared)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: transfer.data) as? [String: Any])
         XCTAssertEqual((object["songs"] as? [[String: Any]])?.count, 1)
         XCTAssertNil(object["cachedArtworkAssets"])

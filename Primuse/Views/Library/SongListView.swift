@@ -24,13 +24,24 @@ private struct SongLocationScrollTrigger: Equatable {
 }
 
 #if os(macOS)
+private enum MacSongLocationScrollTarget: Equatable {
+    case windowedRow(offset: Int, rowHeight: CGFloat)
+    case element(Int)
+}
+
 private struct MacSongLocationScrollRequest: Equatable {
     let songID: String?
     let rowOrderRevision: Int
-    let rowOffset: Int?
+    let target: MacSongLocationScrollTarget?
     let rowCount: Int
-    let targetY: CGFloat?
     let resetKey: String
+}
+
+private struct MacSongLocationTaskIdentity: Equatable {
+    let request: MacSongLocationScrollRequest
+    let chromeHeight: Int
+    let viewportHeight: Int
+    let viewportWidth: Int
 }
 
 private struct MacSongScrollWindowMetrics: Equatable {
@@ -118,33 +129,157 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
     }
 }
 
-/// Own the mutable scroll position below `SongListView` so user scrolling does
-/// not invalidate the complete library screen on every position update.
-private struct MacSongLocationScrollModifier: ViewModifier {
+/// Keeps the macOS flat-song header and native scroll view alive while only the
+/// result layout changes between table, compact, and grid presentation.
+private struct MacSongScrollSurface<Chrome: View, Results: View>: View {
+    let allowsHorizontalScrolling: Bool
+    let rowCount: Int
+    let rowHeight: CGFloat?
     let request: MacSongLocationScrollRequest
+    @ViewBuilder let chrome: Chrome
+    @ViewBuilder let results: (Range<Int>, CGFloat) -> Results
 
     @State private var scrollPosition = ScrollPosition(idType: Int.self)
+    @State private var firstVisibleRow = 0
+    @State private var chromeHeight: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
+    @State private var viewportWidth: CGFloat = 0
     @State private var previousResetKey: String?
 
-    func body(content: Content) -> some View {
-        content
-            .scrollPosition($scrollPosition)
-            .task(id: request) {
-                let shouldResetToTop = previousResetKey.map { $0 != request.resetKey } ?? false
-                if previousResetKey != request.resetKey {
-                    previousResetKey = request.resetKey
+    var body: some View {
+        let resetsToTop = previousResetKey.map { key in
+            key != request.resetKey && request.target == nil
+        } ?? false
+        let visibleRow = resetsToTop ? 0 : firstVisibleRow
+        let range = rowHeight.map {
+            SongListScrollWindow.range(
+                totalCount: rowCount,
+                firstVisibleRow: visibleRow,
+                viewportHeight: Double(viewportHeight),
+                rowHeight: Double($0)
+            )
+        } ?? 0..<rowCount
+
+        ScrollView(
+            allowsHorizontalScrolling ? [.vertical, .horizontal] : .vertical,
+            showsIndicators: allowsHorizontalScrolling
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                chrome
+                    .frame(minWidth: viewportWidth, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        guard abs(chromeHeight - height) > 0.5 else { return }
+                        chromeHeight = height
+                    }
+
+                results(range, viewportWidth)
+                    .frame(
+                        minWidth: viewportWidth,
+                        alignment: .leading
+                    )
+
+                Color.clear
+                    .frame(height: 112)
+                    .frame(minWidth: viewportWidth, alignment: .leading)
+                    .accessibilityHidden(true)
+            }
+            .frame(minWidth: viewportWidth, alignment: .leading)
+        }
+        .scrollIndicators(.hidden, axes: .vertical)
+        .scrollIndicators(
+            allowsHorizontalScrolling ? .visible : .hidden,
+            axes: .horizontal
+        )
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: MacSongScrollWindowMetrics.self) { geometry in
+            let effectiveRowHeight = max(1, rowHeight ?? 1)
+            let offset = max(0, geometry.visibleRect.minY - chromeHeight)
+            let row = rowHeight == nil ? 0 : Int(offset / effectiveRowHeight)
+            let stride = SongListScrollWindow.rowStride
+            return MacSongScrollWindowMetrics(
+                firstVisibleRow: row / stride * stride,
+                viewportHeight: Int(geometry.containerSize.height.rounded()),
+                viewportWidth: Int(geometry.containerSize.width.rounded())
+            )
+        } action: { _, metrics in
+            withTransaction(Self.noAnimationTransaction) {
+                firstVisibleRow = metrics.firstVisibleRow
+                if viewportHeight != CGFloat(metrics.viewportHeight) {
+                    viewportHeight = CGFloat(metrics.viewportHeight)
                 }
-                await Task.yield()
-                guard !Task.isCancelled, self.request == request else { return }
-                if let targetY = request.targetY {
-                    scrollPosition.scrollTo(y: targetY)
-                } else if let rowOffset = request.rowOffset,
-                          (0..<request.rowCount).contains(rowOffset) {
-                    scrollPosition.scrollTo(id: rowOffset, anchor: .center)
-                } else if shouldResetToTop {
-                    scrollPosition.scrollTo(y: 0)
+                if viewportWidth != CGFloat(metrics.viewportWidth) {
+                    viewportWidth = CGFloat(metrics.viewportWidth)
                 }
             }
+        }
+        .onChange(of: request.resetKey, initial: true) { _, newKey in
+            let shouldReset = previousResetKey.map { $0 != newKey } ?? false
+            previousResetKey = newKey
+            guard shouldReset else { return }
+            withTransaction(Self.noAnimationTransaction) {
+                if request.target == nil {
+                    firstVisibleRow = 0
+                    scrollPosition.scrollTo(x: 0, y: 0)
+                } else {
+                    scrollPosition.scrollTo(x: 0)
+                }
+            }
+        }
+        .task(id: locationTaskIdentity) {
+            guard let target = request.target else { return }
+            positionWindow(for: target)
+            for delay in [0, 16, 34, 68, 120] {
+                if delay > 0 {
+                    do {
+                        try await Task.sleep(for: .milliseconds(delay))
+                    } catch {
+                        return
+                    }
+                } else {
+                    await Task.yield()
+                }
+                guard !Task.isCancelled, self.request == request else { return }
+                scroll(to: target, rowCount: request.rowCount)
+            }
+        }
+    }
+
+    private var locationTaskIdentity: MacSongLocationTaskIdentity {
+        MacSongLocationTaskIdentity(
+            request: request,
+            chromeHeight: Int(chromeHeight.rounded()),
+            viewportHeight: Int(viewportHeight.rounded()),
+            viewportWidth: Int(viewportWidth.rounded())
+        )
+    }
+
+    private func positionWindow(for target: MacSongLocationScrollTarget) {
+        guard case .windowedRow(let offset, _) = target else { return }
+        withTransaction(Self.noAnimationTransaction) {
+            firstVisibleRow = offset
+        }
+    }
+
+    private func scroll(to target: MacSongLocationScrollTarget, rowCount: Int) {
+        switch target {
+        case .windowedRow(let offset, let targetRowHeight):
+            guard (0..<rowCount).contains(offset) else { return }
+            let centeredOffset = chromeHeight
+                + CGFloat(offset) * targetRowHeight
+                - max(0, (viewportHeight - targetRowHeight) / 2)
+            scrollPosition.scrollTo(y: max(0, centeredOffset))
+        case .element(let position):
+            guard (0..<rowCount).contains(position) else { return }
+            scrollPosition.scrollTo(id: position, anchor: .center)
+        }
+    }
+
+    private static var noAnimationTransaction: Transaction {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        return transaction
     }
 }
 #endif
@@ -652,8 +787,6 @@ struct SongListView: View {
     @State private var contextTagEditorSong: Song?
     @State private var contextShareSong: Song?
     @State private var exportError: String?
-    @State private var macSongListChromeHeight: CGFloat = 0
-    @State private var macSongListViewportHeight: CGFloat = 0
     /// songID → 播放次数, 由 PlayHistory 一次性折叠而来。重建只发生在
     /// onAppear 和 PlayHistory 变更通知时, 而不是每行重算 (否则 LazyVStack
     /// 滚动时每实例化一行都要 O(5000) 折叠+建字典)。
@@ -1580,21 +1713,17 @@ struct SongListView: View {
         let locatedRowOffset = locatedSongID.flatMap { songID in
             rows.firstIndex(where: { $0.id == songID })
         }
-        let gridColumnCount = 6
-        let scrollTargetOffset = locatedRowOffset.map { offset in
-            macViewMode == .grid ? offset / gridColumnCount : offset
+        let scrollTarget = locatedRowOffset.map { offset in
+            switch macViewMode {
+            case .list, .compact:
+                MacSongLocationScrollTarget.windowedRow(
+                    offset: offset,
+                    rowHeight: macVirtualRowHeight
+                )
+            case .grid:
+                MacSongLocationScrollTarget.element(offset)
+            }
         }
-        let scrollTargetCount = macViewMode == .grid
-            ? (rows.count + gridColumnCount - 1) / gridColumnCount
-            : rows.count
-        let scrollTargetY: CGFloat? = {
-            guard macViewMode != .grid, let locatedRowOffset else { return nil }
-            let rowHeight = macVirtualRowHeight
-            let centeredOffset = macSongListChromeHeight
-                + CGFloat(locatedRowOffset) * rowHeight
-                - max(0, (macSongListViewportHeight - rowHeight) / 2)
-            return max(0, centeredOffset)
-        }()
         let scrollResetKey = [
             scope.snapshotCacheKey,
             songFilter.rawValue,
@@ -1603,27 +1732,24 @@ struct SongListView: View {
             macViewMode.rawValue,
             macRowDensity.rawValue,
         ].joined(separator: "\u{1F}")
+        let request = MacSongLocationScrollRequest(
+            songID: locatedSongID,
+            rowOrderRevision: listCache.rowOrderRevision,
+            target: scrollTarget,
+            rowCount: rows.count,
+            resetKey: scrollResetKey
+        )
 
         return Group {
-            if showsFolderBrowser || macViewMode == .grid {
-                macScrollableSongList(rows: rows)
+            if showsFolderBrowser {
+                macFolderSongList
             } else {
-                macVirtualizedSongList(rows: rows)
+                macFlatSongList(rows: rows, request: request)
             }
         }
         .onScrollPhaseChange { _, newPhase in
             updateListInteraction(for: newPhase)
         }
-        .modifier(
-            MacSongLocationScrollModifier(request: MacSongLocationScrollRequest(
-                songID: locatedSongID,
-                rowOrderRevision: listCache.rowOrderRevision,
-                rowOffset: scrollTargetY == nil ? scrollTargetOffset : nil,
-                rowCount: scrollTargetCount,
-                targetY: scrollTargetY,
-                resetKey: scrollResetKey
-            ))
-        )
         .background(PMColor.bg.ignoresSafeArea())
         .onAppear { rebuildPlayCounts() }
         .onChange(of: selectedSourceID) { _, _ in
@@ -1634,17 +1760,101 @@ struct SongListView: View {
         }
     }
 
-    /// SwiftUI `List` still recursively diffs every `ForEach` child on macOS.
-    /// Keep only a small, overscanned slice in the view tree and represent the
-    /// skipped rows with fixed-height spacers so the scrollbar remains exact.
-    @ViewBuilder
-    private func macVirtualizedSongList(rows: [SongListRowIdentity]) -> some View {
-        switch macViewMode {
-        case .list, .compact:
-            macWindowedSongList(rows: rows)
-        case .grid:
-            macScrollableSongList(rows: rows)
+    private func macFlatSongList(
+        rows: [SongListRowIdentity],
+        request: MacSongLocationScrollRequest
+    ) -> some View {
+        let rowHeight: CGFloat? = macViewMode == .grid ? nil : macVirtualRowHeight
+        return MacSongScrollSurface(
+            allowsHorizontalScrolling: macViewMode == .list,
+            rowCount: rows.count,
+            rowHeight: rowHeight,
+            request: request
+        ) {
+            macVirtualizedSongListChrome(isEmpty: rows.isEmpty)
+        } results: { range, viewportWidth in
+            macFlatSongResults(
+                rows: rows,
+                range: range,
+                viewportWidth: viewportWidth
+            )
         }
+    }
+
+    private func macFlatSongResults(
+        rows: [SongListRowIdentity],
+        range: Range<Int>,
+        viewportWidth: CGFloat
+    ) -> some View {
+        Group {
+            switch macViewMode {
+            case .list, .compact:
+                macWindowedSongResults(
+                    rows: rows,
+                    range: range,
+                    viewportWidth: viewportWidth
+                )
+            case .grid:
+                songGrid(rows: rows)
+                    .frame(
+                        width: max(0, viewportWidth - PMSpace.xxxl * 2),
+                        alignment: .leading
+                    )
+                    .padding(.horizontal, PMSpace.xxxl)
+            }
+        }
+        .frame(minWidth: viewportWidth, alignment: .leading)
+    }
+
+    private func macWindowedSongResults(
+        rows: [SongListRowIdentity],
+        range: Range<Int>,
+        viewportWidth: CGFloat
+    ) -> some View {
+        let rowHeight = macVirtualRowHeight
+        let rowWidth = max(0, viewportWidth - PMSpace.xxxl * 2)
+        return VStack(alignment: .leading, spacing: 0) {
+            Color.clear
+                .frame(height: CGFloat(range.lowerBound) * rowHeight)
+                .frame(minWidth: viewportWidth, alignment: .leading)
+                .accessibilityHidden(true)
+
+            ForEach(range, id: \.self) { position in
+                let row = rows[position]
+                Group {
+                    if let song = library.unobservedVisibleSong(id: row.id) {
+                        Group {
+                            switch macViewMode {
+                            case .list:
+                                songTableRow(song, index: row.offset)
+                            case .compact:
+                                compactSongRow(song, index: row.offset)
+                            case .grid:
+                                EmptyView()
+                            }
+                        }
+                        .songSelectable(
+                            songID: row.id,
+                            selection: selection,
+                            orderedIDs: { filteredSongIDs },
+                            defaultAction: { playSong(song) }
+                        )
+                    } else {
+                        Color.clear
+                    }
+                }
+                .id(position)
+                .frame(minWidth: rowWidth, alignment: .leading)
+                .frame(height: rowHeight)
+                .padding(.horizontal, PMSpace.xxxl)
+            }
+
+            Color.clear
+                .frame(height: CGFloat(rows.count - range.upperBound) * rowHeight)
+                .frame(minWidth: viewportWidth, alignment: .leading)
+                .accessibilityHidden(true)
+        }
+        .frame(minWidth: viewportWidth, alignment: .leading)
     }
 
     private var macVirtualRowHeight: CGFloat {
@@ -1655,40 +1865,6 @@ struct SongListView: View {
             return 24
         case .grid:
             return 1
-        }
-    }
-
-    private func macWindowedSongList(rows: [SongListRowIdentity]) -> some View {
-        MacWindowedSongScrollView(
-            axes: macViewMode == .list ? [.vertical, .horizontal] : .vertical,
-            rowCount: rows.count,
-            rowHeight: macVirtualRowHeight,
-            chromeHeight: $macSongListChromeHeight,
-            viewportHeight: $macSongListViewportHeight
-        ) {
-            macVirtualizedSongListChrome(isEmpty: rows.isEmpty)
-        } rowContent: { position in
-            let row = rows[position]
-            if let song = library.unobservedVisibleSong(id: row.id) {
-                Group {
-                    switch macViewMode {
-                    case .list:
-                        songTableRow(song, index: row.offset)
-                    case .compact:
-                        compactSongRow(song, index: row.offset)
-                    case .grid:
-                        EmptyView()
-                    }
-                }
-                .songSelectable(
-                    songID: row.id,
-                    selection: selection,
-                    orderedIDs: { filteredSongIDs },
-                    defaultAction: { playSong(song) }
-                )
-            } else {
-                Color.clear
-            }
         }
     }
 
@@ -1712,7 +1888,7 @@ struct SongListView: View {
                 case .compact:
                     Color.clear.frame(height: 8)
                 case .grid:
-                    Color.clear.frame(height: 12)
+                    EmptyView()
                 }
 
                 if isEmpty {
@@ -1739,52 +1915,33 @@ struct SongListView: View {
         }
     }
 
-    private func macScrollableSongList(rows: [SongListRowIdentity]) -> some View {
+    private var macFolderSongList: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 macSongListHeader
 
                 VStack(alignment: .leading, spacing: PMSpace.l) {
-                    if !showsFolderBrowser {
-                        sourceFilterChips
-                    }
                     macToolbarRow
 
-                    if showsFolderBrowser {
-                        if macFolderPath.isEmpty {
-                            LibraryFolderRootContent(
-                                folderCache: folderCache,
-                                listCache: listCache,
-                                rootSourceID: folderRootSourceID,
-                                selection: selection,
-                                sortOrder: sortOrderBinding,
-                                onOpenFolder: openMacFolder
-                            )
-                        } else {
-                            MacLibraryFolderInlineContent(
-                                folderPath: macFolderPath,
-                                folderCache: folderCache,
-                                listCache: listCache,
-                                selection: selection,
-                                sortOrder: sortOrderBinding,
-                                onOpenFolder: openMacFolder,
-                                onNavigate: navigateMacFolder
-                            )
-                        }
-                    } else if rows.isEmpty {
-                        if songFilter == .downloaded {
-                            ContentUnavailableView(
-                                "filter_downloaded",
-                                systemImage: "arrow.down.circle",
-                                description: Text("filter_downloaded_empty_desc")
-                            )
-                            .padding(.top, 48)
-                        } else {
-                            ContentUnavailableView.search(text: searchText)
-                                .padding(.top, 48)
-                        }
+                    if macFolderPath.isEmpty {
+                        LibraryFolderRootContent(
+                            folderCache: folderCache,
+                            listCache: listCache,
+                            rootSourceID: folderRootSourceID,
+                            selection: selection,
+                            sortOrder: sortOrderBinding,
+                            onOpenFolder: openMacFolder
+                        )
                     } else {
-                        macSongsContent(rows: rows)
+                        MacLibraryFolderInlineContent(
+                            folderPath: macFolderPath,
+                            folderCache: folderCache,
+                            listCache: listCache,
+                            selection: selection,
+                            sortOrder: sortOrderBinding,
+                            onOpenFolder: openMacFolder,
+                            onNavigate: navigateMacFolder
+                        )
                     }
                 }
                 .padding(.horizontal, PMSpace.xxxl)
@@ -2046,50 +2203,6 @@ struct SongListView: View {
         }
         let elementCount = activeTableColumns.count + 2 // row number + artwork
         return 64 + columnsWidth + CGFloat(max(0, elementCount - 1)) * 12
-    }
-
-    @ViewBuilder
-    private func macSongsContent(rows: [SongListRowIdentity]) -> some View {
-        switch macViewMode {
-        case .list:
-            ScrollView(.horizontal, showsIndicators: true) {
-                songTable(rows: rows)
-            }
-        case .compact:
-            compactSongList(rows: rows)
-        case .grid:
-            songGrid(rows: rows)
-        }
-    }
-
-    private func songTable(rows: [SongListRowIdentity]) -> some View {
-        VStack(spacing: 0) {
-            tableHeader
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(PMColor.bg)
-
-            Rectangle().fill(PMColor.divider).frame(height: 0.5)
-
-            LazyVStack(spacing: 1) {
-                ForEach(rows.indices, id: \.self) { position in
-                    let row = rows[position]
-                    if let song = library.unobservedVisibleSong(id: row.id) {
-                        songTableRow(song, index: row.offset)
-                            .songSelectable(
-                                songID: row.id,
-                                selection: selection,
-                                orderedIDs: { filteredSongIDs },
-                                defaultAction: { playSong(song) }
-                            )
-                    }
-                }
-            }
-            // Position IDs keep the lazy structure stable while source sync or
-            // metadata replacement changes the songs occupying those slots.
-            .scrollTargetLayout()
-            .padding(.vertical, 4)
-        }
     }
 
     /// The number and artwork slots stay fixed; named columns share the same
@@ -2426,25 +2539,6 @@ struct SongListView: View {
         }
     }
 
-    private func compactSongList(rows: [SongListRowIdentity]) -> some View {
-        LazyVStack(spacing: 0) {
-            ForEach(rows.indices, id: \.self) { position in
-                let row = rows[position]
-                if let song = library.unobservedVisibleSong(id: row.id) {
-                    compactSongRow(song, index: row.offset)
-                        .songSelectable(
-                            songID: row.id,
-                            selection: selection,
-                            orderedIDs: { filteredSongIDs },
-                            defaultAction: { playSong(song) }
-                        )
-                }
-            }
-        }
-        .scrollTargetLayout()
-        .padding(.top, 8)
-    }
-
     private func compactSongRow(_ song: Song, index: Int) -> some View {
         let isCurrent = player.currentSong?.id == song.id
         let isLocated = locatedSongID == song.id
@@ -2521,12 +2615,13 @@ struct SongListView: View {
         ) {
             ForEach(rows.indices, id: \.self) { position in
                 let row = rows[position]
-                if let song = library.unobservedVisibleSong(id: row.id) {
-                    songGridTile(
-                        song,
-                        isCurrent: player.currentSong?.id == song.id,
-                        isLocated: locatedSongID == song.id
-                    )
+                Group {
+                    if let song = library.unobservedVisibleSong(id: row.id) {
+                        songGridTile(
+                            song,
+                            isCurrent: player.currentSong?.id == song.id,
+                            isLocated: locatedSongID == song.id
+                        )
                         .songSelectable(
                             songID: row.id,
                             selection: selection,
@@ -2534,7 +2629,13 @@ struct SongListView: View {
                             orderedIDs: { filteredSongIDs },
                             defaultAction: { playSong(song) }
                         )
+                    } else {
+                        Color.clear
+                            .aspectRatio(1, contentMode: .fit)
+                            .accessibilityHidden(true)
+                    }
                 }
+                .id(position)
             }
         }
         .scrollTargetLayout()
@@ -5437,6 +5538,9 @@ private struct LibraryFolderNormalToolbarMenu: View {
                 }
                 .disabled(index?.node(withID: nodeID) == nil)
                 .accessibilityIdentifier("libraryFolder.pinToHome")
+                if let node = index?.node(withID: nodeID) {
+                    FolderPlaylistMenuButton(node: node, index: index)
+                }
                 Section {
                     SongSortMenuOptions(sortOrder: $sortOrder)
                 }

@@ -22,3 +22,4 @@
 "manage_folders" = "Dizinleri yönet ve sırala";
 "no_pinned_folders" = "Tümünü Gör bölümünden dizinlerinizi seçin.";
 "folder_ranking_scope" = "Dizin sıralamaları, geçerli bir dizini olan şarkıları içerir.";
+"folder_as_playlist" = "Çalma listesi olarak kullan";

@@ -4705,8 +4705,12 @@ final class MusicLibrary {
     /// persistence request, and CloudKit notification. Importing 1000 tracks
     /// through `createPlaylist` + 1000 calls to `add` previously serialized the
     /// whole library snapshot and invalidated playlist views 1001 times.
-    func createPlaylist(name: String, songIDs: [String]) -> Playlist {
-        let playlist = stampedPlaylist(Playlist(name: name))
+    func createPlaylist(
+        name: String,
+        songIDs: [String],
+        folderBinding: PlaylistFolderBinding? = nil
+    ) -> Playlist {
+        let playlist = stampedPlaylist(Playlist(name: name, folderBinding: folderBinding))
         let entries = validUniqueSongIDs(songIDs)
         allPlaylists.append(playlist)
         playlistSongIDs[playlist.id] = entries
@@ -4715,6 +4719,57 @@ final class MusicLibrary {
         persistSnapshot()
         notifyPlaylistsChanged([playlist.id])
         return allPlaylists.first(where: { $0.id == playlist.id }) ?? playlist
+    }
+
+    @discardableResult
+    func createFolderPlaylist(
+        name: String,
+        nodeID: LibraryFolderNodeID,
+        cloudAccountID: String?,
+        songIDs: [String]
+    ) -> Playlist {
+        let binding = PlaylistFolderBinding(nodeID: nodeID, cloudAccountID: cloudAccountID)
+        if let existing = allPlaylists.first(where: { !$0.isDeleted && $0.folderBinding == binding }) {
+            return existing
+        }
+        return createPlaylist(name: name, songIDs: songIDs, folderBinding: binding)
+    }
+
+    func folderPlaylistBindings(for source: MusicSource) -> [String: PlaylistFolderBinding] {
+        allPlaylists.reduce(into: [:]) { result, playlist in
+            guard !playlist.isDeleted, let binding = playlist.folderBinding,
+                  binding.matches(source: source) else { return }
+            result[playlist.id] = binding
+        }
+    }
+
+    @discardableResult
+    func applyFolderPlaylistMemberships(
+        _ memberships: [String: [String]],
+        expectedBindings: [String: PlaylistFolderBinding],
+        previousMemberships: [String: [String]] = [:]
+    ) -> Bool {
+        var changedIDs: [String] = []
+        for index in allPlaylists.indices {
+            let playlist = allPlaylists[index]
+            guard !playlist.isDeleted, let binding = playlist.folderBinding,
+                  expectedBindings[playlist.id] == binding,
+                  let incoming = memberships[playlist.id] else { continue }
+            let entries = validUniqueSongIDs(incoming)
+            guard playlistSongIDs[playlist.id] != entries
+                    || previousMemberships[playlist.id].map({ $0 != entries }) == true
+                    || pendingPlaylistIdentities[playlist.id]?.isEmpty == false else { continue }
+            playlistSongIDs[playlist.id] = entries
+            pendingPlaylistIdentities[playlist.id] = nil
+            allPlaylists[index] = stampedPlaylist(playlist)
+            changedIDs.append(playlist.id)
+        }
+        guard !changedIDs.isEmpty else { return false }
+        sortPlaylists()
+        persistPlaylistDurabilityLedger()
+        persistSnapshot()
+        notifyPlaylistsChanged(changedIDs)
+        return true
     }
 
     /// 用固定 ID 创建/取回 playlist ── 给"系统级"歌单 (Apple Music 资料库
@@ -4759,7 +4814,8 @@ final class MusicLibrary {
     /// 必须走 `replaceMirrorPlaylistSongs`，防止任一遗漏的 UI 入口改写只读镜像。
     func replacePlaylistSongs(playlistID: String, songIDs: [String]) {
         guard !MirrorPlaylistIdentity.isMirrorPlaylist(playlistID),
-              allPlaylists.first(where: { $0.id == playlistID })?.isDeleted == false
+              let playlist = allPlaylists.first(where: { $0.id == playlistID }),
+              !playlist.isDeleted, playlist.allowsManualSongMembership
         else { return }
         replacePlaylistSongsUnchecked(playlistID: playlistID, songIDs: songIDs)
     }
@@ -5065,7 +5121,8 @@ final class MusicLibrary {
         guard !MirrorPlaylistIdentity.isMirrorPlaylist(playlistID),
               !songIDs.isEmpty,
               let existingIndex = allPlaylists.firstIndex(where: { $0.id == playlistID }),
-              !allPlaylists[existingIndex].isDeleted
+              !allPlaylists[existingIndex].isDeleted,
+              allPlaylists[existingIndex].allowsManualSongMembership
         else { return }
 
         var entries = playlistSongIDs[playlistID] ?? []
@@ -5221,7 +5278,8 @@ final class MusicLibrary {
         guard !MirrorPlaylistIdentity.isMirrorPlaylist(playlistID),
               !songIDs.isEmpty,
               let existingIndex = allPlaylists.firstIndex(where: { $0.id == playlistID }),
-              !allPlaylists[existingIndex].isDeleted
+              !allPlaylists[existingIndex].isDeleted,
+              allPlaylists[existingIndex].allowsManualSongMembership
         else { return }
 
         let removalSet = Set(songIDs)
@@ -7506,7 +7564,8 @@ final class MusicLibrary {
         cloudSources: [MusicSource]? = nil,
         assetStore: MetadataAssetStore = .shared,
         maximumArtworkBytes: Int = 24 * 1024 * 1024
-    ) -> PortableSnapshotTransferData? {
+    ) async -> PortableSnapshotTransferData? {
+        guard !Task.isCancelled else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard var snapshot = try? decoder.decode(Snapshot.self, from: data) else { return nil }
@@ -7576,8 +7635,10 @@ final class MusicLibrary {
         var cachedAssets: [String: Data] = [:]
         var references: [String: String] = [:]
         var preparedContent: [String: String] = [:]
+        var attemptedContent = Set<String>()
         var visitedFiles = Set<String>()
-        func includeCachedCover(named sourceName: String, as destinationName: String) {
+        var artworkBudgetExhausted = false
+        func includeCachedCover(named sourceName: String, as destinationName: String) async {
             guard references[destinationName] == nil,
                   visitedFiles.insert(destinationName).inserted,
                   let cacheIdentity = assetStore.coverContentIdentifier(named: sourceName) else { return }
@@ -7589,14 +7650,32 @@ final class MusicLibrary {
                 usedEncodedBytes += referenceBytes
                 return
             }
-            guard usedBytes < maximumRawArtworkBytes,
-                  let original = assetStore.readCoverData(named: sourceName),
-                  let image = LibraryArtworkImageProcessor.process(original) else { return }
+            // A cover that cannot fit the remaining budget must not be
+            // decoded again for every track on the same album.
+            guard !artworkBudgetExhausted,
+                  usedBytes < maximumRawArtworkBytes,
+                  attemptedContent.insert(sourceID).inserted else { return }
+            let startedAt = ContinuousClock.now
+            guard let cover = assetStore.preparePortableCover(
+                named: sourceName, contentIdentifier: sourceID
+            ) else { return }
+            if cover.requiredProcessing {
+                // Cold exports can encounter thousands of distinct covers.
+                // Yield between conversions and leave CPU time for playback.
+                do {
+                    try await Task.sleep(for: max(.milliseconds(20), startedAt.duration(to: .now)))
+                } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            let image = cover.data
             let contentID = SHA256.hash(data: image).map { String(format: "%02x", $0) }.joined()
             if cachedAssets[contentID] == nil {
                 let encodedBytes = ((image.count + 2) / 3) * 4 + contentID.utf8.count + 6
                 guard image.count <= maximumRawArtworkBytes - usedBytes,
-                      encodedBytes + referenceBytes <= availableEncodedBytes - usedEncodedBytes else { return }
+                      encodedBytes + referenceBytes <= availableEncodedBytes - usedEncodedBytes else {
+                    artworkBudgetExhausted = true
+                    return
+                }
                 cachedAssets[contentID] = image
                 usedBytes += image.count
                 usedEncodedBytes += encodedBytes
@@ -7611,7 +7690,7 @@ final class MusicLibrary {
             if withUnsafeCurrentTask(body: { $0?.isCancelled ?? false }) { return nil }
             if let albumID = song.albumID, !albumID.isEmpty {
                 let name = "album/" + assetStore.expectedCoverFileName(for: "album_\(albumID)")
-                includeCachedCover(named: name, as: name)
+                await includeCachedCover(named: name, as: name)
             }
             let name = assetStore.expectedCoverFileName(for: song.id)
             let sourceName: String
@@ -7622,11 +7701,13 @@ final class MusicLibrary {
             } else {
                 continue
             }
-            includeCachedCover(named: sourceName, as: name)
+            await includeCachedCover(named: sourceName, as: name)
         }
         for name in portableArtistCacheNames(songs: snapshot.songs, assetStore: assetStore).sorted() {
-            includeCachedCover(named: name, as: name)
+            guard !Task.isCancelled else { return nil }
+            await includeCachedCover(named: name, as: name)
         }
+        guard !Task.isCancelled else { return nil }
         snapshot.cachedArtworkAssets = cachedAssets.isEmpty ? nil : cachedAssets
         snapshot.artworkCacheReferences = references.isEmpty ? nil : references
 
@@ -7672,8 +7753,8 @@ final class MusicLibrary {
     nonisolated static func portableSnapshotDataIncludingArtworkAssets(
         _ data: Data,
         cloudSources: [MusicSource]? = nil
-    ) -> Data? {
-        preparePortableSnapshotDataIncludingArtworkAssets(
+    ) async -> Data? {
+        await preparePortableSnapshotDataIncludingArtworkAssets(
             data,
             cloudSources: cloudSources
         )?.data

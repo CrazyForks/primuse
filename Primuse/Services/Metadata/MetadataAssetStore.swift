@@ -25,6 +25,7 @@ actor MetadataAssetStore {
     nonisolated let lyricsDirectoryURL: URL
     nonisolated let artworkContentDirectoryURL: URL
     nonisolated let customArtworkDirectoryURL: URL
+    nonisolated let portableArtworkDirectoryURL: URL
 
     /// Redirect 文件前缀:`REDIRECT:` + 64 位 hex SHA。共 73 字节。
     /// JPEG magic 是 `0xFF 0xD8 0xFF`,绝不会以 ASCII `R` 开头,
@@ -54,6 +55,7 @@ actor MetadataAssetStore {
         lyricsDirectoryURL = lyricsDirectory
         artworkContentDirectoryURL = artworkContentDirectory
         customArtworkDirectoryURL = customArtworkDirectory
+        portableArtworkDirectoryURL = rootDirectory.appendingPathComponent("portable-artwork-v1", isDirectory: true)
 
         try? fileManager.createDirectory(at: artworkDirectory, withIntermediateDirectories: true)
         try? fileManager.createDirectory(at: lyricsDirectory, withIntermediateDirectories: true)
@@ -228,6 +230,34 @@ actor MetadataAssetStore {
             return nil
         }
         return "legacy:\(size):\(modified.timeIntervalSinceReferenceDate.bitPattern)"
+    }
+
+    struct PortableCover: Sendable {
+        let data: Data
+        let requiredProcessing: Bool
+    }
+
+    /// Snapshot retries reuse the same transport image across launches. The
+    /// source identity changes when either a redirect or a legacy file changes.
+    nonisolated func preparePortableCover(named filename: String, contentIdentifier: String) -> PortableCover? {
+        let key = Self.sha256Hex(Data(contentIdentifier.utf8))
+        let url = portableArtworkDirectoryURL.appendingPathComponent("\(key).jpg")
+        if let cached = try? Data(contentsOf: url),
+           LibraryArtworkImageProcessor.isReusablePortableJPEG(cached) {
+            return PortableCover(data: cached, requiredProcessing: false)
+        }
+        guard !Self.currentTaskIsCancelled(),
+              let original = readCoverData(named: filename) else { return nil }
+        if LibraryArtworkImageProcessor.isReusablePortableJPEG(original) {
+            return PortableCover(data: original, requiredProcessing: false)
+        }
+        let processed = autoreleasepool {
+            LibraryArtworkImageProcessor.process(original)
+        }
+        guard !Self.currentTaskIsCancelled(), let processed else { return nil }
+        try? FileManager.default.createDirectory(at: portableArtworkDirectoryURL, withIntermediateDirectories: true)
+        try? processed.write(to: url, options: .atomic)
+        return PortableCover(data: processed, requiredProcessing: true)
     }
 
     // MARK: - Cover (per-song key)
@@ -677,6 +707,7 @@ actor MetadataAssetStore {
         clear(directory: albumArtworkDirectory)
         clear(directory: artistArtworkDirectory)
         clear(directory: artworkContentDirectory)
+        clear(directory: portableArtworkDirectoryURL)
         // 重建被父目录 clear 抹掉的子目录, 让后续 write 不需要再 mkdir。
         let fm = FileManager.default
         try? fm.createDirectory(at: albumArtworkDirectory, withIntermediateDirectories: true)
@@ -689,6 +720,7 @@ actor MetadataAssetStore {
         directorySize(artworkDirectory)
             + directorySize(lyricsDirectory)
             + directorySize(artworkContentDirectory)
+            + directorySize(portableArtworkDirectoryURL)
     }
 
     private func clear(directory: URL) {
@@ -882,9 +914,13 @@ actor MetadataAssetStore {
     /// readContentAddressed → nil → CachedArtworkView 网络重新拉。
     @discardableResult
     func evictArtworkContentIfNeeded(maxBytes: Int64 = 500 * 1024 * 1024) -> Bool {
+        evictArtworkDirectoryIfNeeded(artworkContentDirectory, maxBytes: maxBytes)
+    }
+
+    private func evictArtworkDirectoryIfNeeded(_ directory: URL, maxBytes: Int64) -> Bool {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(
-            at: artworkContentDirectory,
+            at: directory,
             includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
         ) else { return true }
 
@@ -908,7 +944,7 @@ actor MetadataAssetStore {
             if total - freed <= maxBytes { break }
             if (try? fm.removeItem(at: e.url)) != nil { freed += e.size }
         }
-        plog("🧹 artwork content evict: freed=\(freed / 1024 / 1024)MB total=\(total / 1024 / 1024)MB cap=\(maxBytes / 1024 / 1024)MB")
+        plog("🧹 artwork cache evict: directory=\(directory.lastPathComponent) freed=\(freed / 1024 / 1024)MB total=\(total / 1024 / 1024)MB cap=\(maxBytes / 1024 / 1024)MB")
         return true
     }
 
@@ -925,6 +961,7 @@ actor MetadataAssetStore {
             contentDir: artworkContentDirectory
         ) else { return false }
         return evictArtworkContentIfNeeded()
+            && evictArtworkDirectoryIfNeeded(portableArtworkDirectoryURL, maxBytes: 48 * 1024 * 1024)
     }
 
     nonisolated private static func currentTaskIsCancelled() -> Bool {
@@ -937,16 +974,39 @@ enum LibraryArtworkImageProcessor {
     private static let targetLongSides = [1200, 1024, 896, 768, 640]
     private static let qualities: [Double] = [0.86, 0.78, 0.70, 0.62, 0.54, 0.46]
 
+    /// Inspect the encoded header only. Library caches commonly already hold
+    /// a bounded JPEG, so decoding and recompressing it adds no transport value.
+    nonisolated static func isReusablePortableJPEG(_ data: Data) -> Bool {
+        guard !data.isEmpty,
+              data.count <= LibraryArtworkContentIDPolicy.maximumSyncedArtworkBytes,
+              ArtworkImageCompatibility.isCompleteImage(data),
+              !ArtworkImageCompatibility.hasRedundantJPEGSampling(data),
+              let source = CGImageSourceCreateWithData(
+                data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
+              ),
+              CGImageSourceGetType(source) == UTType.jpeg.identifier as CFString,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0, height > 0,
+              max(width, height) <= targetLongSides[0] else { return false }
+        return (properties[kCGImagePropertyOrientation] as? Int ?? 1) == 1
+    }
+
     /// Decodes arbitrary picker input, applies orientation, bounds dimensions,
     /// and emits a JPEG small enough to fit inside the existing CloudKit Data
     /// envelope after JSON/base64 overhead.
     nonisolated static func process(_ data: Data) -> Data? {
         guard !data.isEmpty, data.count <= maximumInputBytes,
-              let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+              !withUnsafeCurrentTask(body: { $0?.isCancelled ?? false }),
+              let source = CGImageSourceCreateWithData(
+                data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
+              ) else {
             return nil
         }
 
         for longSide in targetLongSides {
+            guard !withUnsafeCurrentTask(body: { $0?.isCancelled ?? false }) else { return nil }
             let options: CFDictionary = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
@@ -957,6 +1017,7 @@ enum LibraryArtworkImageProcessor {
                 continue
             }
             for quality in qualities {
+                guard !withUnsafeCurrentTask(body: { $0?.isCancelled ?? false }) else { return nil }
                 let output = NSMutableData()
                 guard let destination = CGImageDestinationCreateWithData(
                     output,

@@ -37,7 +37,7 @@ struct PlaylistDetailView: View {
     /// 镜像歌单 (Apple Music 资料库 / 服务端曲库) 里的条目不给移除入口 —— 我们
     /// 没法把改动推回服务端，下次 sync 又会把它们带回来，视觉上就是"删了又出现"。
     private var allowsPlaylistRemoval: Bool {
-        !MirrorPlaylistIdentity.isMirrorPlaylist(playlist.id)
+        (currentPlaylist ?? playlist).allowsManualSongMembership
     }
 
     private var currentPlaylist: Playlist? {
@@ -305,7 +305,7 @@ struct PlaylistDetailView: View {
 
                     // 镜像歌单不让用户重排 ── 下次 sync / 扫描会被覆盖,
                     // 重排白做; 普通用户歌单 + 智能歌单的衍生不在这里。
-                    if !MirrorPlaylistIdentity.isMirrorPlaylist(playlist.id) {
+                    if allowsPlaylistRemoval {
                         Button {
                             showReorderSheet = true
                         } label: {
@@ -622,7 +622,7 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private var macPlaylistRuleCard: some View {
         if playlist.id != MusicLibrary.likedSongsPlaylistID,
-           !MirrorPlaylistIdentity.isMirrorPlaylist(playlist.id) {
+           allowsPlaylistRemoval {
             HStack(spacing: 12) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 15, weight: .semibold))
@@ -671,7 +671,7 @@ struct PlaylistDetailView: View {
         middle.append(.init(icon: "photo.badge.plus", title: String(localized: "artwork_edit")) {
             showArtworkEditor = true
         })
-        if !isMirror {
+        if allowsPlaylistRemoval {
             middle.append(.init(icon: "arrow.up.arrow.down", title: String(localized: "playlist_reorder"),
                                 enabled: songs.count >= 2) { showReorderSheet = true })
         }

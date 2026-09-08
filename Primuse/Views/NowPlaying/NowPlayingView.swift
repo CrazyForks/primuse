@@ -4750,7 +4750,7 @@ struct AddToPlaylistSheet: View {
     }
 
     private func isEditablePlaylist(_ playlistID: String) -> Bool {
-        !MirrorPlaylistIdentity.isMirrorPlaylist(playlistID)
+        library.playlist(id: playlistID)?.allowsManualSongMembership == true
             && playlistID != MusicLibrary.likedSongsPlaylistID
     }
 }

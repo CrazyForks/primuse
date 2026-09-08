@@ -303,13 +303,13 @@ final class LibrarySnapshotSync: Sendable {
             return .failure(failure)
         }
         guard let cloudSources = cloudSnapshotSources(),
-              let preparedSnapshot = MusicLibrary
+              let preparedSnapshot = await MusicLibrary
                   .preparePortableSnapshotDataIncludingArtworkAssets(
                       rawLibraryData,
                       cloudSources: cloudSources
                   ) else {
             plog("LibrarySnapshotSync: cloud snapshot source filtering failed")
-            return .failure(.snapshotPreparationFailed)
+            return .failure(Task.isCancelled ? .cancelled : .snapshotPreparationFailed)
         }
         let libraryData = preparedSnapshot.data
         let fm = FileManager.default
@@ -1783,9 +1783,10 @@ final class LibrarySnapshotSync: Sendable {
         case .failure(let failure):
             return .failure(failure)
         }
-        let libraryData = MusicLibrary.portableSnapshotDataIncludingArtworkAssets(
+        let libraryData = await MusicLibrary.portableSnapshotDataIncludingArtworkAssets(
             rawLibraryData
         ) ?? rawLibraryData
+        guard !Task.isCancelled else { return .failure(.cancelled) }
         guard let libraryGz = Self.gzip(libraryData), !libraryGz.isEmpty else {
             plog("LibrarySnapshotSync: LAN library snapshot compression failed")
             return .failure(.snapshotPreparationFailed)

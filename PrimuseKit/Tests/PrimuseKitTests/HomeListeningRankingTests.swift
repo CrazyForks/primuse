@@ -155,4 +155,16 @@ struct HomeListeningRankingTests {
         #expect(HomeFolderPinStorage.encode([]) == "[]")
         #expect(HomeFolderPinStorage.decode("invalid").isEmpty)
     }
+
+    @Test func missingPinnedDirectoriesAreHiddenOnlyAfterAnIndexIsAvailable() throws {
+        let source = LibraryFolderSourceDescriptor(sourceID: "nas", displayName: "NAS", scanRoots: ["/Music"], pathSemantics: .hierarchical)
+        let existing = LibraryFolderIndexBuilder.build(sources: [source], songs: [song("a", path: "/Music/Removed/a.mp3")])
+        let id = try #require(existing.nodeID(containingSongID: "a"))
+        let saved = HomeFolderPinStorage.encode([id])
+        #expect(HomeFolderPinStorage.resolvedPins(saved, index: nil, defaultCount: 3) == [id])
+        #expect(HomeFolderPinStorage.resolvedPins(saved, index: existing, defaultCount: 3) == [id])
+        let rescanned = LibraryFolderIndexBuilder.build(sources: [source], songs: [])
+        #expect(HomeFolderPinStorage.resolvedPins(saved, index: rescanned, defaultCount: 3).isEmpty)
+        #expect(HomeFolderPinStorage.decode(saved) == [id])
+    }
 }

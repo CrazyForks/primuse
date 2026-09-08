@@ -287,6 +287,10 @@ actor LibraryDatabase {
             }
         }
 
+        migrator.registerMigration("v15_playlist_folder_binding") { db in
+            try PlaylistDatabaseMigration.migrate(db)
+        }
+
         // Run every registered migration, not just v1 — pinning to
         // `upTo: "v1_initial"` would silently skip later versions on
         // upgrade and reintroduce schema drift.
