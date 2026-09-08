@@ -224,7 +224,8 @@ actor UPnPSource: SongScanningConnector {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SourceError.connectionFailed("Invalid UPnP range response")
         }
-        if httpMediaResponseLooksLikeErrorBody(httpResponse, data: data) {
+        if (httpResponse.statusCode == 200 || httpResponse.statusCode == 206),
+           httpMediaResponseLooksLikeErrorBody(httpResponse, data: data) {
             throw SourceError.connectionFailed("UPnP server returned a non-audio response")
         }
 
@@ -250,7 +251,11 @@ actor UPnPSource: SongScanningConnector {
             }
             return data
         default:
-            throw SourceError.connectionFailed("UPnP range request failed: HTTP \(httpResponse.statusCode)")
+            throw RemoteMediaHTTPError(
+                service: "UPnP",
+                statusCode: httpResponse.statusCode,
+                retryAfter: RemoteMediaHTTPError.retryDelay(from: httpResponse)
+            )
         }
     }
 

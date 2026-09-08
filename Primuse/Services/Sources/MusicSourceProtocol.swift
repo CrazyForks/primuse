@@ -3,6 +3,49 @@ import Foundation
 import ImageIO
 import PrimuseKit
 
+struct RemoteMediaHTTPError: Error, LocalizedError, Sendable {
+    let service: String
+    let statusCode: Int
+    let retryAfter: TimeInterval?
+
+    init(service: String, statusCode: Int, retryAfter: TimeInterval? = nil) {
+        self.service = service
+        self.statusCode = statusCode
+        self.retryAfter = retryAfter
+    }
+
+    var errorDescription: String? {
+        SourceError.connectionFailed("\(service) HTTP \(statusCode)").errorDescription
+    }
+
+    static func retryDelay(from response: HTTPURLResponse, now: Date = Date()) -> TimeInterval? {
+        guard let rawValue = response.value(forHTTPHeaderField: "Retry-After") else { return nil }
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        if value.utf8.allSatisfy({ (48...57).contains($0) }),
+           let seconds = TimeInterval(value), seconds.isFinite {
+            return seconds
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.isLenient = false
+        for format in [
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEEE, dd-MMM-yy HH:mm:ss zzz",
+            "EEE MMM d HH:mm:ss yyyy"
+        ] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) {
+                return max(0, date.timeIntervalSince(now))
+            }
+        }
+        return nil
+    }
+}
+
 struct RemoteFileItem: Sendable {
     let name: String
     let path: String

@@ -1015,7 +1015,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         return request
     }
 
-    private func validateStrictRangeResponse(
+    func validateStrictRangeResponse(
         _ response: URLResponse,
         data: Data,
         path: String,
@@ -1025,9 +1025,9 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         guard let http = response as? HTTPURLResponse else {
             throw SourceError.connectionFailed("Invalid WebDAV range response")
         }
-        try rejectNonMediaResponseIfNeeded(http, data: data, path: path)
         switch http.statusCode {
         case 206:
+            try rejectNonMediaResponseIfNeeded(http, data: data, path: path)
             guard HTTPByteRangeResponsePolicy.validatedTotalLength(
                 contentRange: http.value(forHTTPHeaderField: "Content-Range"),
                 contentLength: http.value(forHTTPHeaderField: "Content-Length").flatMap(Int64.init),
@@ -1039,6 +1039,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             }
             return data
         case 200:
+            try rejectNonMediaResponseIfNeeded(http, data: data, path: path)
             guard HTTPByteRangeResponsePolicy.acceptsWholeResourceResponse(
                 bodyLength: data.count,
                 requestedOffset: offset,
@@ -1048,7 +1049,11 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
             }
             return data
         default:
-            throw SourceError.connectionFailed("WebDAV range request failed: HTTP \(http.statusCode)")
+            throw RemoteMediaHTTPError(
+                service: "WebDAV",
+                statusCode: http.statusCode,
+                retryAfter: RemoteMediaHTTPError.retryDelay(from: http)
+            )
         }
     }
 

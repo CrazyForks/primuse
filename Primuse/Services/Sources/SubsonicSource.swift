@@ -866,7 +866,11 @@ actor SubsonicSource: RefreshingMetadataSongConnector, ServerScrobblingConnector
             }
             return data
         default:
-            throw SourceError.connectionFailed("Subsonic range request failed: HTTP \(http.statusCode)")
+            throw RemoteMediaHTTPError(
+                service: "Subsonic",
+                statusCode: http.statusCode,
+                retryAfter: RemoteMediaHTTPError.retryDelay(from: http)
+            )
         }
     }
 

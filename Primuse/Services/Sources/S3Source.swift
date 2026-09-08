@@ -325,7 +325,11 @@ actor S3Source: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
             }
             return data
         default:
-            throw SourceError.connectionFailed("S3 range request failed: HTTP \(http.statusCode)")
+            throw RemoteMediaHTTPError(
+                service: "S3",
+                statusCode: http.statusCode,
+                retryAfter: RemoteMediaHTTPError.retryDelay(from: http)
+            )
         }
     }
 

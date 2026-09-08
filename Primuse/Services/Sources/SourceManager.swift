@@ -124,6 +124,15 @@ enum AutomaticOfflineFailureKind: String, Sendable {
 
 enum AutomaticOfflineFailureClassifier {
     static func classify(_ error: Error) -> AutomaticOfflineFailureKind {
+        if let httpError = error as? RemoteMediaHTTPError {
+            switch httpError.statusCode {
+            case 401: return .authentication
+            case 403: return .sourceAccessDenied
+            case 429: return .rateLimited
+            case 408, 500...599: return .sourceUnavailable
+            default: return .transient
+            }
+        }
         if let validationError = error as? OfflineTransferValidationError {
             switch validationError {
             case .invalidContentRange, .oversized:
@@ -447,6 +456,73 @@ enum OfflineDirectDownloadRetryPolicy {
             || statusCode == 403
             || statusCode == 404
             || statusCode == 410
+    }
+}
+
+enum OfflineRangeDownloadRetry {
+    static let maximumAttempts = 3
+    static let maximumRetryDelay: TimeInterval = 30
+
+    static func delay(after error: Error, failedAttempts: Int) -> TimeInterval? {
+        guard failedAttempts > 0, failedAttempts < maximumAttempts,
+              !(error is CancellationError) else { return nil }
+        let backoff = TimeInterval(failedAttempts)
+        if let http = error as? RemoteMediaHTTPError {
+            guard CloudHTTPRetryPolicy.shouldRetry(statusCode: http.statusCode) else { return nil }
+            let delay = max(backoff, http.retryAfter ?? backoff)
+            // Leave long server cooldowns for a later attempt instead of
+            // stalling this batch or retrying before Retry-After permits it.
+            return delay.isFinite && delay <= maximumRetryDelay ? delay : nil
+        }
+        if let cloud = error as? CloudDriveError {
+            switch cloud {
+            case .apiError(let status, _):
+                return CloudHTTPRetryPolicy.shouldRetry(statusCode: status) ? backoff : nil
+            case .rateLimited:
+                return max(5, backoff)
+            default:
+                return nil
+            }
+        }
+        if let source = error as? SourceError, case .timeout = source { return backoff }
+        if let validation = error as? OfflineTransferValidationError,
+           case .invalidChunk(let actual, let expected) = validation {
+            return actual >= 0 && Int64(actual) < expected ? backoff : nil
+        }
+        let underlying = error as NSError
+        if underlying.domain == NSURLErrorDomain {
+            return CloudHTTPRetryPolicy.shouldRetry(urlErrorCode: underlying.code) ? backoff : nil
+        }
+        if SourceNetworkFailurePolicy.isNetworkFailure(error) { return backoff }
+        return nil
+    }
+
+    static func fetch(
+        offset: Int64,
+        length: Int64,
+        wait: @Sendable (TimeInterval) async throws -> Void = {
+            try await Task.sleep(for: .seconds($0))
+        },
+        request: @Sendable (Int64, Int64) async throws -> Data
+    ) async throws -> Data {
+        var failedAttempts = 0
+        while true {
+            try Task.checkCancellation()
+            do {
+                let data = try await request(offset, length)
+                try Task.checkCancellation()
+                guard Int64(data.count) == length else {
+                    throw OfflineTransferValidationError.invalidChunk(actual: data.count, expected: length)
+                }
+                return data
+            } catch {
+                try Task.checkCancellation()
+                failedAttempts += 1
+                guard let delay = delay(after: error, failedAttempts: failedAttempts) else { throw error }
+                plog("Offline range retry attempt=\(failedAttempts + 1) offset=\(offset) delay=\(delay): \(error.localizedDescription)")
+                try await wait(delay)
+            }
+        }
     }
 }
 
@@ -3305,17 +3381,23 @@ final class SourceManager {
         return components.queryItems?.contains(where: { $0.name == transcodedStreamQueryKey }) ?? false
     }
 
-    private enum ResolvedSTRMTarget: Sendable {
+    enum ResolvedSTRMTarget: Sendable {
         case remote(URL)
         case sourcePath(String)
         case openListSourcePath(String, URL)
     }
 
-    private func resolveSTRMTarget(
+    func resolveSTRMTarget(
         for song: Song,
         connector: any MusicSourceConnector,
         playbackScope: (expectedScope: String, streamEpoch: UInt64)? = nil
     ) async throws -> ResolvedSTRMTarget {
+        // Older server scans stored virtual item paths with a .strm suffix.
+        // Their media endpoint already resolves the descriptor on the server.
+        if let source = try await sourcesProvider().first(where: { $0.id == song.sourceID }),
+           source.type.isMediaServer {
+            return .sourcePath(song.filePath)
+        }
         let descriptor = try await connector.readSTRMDescriptor(path: song.filePath)
         if let playbackScope {
             try await ensureCurrentPlaybackResolutionScope(
@@ -3419,7 +3501,9 @@ final class SourceManager {
                 )
                 return local
             case .sourcePath(let path):
-                if permitsConfiguredDirectURL(for: source, song: song) {
+                // Legacy server STRM rows can still carry the wrapper's byte
+                // length. Materialize them before choosing a bounded decoder.
+                if !source.type.isMediaServer, permitsConfiguredDirectURL(for: source, song: song) {
                     let streamURL = try await conn.streamingURL(for: path)
                     try await ensureCurrentPlaybackResolutionScope(
                         sourceID: source.id,
@@ -6143,16 +6227,11 @@ final class SourceManager {
             try Task.checkCancellation()
             let length = min(chunkSize, transferSize - offset)
             let chunkOffset = offset
-            let data = try await connector.fetchRange(
-                path: transferPath,
+            let data = try await OfflineRangeDownloadRetry.fetch(
                 offset: chunkOffset,
                 length: length
-            )
-            guard Int64(data.count) == length else {
-                throw OfflineTransferValidationError.invalidChunk(
-                    actual: data.count,
-                    expected: length
-                )
+            ) { offset, length in
+                try await connector.fetchRange(path: transferPath, offset: offset, length: length)
             }
             try await Task.detached(priority: .utility) {
                 try Self.writeOfflineChunk(data, to: partial, offset: chunkOffset)

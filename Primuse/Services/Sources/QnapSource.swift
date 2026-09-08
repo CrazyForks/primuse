@@ -320,7 +320,11 @@ actor QnapSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
             }
             return data
         default:
-            throw SourceError.connectionFailed("QNAP range request failed: HTTP \(http.statusCode)")
+            throw RemoteMediaHTTPError(
+                service: "QNAP",
+                statusCode: http.statusCode,
+                retryAfter: RemoteMediaHTTPError.retryDelay(from: http)
+            )
         }
     }
 

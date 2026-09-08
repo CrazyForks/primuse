@@ -26,7 +26,11 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
     private let username: String
     private let secret: String
     private let authType: SourceAuthType
-    private let session: URLSession
+    private let sessionConfiguration: URLSessionConfiguration
+    private let alternateTLSValidationHostname: String?
+    private var session: URLSession?
+    private var mediaSession: URLSession?
+    private var transportGeneration: UInt64 = 0
     private let requestDataLoader: RequestDataLoader?
     private let deviceID: String
     private let cacheDirectory: URL
@@ -52,7 +56,8 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
         secret: String,
         authType: SourceAuthType,
         alternateTLSValidationHostname: String? = nil,
-        requestDataLoader: RequestDataLoader? = nil
+        requestDataLoader: RequestDataLoader? = nil,
+        sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.sourceID = sourceID
         self.kind = kind
@@ -69,36 +74,38 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
         case .plex:
             self.serverLyricsCapabilities = .unavailable
         }
-        self.baseURL = Self.makeBaseURL(
+        let baseURL = Self.makeBaseURL(
             host: host,
             port: port,
             useSsl: useSsl,
             basePath: basePath
         )
+        self.baseURL = baseURL
         self.username = username
         self.secret = secret
         self.authType = authType
         self.requestDataLoader = requestDataLoader
+        self.alternateTLSValidationHostname = alternateTLSValidationHostname
         self.deviceID = "primuse-\(sourceID)"
 
-        let configuration = URLSessionConfiguration.default
+        let configuration = (sessionConfiguration?.copy() as? URLSessionConfiguration) ?? .default
         // Matches WebDAV / Subsonic / Synology: a catalogue request over the
         // public internet needs more than a LAN-sized budget.
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 600
         configuration.httpAdditionalHeaders = ["User-Agent": "Primuse/1.0"]
-        self.session = URLSession(
+        self.sessionConfiguration = configuration
+        self.session = Self.makeSession(
             configuration: configuration,
-            delegate: SmartSSLDelegate(
-                redirectPolicy: .sameEndpoint,
-                alternateServerTrustHostname: alternateTLSValidationHostname,
-                alternateServerTrustEndpoint: NetworkEndpointIdentity(
-                    scheme: useSsl ? "https" : "http",
-                    host: host,
-                    port: port
-                )
-            ),
-            delegateQueue: nil
+            media: false,
+            endpoint: baseURL,
+            alternateTLSValidationHostname: alternateTLSValidationHostname
+        )
+        self.mediaSession = Self.makeSession(
+            configuration: configuration,
+            media: true,
+            endpoint: baseURL,
+            alternateTLSValidationHostname: alternateTLSValidationHostname
         )
 
         let cacheDirectory = FileManager.default.temporaryDirectory
@@ -110,12 +117,76 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
         self.cacheDirectory = cacheDirectory
     }
 
+    deinit {
+        session?.invalidateAndCancel()
+        mediaSession?.invalidateAndCancel()
+    }
+
+    private static func makeSession(
+        configuration: URLSessionConfiguration,
+        media: Bool,
+        endpoint: URL,
+        alternateTLSValidationHostname: String?
+    ) -> URLSession {
+        let configuration = (configuration.copy() as? URLSessionConfiguration) ?? .default
+        let trustDelegate = SmartSSLDelegate(
+            redirectPolicy: .sameEndpoint,
+            alternateServerTrustHostname: alternateTLSValidationHostname,
+            alternateServerTrustEndpoint: NetworkEndpointIdentity(url: endpoint)
+        )
+        if media {
+            // Media authentication is in the source URL. A redirected CDN must
+            // not acquire an API session's cookies or saved HTTP credentials.
+            configuration.httpShouldSetCookies = false
+            configuration.httpCookieStorage = nil
+            configuration.urlCredentialStorage = nil
+        }
+        let delegate: any URLSessionDelegate = media
+            ? MediaServerMediaSessionDelegate(trustDelegate: trustDelegate)
+            : trustDelegate
+        return URLSession(
+            configuration: configuration,
+            delegate: delegate,
+            delegateQueue: nil
+        )
+    }
+
+    private func checkTransportGeneration(_ generation: UInt64) throws {
+        try Task.checkCancellation()
+        guard transportGeneration == generation else { throw CancellationError() }
+    }
+
+    private func requireSession(_ session: URLSession?) throws -> URLSession {
+        try Task.checkCancellation()
+        guard let session else { throw CancellationError() }
+        return session
+    }
+
     func connect() async throws {
+        try Task.checkCancellation()
+        if session == nil {
+            session = Self.makeSession(
+                configuration: sessionConfiguration,
+                media: false,
+                endpoint: baseURL,
+                alternateTLSValidationHostname: alternateTLSValidationHostname
+            )
+        }
+        if mediaSession == nil {
+            mediaSession = Self.makeSession(
+                configuration: sessionConfiguration,
+                media: true,
+                endpoint: baseURL,
+                alternateTLSValidationHostname: alternateTLSValidationHostname
+            )
+        }
+        let generation = transportGeneration
         if accessToken != nil, userID != nil {
             return
         }
         if let loginTask {
             try await loginTask.value
+            try checkTransportGeneration(generation)
             return
         }
         let task = Task { [weak self] in
@@ -123,11 +194,15 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             try await self.establishConnection()
         }
         loginTask = task
-        defer { loginTask = nil }
+        defer {
+            if transportGeneration == generation { loginTask = nil }
+        }
         try await task.value
+        try checkTransportGeneration(generation)
     }
 
     private func establishConnection() async throws {
+        try Task.checkCancellation()
 
         if kind == .plex {
             guard secret.isEmpty == false else {
@@ -175,8 +250,13 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
     }
 
     func disconnect() async {
+        transportGeneration &+= 1
         loginTask?.cancel()
         loginTask = nil
+        session?.invalidateAndCancel()
+        session = nil
+        mediaSession?.invalidateAndCancel()
+        mediaSession = nil
         accessToken = nil
         userID = nil
         plexItems.removeAll()
@@ -215,21 +295,40 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             throw SourceError.fileNotFound(path)
         }
 
-        let fileExtension = (path as NSString).pathExtension.isEmpty ? "mp3" : (path as NSString).pathExtension
+        let generation = transportGeneration
+        let fileExtension = try await localAudioFileExtension(for: path, itemID: itemID)
+        try checkTransportGeneration(generation)
         let fileURL = cacheDirectory.appendingPathComponent("\(itemID).\(fileExtension)")
         if FileManager.default.fileExists(atPath: fileURL.path) {
             return fileURL
         }
 
-        let remoteURL = try await playbackURL(for: itemID)
-
-        let (temporaryURL, response) = try await TrustedHTTPTransport.download(
-            from: remoteURL,
-            session: session,
-            timeout: 60
+        var request = URLRequest(url: try await playbackURL(for: itemID))
+        try checkTransportGeneration(generation)
+        request.timeoutInterval = 60
+        request.httpShouldHandleCookies = false
+        let (temporaryURL, response) = try await mediaResponseFollowingRedirects(
+            for: request,
+            load: { request, session in
+                try await TrustedHTTPTransport.download(for: request, session: session)
+            },
+            discard: { try? FileManager.default.removeItem(at: $0) }
         )
         do {
-            try validate(response)
+            try checkTransportGeneration(generation)
+            guard let http = response as? HTTPURLResponse else {
+                throw SourceError.connectionFailed("Invalid media-server download response")
+            }
+            guard http.statusCode == 200 else { throw mediaHTTPError(http) }
+            let prefix: Data
+            do {
+                let handle = try FileHandle(forReadingFrom: temporaryURL)
+                defer { try? handle.close() }
+                prefix = try handle.read(upToCount: 4 * 1_024) ?? Data()
+            }
+            guard !prefix.isEmpty, !httpMediaResponseLooksLikeErrorBody(http, data: prefix) else {
+                throw SourceError.connectionFailed("Media server returned a non-audio response")
+            }
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 try? FileManager.default.removeItem(at: temporaryURL)
             } else {
@@ -240,6 +339,19 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             throw error
         }
         return fileURL
+    }
+
+    private func localAudioFileExtension(for path: String, itemID: String) async throws -> String {
+        let fileExtension = (path as NSString).pathExtension.lowercased()
+        guard fileExtension == "strm", kind != .plex else {
+            return fileExtension.isEmpty ? "mp3" : fileExtension
+        }
+        guard let userID else { throw SourceError.authenticationFailed }
+        let data = try await performRequest(
+            path: "/Users/\(userID)/Items/\(itemID)",
+            queryItems: [URLQueryItem(name: "Fields", value: "Path,MediaSources,MediaStreams")]
+        )
+        return audioFileExtension(for: try decoder.decode(AudioItem.self, from: data))
     }
 
     func streamingURL(for path: String) async throws -> URL? {
@@ -298,28 +410,39 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             return Data()
         }
         try await connect()
+        let generation = transportGeneration
         guard let itemID = itemID(from: path) else {
             throw SourceError.fileNotFound(path)
         }
         var request = URLRequest(url: try await playbackURL(for: itemID))
+        try checkTransportGeneration(generation)
         request.httpMethod = "GET"
         request.timeoutInterval = 60
         request.setValue(rangeHeader, forHTTPHeaderField: "Range")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.httpShouldHandleCookies = false
 
         let requestedBytes = Int(clamping: max(length, 0))
         let responseLimit = requestedBytes > Int.max - 64 * 1024
             ? Int.max
             : requestedBytes + 64 * 1024
-        let (data, response) = try await TrustedHTTPTransport.data(
+        let (data, response) = try await mediaResponseFollowingRedirects(
             for: request,
-            session: session,
-            maxBytes: max(PlainHTTPClient.defaultMaxBytes, responseLimit)
+            load: { request, session in
+                try await TrustedHTTPTransport.data(
+                    for: request,
+                    session: session,
+                    maxBytes: max(PlainHTTPClient.defaultMaxBytes, responseLimit)
+                )
+            },
+            discard: { _ in }
         )
+        try checkTransportGeneration(generation)
         guard let http = response as? HTTPURLResponse else {
             throw SourceError.connectionFailed("Invalid media-server range response")
         }
         if (http.statusCode == 401 || http.statusCode == 403),
+           HTTPRedirectSecurityPolicy.allows(from: baseURL, to: http.url),
            allowReauthentication,
            kind != .plex,
            authType != .apiKey {
@@ -332,6 +455,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
                 allowReauthentication: false
             )
         }
+        guard (200...299).contains(http.statusCode) else { throw mediaHTTPError(http) }
         if httpMediaResponseLooksLikeErrorBody(http, data: data) {
             throw SourceError.connectionFailed("Media server returned a non-audio response")
         }
@@ -357,8 +481,88 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             }
             return data
         default:
-            throw SourceError.connectionFailed("Media-server range request failed: HTTP \(http.statusCode)")
+            throw mediaHTTPError(http)
         }
+    }
+
+    private func mediaResponseFollowingRedirects<Payload: Sendable>(
+        for request: URLRequest,
+        load: @Sendable (URLRequest, URLSession) async throws -> (Payload, URLResponse),
+        discard: @Sendable (Payload) -> Void
+    ) async throws -> (Payload, URLResponse) {
+        let generation = transportGeneration
+        let session = try requireSession(mediaSession)
+        attempts: for attempt in 0..<HTTPMediaRedirectRetryPolicy.maximumAttempts {
+            var currentRequest = request
+            var hasRedirected = false
+            for redirectCount in 0...HTTPMediaRedirectRequestPolicy.maximumRedirects {
+                try checkTransportGeneration(generation)
+                let result: (Payload, URLResponse)
+                do {
+                    result = try await load(currentRequest, session)
+                } catch {
+                    try checkTransportGeneration(generation)
+                    if hasRedirected,
+                       attempt + 1 < HTTPMediaRedirectRetryPolicy.maximumAttempts,
+                       HTTPMediaRedirectRetryPolicy.isRetryable(error: error) {
+                        continue attempts
+                    }
+                    throw error
+                }
+                do {
+                    try checkTransportGeneration(generation)
+                } catch {
+                    discard(result.0)
+                    throw error
+                }
+                guard let http = result.1 as? HTTPURLResponse else { return result }
+                if let redirected = Self.redirectedMediaRequest(from: currentRequest, response: http) {
+                    discard(result.0)
+                    guard redirectCount < HTTPMediaRedirectRequestPolicy.maximumRedirects else {
+                        throw URLError(.httpTooManyRedirects)
+                    }
+                    currentRequest = redirected
+                    hasRedirected = true
+                    continue
+                }
+                if hasRedirected,
+                   attempt + 1 < HTTPMediaRedirectRetryPolicy.maximumAttempts,
+                   http.statusCode != 429,
+                   RemoteMediaHTTPError.retryDelay(from: http) == nil,
+                   HTTPMediaRedirectRetryPolicy.isRetryable(statusCode: http.statusCode) {
+                    discard(result.0)
+                    continue attempts
+                }
+                return result
+            }
+        }
+        throw URLError(.httpTooManyRedirects)
+    }
+
+    static func redirectedMediaRequest(
+        from request: URLRequest,
+        response: HTTPURLResponse
+    ) -> URLRequest? {
+        guard let sourceURL = response.url ?? request.url,
+              var redirected = HTTPMediaRedirectRequestPolicy.redirectedRequest(
+            from: request,
+            response: response
+        ) else { return nil }
+        if !HTTPRedirectSecurityPolicy.allows(from: sourceURL, to: redirected.url) {
+            for header in ["X-Emby-Token", "X-Emby-Authorization", "X-MediaBrowser-Token", "X-Plex-Token", "Cookie2"] {
+                redirected.setValue(nil, forHTTPHeaderField: header)
+            }
+        }
+        redirected.httpShouldHandleCookies = false
+        return redirected
+    }
+
+    private func mediaHTTPError(_ response: HTTPURLResponse) -> RemoteMediaHTTPError {
+        RemoteMediaHTTPError(
+            service: serviceIdentifier,
+            statusCode: response.statusCode,
+            retryAfter: RemoteMediaHTTPError.retryDelay(from: response)
+        )
     }
 
     func streamData(for path: String) async throws -> AsyncThrowingStream<Data, Error> {
@@ -1656,6 +1860,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
     }
 
     private func fetchCurrentUserID() async throws -> String {
+        let generation = transportGeneration
         if let userID {
             return userID
         }
@@ -1666,6 +1871,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             userID = user.id
             return user.id
         } catch {
+            try checkTransportGeneration(generation)
             let data = try await performRequest(path: "/Users")
             let users = try decoder.decode([User].self, from: data)
             guard let firstUser = users.first else {
@@ -1688,6 +1894,8 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
         retriesIdempotentMutationAfterAuthentication: Bool = false,
         maximumResponseBytes: Int = PlainHTTPClient.defaultMaxBytes
     ) async throws -> Data {
+        let generation = transportGeneration
+        let session = try requireSession(session)
         var request = URLRequest(url: buildURL(path: path, queryItems: queryItems))
         request.httpMethod = method
         request.httpBody = body
@@ -1708,6 +1916,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
                 maxBytes: maximumResponseBytes
             )
         }
+        try checkTransportGeneration(generation)
         if requiresAuth,
            (method == "GET" || retriesIdempotentMutationAfterAuthentication),
            allowPasswordReauthentication,
@@ -2361,10 +2570,13 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
             ?? item.mediaStreams?.first
         let duration = Double(item.runTimeTicks ?? 0) / 10_000_000
         let relativePath = "/items/\(item.id).\(fileExtension)"
-        let songID = hash("\(sourceID):\(relativePath)")
+        // Existing playlist/favorite identities must survive corrected stream
+        // extensions, including STRM wrappers and audio-only MP4 containers.
+        let identityExtension = legacyAudioFileExtension(for: item)
+        let songID = hash("\(sourceID):/items/\(item.id).\(identityExtension)")
         let albumID = album == nil ? nil : item.albumId
         let artistID = artist == nil ? nil : item.albumArtists?.first?.id
-        let fileSize = item.mediaSources?.first?.size ?? 0
+        let fileSize = audioFileSize(for: item)
         let bitRate = audioStream?.bitRate.map { Int($0 / 1000) }
         let genre = genres?.isEmpty == false ? genres?.joined(separator: ", ") : nil
         let dateAdded = item.dateCreated ?? dateAddedFallback
@@ -2639,6 +2851,59 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
     }
 
     private func audioFileExtension(for item: AudioItem) -> String {
+        let source = item.mediaSources?.first
+        for path in [source?.path, item.path].compactMap({ $0 }) {
+            if let fileExtension = Self.supportedAudioExtension(Self.pathExtension(path)) {
+                return fileExtension
+            }
+        }
+        for container in source?.container?.split(separator: ",") ?? [] {
+            if let fileExtension = Self.supportedAudioExtension(String(container)) {
+                return fileExtension
+            }
+        }
+        let streams = source?.mediaStreams ?? item.mediaStreams ?? []
+        for stream in streams where stream.type?.caseInsensitiveCompare("Audio") == .orderedSame {
+            guard let codec = stream.codec?.lowercased() else { continue }
+            if codec == "alac" { return "m4a" }
+            if codec == "vorbis" { return "ogg" }
+            if let fileExtension = Self.supportedAudioExtension(codec) {
+                return fileExtension
+            }
+        }
+        return "mp3"
+    }
+
+    private func audioFileSize(for item: AudioItem) -> Int64 {
+        guard let source = item.mediaSources?.first else { return 0 }
+        let containers = source.container?.lowercased().split(separator: ",") ?? []
+        let hasMediaContainer = containers.contains {
+            Self.supportedAudioExtension(String($0)) != nil
+        }
+        let hasMediaPath = source.path.flatMap {
+            Self.supportedAudioExtension(Self.pathExtension($0))
+        } != nil
+        if containers.contains("strm")
+            || (legacyAudioFileExtension(for: item) == "strm" && !hasMediaContainer && !hasMediaPath) {
+            return 0
+        }
+        return source.size ?? 0
+    }
+
+    private static func supportedAudioExtension(_ value: String) -> String? {
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if value == "mp4" { return "m4a" }
+        return PrimuseConstants.supportedAudioExtensions.contains(value) ? value : nil
+    }
+
+    private static func pathExtension(_ path: String) -> String {
+        if let url = URL(string: path), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            return url.pathExtension.lowercased()
+        }
+        return URL(fileURLWithPath: path).pathExtension.lowercased()
+    }
+
+    private func legacyAudioFileExtension(for item: AudioItem) -> String {
         if let path = item.mediaSources?.first?.path ?? item.path {
             let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
             if ext.isEmpty == false {
@@ -2700,6 +2965,8 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
         startIndex: Int,
         limit: Int
     ) async throws -> PlexHistoryResponse? {
+        let generation = transportGeneration
+        let session = try requireSession(session)
         var request = URLRequest(
             url: buildURL(
                 path: "/status/sessions/history/all",
@@ -2727,6 +2994,7 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
                 maxBytes: PlainHTTPClient.defaultMaxBytes
             )
         }
+        try checkTransportGeneration(generation)
         guard let http = response as? HTTPURLResponse else {
             throw SourceError.connectionFailed("Invalid server response")
         }
@@ -2826,6 +3094,41 @@ actor MediaServerSource: RefreshingMetadataSongConnector, MediaServerWritebackCo
         }
 
         return url
+    }
+}
+
+private final class MediaServerMediaSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let trustDelegate: SmartSSLDelegate
+
+    init(trustDelegate: SmartSSLDelegate) {
+        self.trustDelegate = trustDelegate
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        await trustDelegate.urlSession(session, didReceive: challenge)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        await trustDelegate.urlSession(session, task: task, didReceive: challenge)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        // The same explicit redirect loop also handles raw 302 responses from
+        // the public HTTP socket transport, including each subsequent hop.
+        completionHandler(nil)
     }
 }
 
