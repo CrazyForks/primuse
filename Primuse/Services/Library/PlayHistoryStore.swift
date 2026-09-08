@@ -52,6 +52,7 @@ final class PlayHistoryStore {
     static let maxRetainedEntries = 5000
 
     private(set) var entries: [Entry] = []
+    @ObservationIgnored private(set) var revision = 0
     private let storeURL: URL
     private var saveTask: Task<Void, Never>?
 
@@ -369,6 +370,7 @@ final class PlayHistoryStore {
     }
 
     private func notifyChanged() {
+        revision &+= 1
         NotificationCenter.default.post(name: .primuseListeningStatsDidChange, object: nil)
     }
 }

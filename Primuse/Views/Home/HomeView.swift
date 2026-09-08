@@ -14,6 +14,7 @@ private final class HomeRefreshCoordinator {
     var debounceTask: Task<Void, Never>?
     var recommendationTask: Task<Void, Never>?
     var libraryHighlightsTask: Task<Void, Never>?
+    var pendingSignature: HomeView.HomeSnapshotSignature?
 
     func cancelAll() {
         debounceTask?.cancel()
@@ -22,6 +23,7 @@ private final class HomeRefreshCoordinator {
         debounceTask = nil
         recommendationTask = nil
         libraryHighlightsTask = nil
+        pendingSignature = nil
     }
 }
 
@@ -215,6 +217,7 @@ enum HomeMode: String, CaseIterable, Hashable {
 
 struct HomeView: View {
     var switchToSettingsTab: (() -> Void)?
+    let model: Model
     let openLibrarySongs: () -> Void
     @Environment(AudioPlayerService.self) private var player
     @Environment(MusicLibrary.self) private var library
@@ -228,7 +231,7 @@ struct HomeView: View {
     /// 音乐态是否有内容可展示。电台不再计入 —— 它有独立模式，光有电台
     /// 不该让音乐态藏起"去添加音乐源"的引导。
     private var hasContent: Bool {
-        homeSnapshot.hasContent
+        model.snapshot.hasContent
     }
 
     private var greeting: String {
@@ -254,90 +257,98 @@ struct HomeView: View {
     @AppStorage("primuse.home.mode") private var homeModeRawValue = HomeMode.music.rawValue
     @AppStorage("primuse.home.showRadio") private var showRadioOnHome = true
     @State private var showRadioBatchAdd = false
-    @State private var discoveryModel = HomeDiscoveryModel()
+    @State private var isHomeVisible = false
 
     private var homeMode: HomeMode {
         guard showRadioOnHome else { return .music }
         return HomeMode(rawValue: homeModeRawValue) ?? .music
     }
 
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if homeMode == .radio {
-                        radioModeContent
-                            .transition(homeFaceTransition)
-                    } else if !hasPreparedInitialSnapshot {
-                        initialLoadingView
-                            .transition(homeFaceTransition)
-                    } else if hasContent {
-                        contentView
-                            .transition(homeFaceTransition)
-                    } else {
-                        emptyView
-                            .transition(homeFaceTransition)
-                    }
-                }
-                .padding(.bottom, 100)
-                .animation(.easeOut(duration: 0.24), value: hasPreparedInitialSnapshot)
-            }
-            .task {
-                await refreshHomeSnapshotAfterPresentationIfNeeded()
-            }
-            .background {
-                HomeLibraryRevisionObserver(
-                    onLibraryRevisionChange: scheduleDebouncedHomeRefresh,
-                    onPlaylistRevisionChange: refreshHomeSnapshotForPlaylistChange
-                )
-                if homeMode == .music, showFolders || showListeningRanking {
-                    HomeDiscoveryObserver(model: discoveryModel)
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .primusePlaybackHistoryDidChange)) { _ in
-                refreshHomeSnapshot(force: true)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
-                refreshHomeSnapshot(force: true)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
-                refreshHomeSnapshot(force: true)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
-                refreshHomeSnapshot(force: true)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
-                tintProvider.invalidateArtwork(from: note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidInvalidate)) { note in
-                tintProvider.invalidateArtwork(from: note)
-            }
-            .onChange(of: quickAccessRawValue) { _, _ in
-                // Quick access is part of the cached home snapshot. Without an
-                // explicit refresh, edits made in Library remained invisible
-                // until another library revision happened to arrive.
-                refreshHomeSnapshot(force: true)
-            }
-            .onChange(of: configuredQuickAccessLimit) { _, _ in
-                refreshHomeSnapshot(force: true)
-            }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active {
-                    guard needsHomeRefreshWhenActive else { return }
-                    needsHomeRefreshWhenActive = false
-                    if hasPreparedInitialSnapshot {
-                        scheduleDebouncedHomeRefresh()
-                    } else {
-                        Task { await refreshHomeSnapshotAfterPresentationIfNeeded() }
-                    }
+    private var observedHomeContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if homeMode == .radio {
+                    radioModeContent
+                        .transition(homeFaceTransition)
+                } else if !model.isPrepared {
+                    initialLoadingView
+                        .transition(homeFaceTransition)
+                } else if hasContent {
+                    contentView
+                        .transition(homeFaceTransition)
                 } else {
-                    needsHomeRefreshWhenActive = true
-                    refreshCoordinator.cancelAll()
+                    emptyView
+                        .transition(homeFaceTransition)
                 }
             }
-            .onDisappear {
+            .padding(.bottom, 100)
+            .animation(.easeOut(duration: 0.24), value: model.isPrepared)
+        }
+        .task {
+            await refreshHomeSnapshotAfterPresentationIfNeeded()
+        }
+        .background {
+            HomeLibraryRevisionObserver(
+                onLibraryRevisionChange: scheduleDebouncedHomeRefresh,
+                onPlaylistRevisionChange: refreshHomeSnapshotForPlaylistChange
+            )
+            if homeMode == .music, showFolders || showListeningRanking {
+                HomeDiscoveryObserver(model: model.discovery)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primusePlaybackHistoryDidChange)) { _ in
+            refreshHomeSnapshot()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
+            refreshHomeSnapshot()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+            refreshHomeSnapshot()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            refreshHomeSnapshot()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
+            tintProvider.invalidateArtwork(from: note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidInvalidate)) { note in
+            tintProvider.invalidateArtwork(from: note)
+        }
+        .onChange(of: quickAccessRawValue) { _, _ in
+            // Quick access is part of the cached home snapshot. Without an
+            // explicit refresh, edits made in Library remained invisible
+            // until another library revision happened to arrive.
+            refreshHomeSnapshot()
+        }
+        .onChange(of: configuredQuickAccessLimit) { _, _ in
+            refreshHomeSnapshot()
+        }
+        .onChange(of: showForYou) { _, _ in
+            refreshHomeSnapshot()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                guard isHomeVisible, needsHomeRefreshWhenActive else { return }
+                needsHomeRefreshWhenActive = false
+                if model.isPrepared {
+                    scheduleDebouncedHomeRefresh()
+                } else {
+                    Task { await refreshHomeSnapshotAfterPresentationIfNeeded() }
+                }
+            } else {
+                needsHomeRefreshWhenActive = true
                 refreshCoordinator.cancelAll()
             }
+        }
+        .onDisappear {
+            isHomeVisible = false
+            refreshCoordinator.cancelAll()
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            observedHomeContent
             .navigationTitle("home_title")
             .toolbarTitleDisplayMode(.inlineLarge)
             #if os(iOS)
@@ -378,6 +389,7 @@ struct HomeView: View {
                 showUpdateSheet = newValue != nil
             }
             .onAppear {
+                isHomeVisible = true
                 if !showRadioOnHome {
                     homeModeRawValue = HomeMode.music.rawValue
                 }
@@ -421,7 +433,7 @@ struct HomeView: View {
             }
             #endif
         }
-        .environment(discoveryModel)
+        .environment(model.discovery)
     }
 
     // MARK: - Content
@@ -440,13 +452,10 @@ struct HomeView: View {
     @AppStorage(LibraryPinStorage.defaultsKey) private var quickAccessRawValue = ""
     @AppStorage(LibraryDisplayConfiguration.quickAccessLimitKey)
     private var configuredQuickAccessLimit = LibraryDisplayConfiguration.defaultQuickAccessLimit
-    @State private var homeSnapshot = HomeSnapshot()
-    @State private var lastHomeSnapshotSignature: HomeSnapshotSignature?
-    @State private var hasPreparedInitialSnapshot = false
     @State private var needsHomeRefreshWhenActive = false
     // Debounce for `searchRevision`-driven refreshes. MusicLibrary bumps
     // `searchRevision` on *every* upsert batch during a scan, so a large
-    // library scan would otherwise fire refreshHomeSnapshot(force:) dozens
+    // library scan would otherwise fire refreshHomeSnapshot() dozens
     // of times — each one a full main-thread resort/regroup/recommend.
     // Coalesce the storm and only recompute once it settles.
     @State private var refreshCoordinator = HomeRefreshCoordinator()
@@ -456,17 +465,42 @@ struct HomeView: View {
     // the user is scrolling; the snapshot refreshes once the burst settles.
     private static let homeRefreshDebounce: Duration = .seconds(3)
 
-    private struct HomeSnapshotSignature: Equatable {
+    // Owned by ContentView so navigation can discard the page without losing
+    // its last complete projection or treating cancelled work as a cache hit.
+    @MainActor
+    @Observable
+    final class Model {
+        fileprivate var snapshot = HomeSnapshot()
+        var isPrepared = false
+        let discovery = HomeDiscoveryModel()
+        @ObservationIgnored var signature: HomeSnapshotSignature?
+        @ObservationIgnored var highlightsSignature: HomeSnapshotSignature?
+        @ObservationIgnored var recommendationSignature: HomeSnapshotSignature?
+
+        func needsRefresh(for signature: HomeSnapshotSignature) -> Bool {
+            !isPrepared || self.signature != signature
+                || highlightsSignature != signature
+                || (signature.showsRecommendations && recommendationSignature != signature)
+        }
+    }
+
+    struct HomeSnapshotSignature: Equatable {
         let libraryRevision: Int
         let playlistRevision: Int
+        let historyRevision: Int
         let visibleSongCount: Int
         let visibleAlbumCount: Int
         let visibleArtistCount: Int
         let recentSongIDs: [String]
         let dayStamp: Int
+        let localeIdentifier: String
+        let timeZoneIdentifier: String
+        let quickAccess: String
+        let quickAccessLimit: Int
+        let showsRecommendations: Bool
     }
 
-    private struct HomeAlbumTile: Identifiable, Sendable {
+    fileprivate struct HomeAlbumTile: Identifiable, Sendable {
         let album: Album
         let artworkSong: Song?
 
@@ -479,14 +513,14 @@ struct HomeView: View {
         var firstCoveredSong: Song?
     }
 
-    private struct HomePlaylistTile: Identifiable {
+    fileprivate struct HomePlaylistTile: Identifiable {
         let playlist: Playlist
         let songCount: Int
 
         var id: String { playlist.id }
     }
 
-    private enum HomeQuickItem: Identifiable {
+    fileprivate enum HomeQuickItem: Identifiable {
         case liked(Playlist)
         case album(Album)
         case artist(Artist)
@@ -502,7 +536,7 @@ struct HomeView: View {
         }
     }
 
-    private struct HomeSnapshot {
+    fileprivate struct HomeSnapshot {
         var hasContent = false
         var statsGlimpse: PlayHistoryStore.Summary?
         var forYouResults: [MusicDiscoveryResult] = []
@@ -527,7 +561,7 @@ struct HomeView: View {
     }
 
     private var likedPlaylist: Playlist {
-        homeSnapshot.likedPlaylist
+        model.snapshot.likedPlaylist
             ?? Playlist(
                 id: MusicLibrary.likedSongsPlaylistID,
                 name: String(localized: "playlist_liked_name")
@@ -538,7 +572,7 @@ struct HomeView: View {
         // Section contents are bounded. Stable vertical sizes avoid lazy
         // placement loops when a ranking card changes height near the viewport.
         VStack(alignment: .leading, spacing: 24) {
-            if homeSnapshot.hasContent {
+            if model.snapshot.hasContent {
                 libraryHeroSection
             }
 
@@ -552,22 +586,22 @@ struct HomeView: View {
     private func homeSectionContent(_ section: HomeSectionKind) -> some View {
         switch section {
         case .continueListening:
-            if showContinueListening, !homeSnapshot.recentSongs.isEmpty {
+            if showContinueListening, !model.snapshot.recentSongs.isEmpty {
                 continueListeningSection
             }
         case .radio:
             // 电台有自己的模式(右上角切换)，音乐态里不再重复一块。
             EmptyView()
         case .quickAccess:
-            if showQuickAccess, !homeSnapshot.quickItems.isEmpty {
+            if showQuickAccess, !model.snapshot.quickItems.isEmpty {
                 quickAccessSection
             }
         case .forYou:
-            if showForYou, !homeSnapshot.forYouResults.isEmpty {
+            if showForYou, !model.snapshot.forYouResults.isEmpty {
                 forYouSection
             }
         case .playlists:
-            if showPlaylists, !homeSnapshot.playlists.isEmpty {
+            if showPlaylists, !model.snapshot.playlists.isEmpty {
                 playlistsSection
             }
         case .folders:
@@ -575,15 +609,15 @@ struct HomeView: View {
         case .listeningRanking:
             if showListeningRanking { HomeListeningRankingSection() }
         case .topArtists:
-            if showTopArtists, !homeSnapshot.topArtists.isEmpty {
+            if showTopArtists, !model.snapshot.topArtists.isEmpty {
                 artistsSection
             }
         case .recentlyAdded:
-            if showRecentlyAdded, !homeSnapshot.recentlyAddedAlbums.isEmpty {
+            if showRecentlyAdded, !model.snapshot.recentlyAddedAlbums.isEmpty {
                 recentlyAddedAlbumsSection
             }
         case .stats:
-            if showStatsGlimpse, let summary = homeSnapshot.statsGlimpse {
+            if showStatsGlimpse, let summary = model.snapshot.statsGlimpse {
                 statsGlimpseSection(summary)
             }
         }
@@ -1057,11 +1091,10 @@ struct HomeView: View {
     /// Coalesce `searchRevision` storms (scan batches) into a single
     /// recompute. Each call cancels the pending one and restarts the
     /// timer, so only the last revision in a burst actually rebuilds the
-    /// snapshot. Uses `force: true` to bypass signature dedup the same way
-    /// the previous direct call did — the debounce is what suppresses the
-    /// redundant work now.
+    /// snapshot. Recheck the signature after the delay so a foreground event
+    /// or returning to this page does not repeat an already completed refresh.
     private func scheduleDebouncedHomeRefresh() {
-        guard scenePhase == .active else {
+        guard scenePhase == .active, isHomeVisible else {
             needsHomeRefreshWhenActive = true
             refreshCoordinator.cancelAll()
             return
@@ -1070,7 +1103,7 @@ struct HomeView: View {
         refreshCoordinator.debounceTask = Task { @MainActor in
             try? await Task.sleep(for: Self.homeRefreshDebounce)
             guard !Task.isCancelled else { return }
-            refreshHomeSnapshot(force: true)
+            refreshHomeSnapshot()
         }
     }
 
@@ -1078,8 +1111,8 @@ struct HomeView: View {
     /// `MusicLibrary`. Refresh them immediately instead of routing them through
     /// the scan debounce, otherwise a batch add leaves the home card stale.
     private func refreshHomeSnapshotForPlaylistChange() {
-        guard hasPreparedInitialSnapshot else { return }
-        refreshHomeSnapshot(force: true)
+        guard model.isPrepared else { return }
+        refreshHomeSnapshot()
     }
 
     private var homeSnapshotSignature: HomeSnapshotSignature {
@@ -1090,11 +1123,17 @@ struct HomeView: View {
         return HomeSnapshotSignature(
             libraryRevision: library.searchRevision,
             playlistRevision: library.playlistCollectionRevision,
+            historyRevision: PlayHistoryStore.shared.revision,
             visibleSongCount: library.visibleSongs.count,
             visibleAlbumCount: library.visibleAlbums.count,
             visibleArtistCount: library.visibleArtists.count,
             recentSongIDs: Array(library.recentPlaybackSongIDsForSync.prefix(30)),
-            dayStamp: dayStamp
+            dayStamp: dayStamp,
+            localeIdentifier: Locale.current.identifier,
+            timeZoneIdentifier: TimeZone.current.identifier,
+            quickAccess: quickAccessRawValue,
+            quickAccessLimit: configuredQuickAccessLimit,
+            showsRecommendations: showForYou
         )
     }
 
@@ -1102,17 +1141,22 @@ struct HomeView: View {
     /// `.task` 在 tab 切入时会先同步执行到第一个 suspension point；旧实现
     /// 直接在这里做全库计算，导致导航动画必须等计算结束才显示首页。
     private func refreshHomeSnapshotAfterPresentationIfNeeded() async {
+        isHomeVisible = true
         await Task.yield()
         guard !Task.isCancelled else { return }
+        guard scenePhase == .active else {
+            needsHomeRefreshWhenActive = true
+            return
+        }
 
-        if !hasPreparedInitialSnapshot {
+        if !model.isPrepared {
             await prepareInitialHomeSnapshot()
             return
         }
 
         try? await Task.sleep(for: .milliseconds(180))
         guard !Task.isCancelled else { return }
-        refreshHomeSnapshot(force: false)
+        refreshHomeSnapshot()
     }
 
     /// The first frame should never claim the library is empty while the home
@@ -1213,6 +1257,8 @@ struct HomeView: View {
         snapshot.recentlyAddedAlbums = payload.recentlyAddedAlbums
         snapshot.forYouResults = payload.forYouResults
         publishInitialHomeSnapshot(snapshot, signature: signature)
+        model.highlightsSignature = signature
+        model.recommendationSignature = signature
         persistInitialHomeSnapshotCache(signature: signature)
         let publishFinishedAt = ProcessInfo.processInfo.systemUptime
         plog(String(
@@ -1235,11 +1281,12 @@ struct HomeView: View {
         _ snapshot: HomeSnapshot,
         signature: HomeSnapshotSignature
     ) {
-        homeSnapshot = snapshot
-        lastHomeSnapshotSignature = signature
+        model.snapshot = snapshot
+        model.signature = signature
+        refreshCoordinator.pendingSignature = signature
         tintProvider.prepare(snapshot.forYouResults.map(\.song))
         tintProvider.prepare(Array(snapshot.recentSongs.prefix(15)))
-        hasPreparedInitialSnapshot = true
+        model.isPrepared = true
     }
 
     private func rehydrateInitialHomePayload(
@@ -1306,14 +1353,14 @@ struct HomeView: View {
             visibleAlbumCount: signature.visibleAlbumCount,
             visibleArtistCount: signature.visibleArtistCount,
             recentSongIDs: signature.recentSongIDs,
-            heroSongIDs: homeSnapshot.heroCoverSongs.map(\.id),
-            recentlyAddedAlbums: homeSnapshot.recentlyAddedAlbums.map {
+            heroSongIDs: model.snapshot.heroCoverSongs.map(\.id),
+            recentlyAddedAlbums: model.snapshot.recentlyAddedAlbums.map {
                 PersistedHomeAlbumTile(
                     albumID: $0.album.id,
                     artworkSongID: $0.artworkSong?.id
                 )
             },
-            recommendations: homeSnapshot.forYouResults.map {
+            recommendations: model.snapshot.forYouResults.map {
                 PersistedHomeRecommendation(
                     songID: $0.song.id,
                     score: $0.score,
@@ -1353,24 +1400,27 @@ struct HomeView: View {
         }
     }
 
-    private func refreshHomeSnapshot(force: Bool) {
-        guard scenePhase == .active else {
+    private func refreshHomeSnapshot() {
+        guard scenePhase == .active, isHomeVisible else {
             needsHomeRefreshWhenActive = true
             refreshCoordinator.cancelAll()
             return
         }
+        guard model.isPrepared else { return }
         let signature = homeSnapshotSignature
-        guard force || signature != lastHomeSnapshotSignature else { return }
+        guard model.needsRefresh(for: signature) else { return }
+        guard refreshCoordinator.pendingSignature != signature else { return }
+        refreshCoordinator.pendingSignature = signature
 
         let visibleSongIDs = Set(library.visibleSongs.map(\.id))
         let visibleAlbumIDs = Set(library.visibleAlbums.map(\.id))
-        let retainedRecommendations = homeSnapshot.forYouResults.filter {
+        let retainedRecommendations = model.snapshot.forYouResults.filter {
             visibleSongIDs.contains($0.song.id)
         }
-        let retainedHeroCovers = homeSnapshot.heroCoverSongs.filter {
+        let retainedHeroCovers = model.snapshot.heroCoverSongs.filter {
             visibleSongIDs.contains($0.id)
         }
-        let retainedRecentlyAddedAlbums = homeSnapshot.recentlyAddedAlbums.filter {
+        let retainedRecentlyAddedAlbums = model.snapshot.recentlyAddedAlbums.filter {
             visibleAlbumIDs.contains($0.id)
         }
         let recommendationInput = showForYou
@@ -1387,8 +1437,8 @@ struct HomeView: View {
             heroCoverSongs: retainedHeroCovers,
             recentlyAddedAlbums: retainedRecentlyAddedAlbums
         )
-        homeSnapshot = snapshot
-        lastHomeSnapshotSignature = signature
+        model.snapshot = snapshot
+        model.signature = signature
 
         // Kick off background tint extraction for the visible cards.
         // Idempotent — cached songs are skipped.
@@ -1459,8 +1509,9 @@ struct HomeView: View {
             }.value
 
             guard !Task.isCancelled, homeSnapshotSignature == signature else { return }
-            homeSnapshot.heroCoverSongs = payload.0
-            homeSnapshot.recentlyAddedAlbums = payload.1
+            model.snapshot.heroCoverSongs = payload.0
+            model.snapshot.recentlyAddedAlbums = payload.1
+            model.highlightsSignature = signature
             persistInitialHomeSnapshotCache(signature: signature)
 
             #if DEBUG
@@ -1475,9 +1526,9 @@ struct HomeView: View {
         }
     }
 
-    /// 推荐是首页快照里唯一仍需约 200ms 的部分。输入在主线程快速复制，
-    /// 真正的归一化和全库评分放到 detached task；完成后只回主线程发布
-    /// 12 条结果。旧快照在此期间继续显示。
+    /// Recommendation inputs still filter the library on the main actor, so
+    /// callers must deduplicate before preparing them. Scoring runs off actor
+    /// while the existing cards remain visible.
     private func scheduleRecommendationRefresh(
         input: MusicDiscoveryEngine.RecommendationInput,
         signature: HomeSnapshotSignature
@@ -1491,7 +1542,8 @@ struct HomeView: View {
             }.value
 
             guard !Task.isCancelled, homeSnapshotSignature == signature else { return }
-            homeSnapshot.forYouResults = payload.0
+            model.snapshot.forYouResults = payload.0
+            model.recommendationSignature = signature
             tintProvider.prepare(payload.0.map(\.song))
             persistInitialHomeSnapshotCache(signature: signature)
 
@@ -1770,7 +1822,7 @@ struct HomeView: View {
         let comps = cal.dateComponents([.year, .month, .day], from: Date())
         let stamp = (comps.year ?? 0) * 10000 + (comps.month ?? 0) * 100 + (comps.day ?? 0)
         let pool: [Song] = !forYouPicks.isEmpty ? forYouPicks
-            : Array(homeSnapshot.recentSongs.filter { $0.coverArtFileName?.isEmpty == false }.prefix(20))
+            : Array(model.snapshot.recentSongs.filter { $0.coverArtFileName?.isEmpty == false }.prefix(20))
         guard !pool.isEmpty else { return nil }
         let idx = abs(stamp) % pool.count
         return pool[idx]
@@ -1946,7 +1998,7 @@ struct HomeView: View {
         let radius: CGFloat = 8
         ZStack {
             // 4 张依次叠, 角度 + 偏移让它们看起来散开
-            ForEach(Array(homeSnapshot.heroCoverSongs.prefix(4).enumerated()), id: \.element.id) { index, song in
+            ForEach(Array(model.snapshot.heroCoverSongs.prefix(4).enumerated()), id: \.element.id) { index, song in
                 CachedArtworkView(
                     coverRef: song.coverArtFileName,
                     songID: song.id,
@@ -1961,7 +2013,7 @@ struct HomeView: View {
                 .offset(coverOffset(for: index))
                 .zIndex(Double(4 - index))
             }
-            if homeSnapshot.heroCoverSongs.isEmpty {
+            if model.snapshot.heroCoverSongs.isEmpty {
                 Image(systemName: "music.note.list")
                     .font(.title)
                     .foregroundStyle(.secondary)
@@ -2023,7 +2075,7 @@ struct HomeView: View {
                 ),
                 spacing: 14
             ) {
-                ForEach(homeSnapshot.quickItems) { item in
+                ForEach(model.snapshot.quickItems) { item in
                     homeQuickDockItem(item)
                 }
             }
@@ -2125,7 +2177,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20)
 
             VStack(spacing: 0) {
-                let displayed = Array(homeSnapshot.playlists.prefix(sizeClass == .regular ? 5 : 4))
+                let displayed = Array(model.snapshot.playlists.prefix(sizeClass == .regular ? 5 : 4))
                 ForEach(Array(displayed.enumerated()), id: \.element.id) { index, tile in
                     NavigationLink(value: tile.playlist) {
                         playlistListRow(tile)
@@ -2191,7 +2243,7 @@ struct HomeView: View {
     /// 首页只读与资料库推荐页同源的本地每日推荐快照。远程重排由资料库
     /// 推荐页在用户进入时触发，避免首页生命周期反复发起服务调用。
     private var displayedForYouResults: [MusicDiscoveryResult] {
-        homeSnapshot.forYouResults
+        model.snapshot.forYouResults
     }
 
     private var forYouPicks: [Song] { displayedForYouResults.map(\.song) }
@@ -2287,7 +2339,7 @@ struct HomeView: View {
             Text("home_continue_listening")
                 .font(.title3).fontWeight(.bold).padding(.horizontal, 20)
 
-            let songs = homeSnapshot.recentSongs
+            let songs = model.snapshot.recentSongs
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHGrid(
                     rows: [
@@ -2392,7 +2444,7 @@ struct HomeView: View {
                     ],
                 spacing: 20
             ) {
-                ForEach(homeSnapshot.recentlyAddedAlbums.prefix(sizeClass == .regular ? 12 : 6)) { tile in
+                ForEach(model.snapshot.recentlyAddedAlbums.prefix(sizeClass == .regular ? 12 : 6)) { tile in
                     NavigationLink(value: tile.album) {
                         AlbumCardView(album: tile.album, showsSongCount: true)
                     }
@@ -2412,8 +2464,8 @@ struct HomeView: View {
     /// "frequently listened" and the generic "artists" depending
     /// which path produced the data.
     private var artistsSection: some View {
-        let displayed = homeSnapshot.topArtists
-        let titleKey: LocalizedStringKey = homeSnapshot.topArtistsHasHistory ? "home_top_artists_title" : "tab_artists"
+        let displayed = model.snapshot.topArtists
+        let titleKey: LocalizedStringKey = model.snapshot.topArtistsHasHistory ? "home_top_artists_title" : "tab_artists"
 
         return VStack(alignment: .leading, spacing: 10) {
             Text(titleKey)

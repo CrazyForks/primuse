@@ -7,12 +7,14 @@ import PrimuseKit
 private final class MacHomeRefreshCoordinator {
     var debounceTask: Task<Void, Never>?
     var computeTask: Task<Void, Never>?
+    var pendingSignature: MacHomeView.DerivedSignature?
 
     func cancelAll() {
         debounceTask?.cancel()
         computeTask?.cancel()
         debounceTask = nil
         computeTask = nil
+        pendingSignature = nil
     }
 }
 
@@ -34,6 +36,7 @@ private struct MacHomeLibraryRevisionObserver: View {
 /// 1.6 重设计后的 macOS 首页 — Hero (AmbientBackdrop + 封面马赛克 + 欢迎语) →
 /// 库健康度 / 源状态 双卡 → 4 节点 pipeline → 最近添加专辑 → 最近播放 → 艺术家。
 struct MacHomeView: View {
+    let model: Model
     let openLibrarySongs: () -> Void
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
@@ -44,6 +47,7 @@ struct MacHomeView: View {
     @Environment(ThemeService.self) private var theme
     @Environment(AppUpdateChecker.self) private var updateChecker
     @Environment(RadioStationsStore.self) private var radioStationsStore
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("primuse.home.showRadio") private var showRadio = true
     @AppStorage("primuse.home.showRecentlyAdded") private var showRecentlyAdded = true
     @State private var selectedRadioID: String?
@@ -63,8 +67,7 @@ struct MacHomeView: View {
     // 在主线程重跑一遍 → 万首级曲库下首页卡顿。把结果缓存到 @State, 仅在库内容
     // (searchRevision)或播放历史变化时重算一次, 跟 iOS HomeView / MacSimilarSongsPopover
     // 一致。
-    @State private var derived = DerivedSnapshot()
-    @State private var hasPreparedDerivedSnapshot = false
+    @State private var isHomeVisible = false
     @State private var activeSection: HomeSectionDestination?
     // 合并 searchRevision 风暴 —— MusicLibrary 在扫描的每个 upsert 批次都 bump
     // searchRevision, 不去抖会触发几十次全库重算。cancel + 重启计时, 只在最后
@@ -72,7 +75,28 @@ struct MacHomeView: View {
     @State private var refreshCoordinator = MacHomeRefreshCoordinator()
     private static let derivedRefreshDebounce: Duration = .milliseconds(300)
 
-    private struct DerivedSnapshot: Sendable {
+    @MainActor
+    @Observable
+    final class Model {
+        fileprivate var snapshot = DerivedSnapshot()
+        var isPrepared = false
+        @ObservationIgnored var signature: DerivedSignature?
+
+        func needsRefresh(for signature: DerivedSignature) -> Bool {
+            !isPrepared || self.signature != signature
+        }
+    }
+
+    struct DerivedSignature: Equatable {
+        let libraryRevision: Int
+        let playlistRevision: Int
+        let historyRevision: Int
+        let recentSongIDs: [String]
+        let day: Date
+        let localeIdentifier: String
+    }
+
+    fileprivate struct DerivedSnapshot: Sendable {
         var mosaicSongs: [Song] = []
         var recentSongs: [Song] = []
         var recommendationResults: [MusicDiscoveryResult] = []
@@ -88,11 +112,11 @@ struct MacHomeView: View {
         var artistCount: Int = 0
     }
 
-    private var hasContent: Bool { derived.songCount > 0 }
+    private var hasContent: Bool { model.snapshot.songCount > 0 }
 
     private var homePresentationState: DeferredContentPresentationState {
         DeferredContentPresentationPolicy.resolve(
-            isPrepared: hasPreparedDerivedSnapshot,
+            isPrepared: model.isPrepared,
             hasContent: hasContent
         )
     }
@@ -113,12 +137,35 @@ struct MacHomeView: View {
             }
         }
         .task {
+            isHomeVisible = true
+            await Task.yield()
+            if model.isPrepared {
+                try? await Task.sleep(for: .milliseconds(180))
+            }
+            guard !Task.isCancelled else { return }
             refreshDerivedIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .primusePlaybackHistoryDidChange)) { _ in
-            refreshDerived()
+            scheduleDerivedRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
+            scheduleDerivedRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            scheduleDerivedRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+            scheduleDerivedRefresh()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                scheduleDerivedRefresh()
+            } else {
+                refreshCoordinator.cancelAll()
+            }
         }
         .onDisappear {
+            isHomeVisible = false
             refreshCoordinator.cancelAll()
         }
         .alert("insecure_http_warning_title", isPresented: Binding(
@@ -175,18 +222,18 @@ struct MacHomeView: View {
 
         if hasContent {
             statsRow
-            if !derived.recommendationResults.isEmpty {
+            if !model.snapshot.recommendationResults.isEmpty {
                 recommendationSection
             }
             pipelineSection
-            if showRecentlyAdded, !derived.recentlyAddedAlbums.isEmpty {
+            if showRecentlyAdded, !model.snapshot.recentlyAddedAlbums.isEmpty {
                 recentlyAddedSection
             }
             recentlyPlayedSection
             if showRadio, !radioStationsStore.stations.isEmpty {
                 radioSpotlightSection
             }
-            if !derived.artists.isEmpty {
+            if !model.snapshot.artists.isEmpty {
                 artistsSection
             }
         } else {
@@ -309,25 +356,40 @@ struct MacHomeView: View {
     /// 合并 searchRevision 风暴: cancel 上一次再重启计时, 只有最后一次 revision
     /// 落定后才真正重算。
     private func scheduleDerivedRefresh() {
+        guard scenePhase == .active, isHomeVisible else { return }
         refreshCoordinator.debounceTask?.cancel()
         refreshCoordinator.debounceTask = Task { @MainActor in
             try? await Task.sleep(for: Self.derivedRefreshDebounce)
             guard !Task.isCancelled else { return }
-            refreshDerived()
+            refreshDerivedIfNeeded()
         }
     }
 
-    /// 首次出现时如果缓存还没填(songCount 与当前 visibleSongs 不一致)就算一次,
-    /// 避免每次回到首页都重跑全库。
+    private var derivedSignature: DerivedSignature {
+        DerivedSignature(
+            libraryRevision: library.searchRevision,
+            playlistRevision: library.playlistCollectionRevision,
+            historyRevision: PlayHistoryStore.shared.revision,
+            recentSongIDs: library.recentPlaybackSongIDsForSync,
+            day: Calendar.current.startOfDay(for: Date()),
+            localeIdentifier: Locale.current.identifier
+        )
+    }
+
+    /// A route change destroys this view; the window retains the snapshot.
+    /// Revisions also catch edits made away from Home without changing counts.
     private func refreshDerivedIfNeeded() {
-        if !hasPreparedDerivedSnapshot || derived.songCount != library.visibleSongs.count {
-            refreshDerived()
-        }
+        guard scenePhase == .active, isHomeVisible else { return }
+        let signature = derivedSignature
+        guard model.needsRefresh(for: signature) else { return }
+        guard refreshCoordinator.pendingSignature != signature else { return }
+        refreshCoordinator.pendingSignature = signature
+        refreshDerived(signature: signature)
     }
 
-    /// 全库聚合的唯一计算入口。主线程只拍 COW 快照，遍历、分组和排序都在
-    /// utility task 中执行，避免刷新落在窗口滚动/导航帧上。
-    private func refreshDerived() {
+    /// Deduplication happens before recommendation inputs traverse the library.
+    /// The remaining aggregates run off actor while the cached page stays visible.
+    private func refreshDerived(signature: DerivedSignature) {
         let songs = library.visibleSongs
         let albums = library.visibleAlbums
         let artists = library.visibleArtists
@@ -345,9 +407,10 @@ struct MacHomeView: View {
                     recommendationInput: recommendationInput
                 )
             }.value
-            guard !Task.isCancelled else { return }
-            derived = snapshot
-            hasPreparedDerivedSnapshot = true
+            guard !Task.isCancelled, derivedSignature == signature else { return }
+            model.snapshot = snapshot
+            model.isPrepared = true
+            model.signature = signature
         }
     }
 
@@ -495,7 +558,7 @@ struct MacHomeView: View {
     /// "今晚, 你的资料库里藏着 11,248 个故事" 这样的动态叙事。
     /// 1.6 重设计后用它替代静态 "猿音", 把首页从"应用展示页"变成"用户专属仪表盘"。
     private var heroNarrative: String {
-        let count = derived.songCount
+        let count = model.snapshot.songCount
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         let formatted = formatter.string(from: NSNumber(value: count)) ?? "\(count)"
@@ -513,9 +576,9 @@ struct MacHomeView: View {
     /// "来自 8 个源 · 842 张专辑 · 312 位艺术家 · 总时长 47 天 18 小时"
     private var heroStats: String {
         let sources = sourcesStore.sources.filter(\.isEnabled).count
-        let albums = derived.albumCount
-        let artists = derived.artistCount
-        let totalSec = derived.totalDurationSec
+        let albums = model.snapshot.albumCount
+        let artists = model.snapshot.artistCount
+        let totalSec = model.snapshot.totalDurationSec
         let days = Int(totalSec / 86400)
         let hours = Int((totalSec.truncatingRemainder(dividingBy: 86400)) / 3600)
         if days > 0 {
@@ -896,7 +959,7 @@ struct MacHomeView: View {
         return (Array(pool.prefix(1)), 1)
     }
 
-    private var mosaicSongs: [Song] { derived.mosaicSongs }
+    private var mosaicSongs: [Song] { model.snapshot.mosaicSongs }
 
     // MARK: - Stats row (库健康度 + 源状态)
 
@@ -916,9 +979,9 @@ struct MacHomeView: View {
         homeCard(title: "home_health_title", spec: "LIB-09") {
             VStack(alignment: .leading, spacing: PMSpace.m) {
                 HStack(spacing: PMSpace.m) {
-                    metric(value: derived.songCount, label: "tab_songs")
-                    metric(value: derived.albumCount, label: "tab_albums")
-                    metric(value: derived.artistCount, label: "tab_artists")
+                    metric(value: model.snapshot.songCount, label: "tab_songs")
+                    metric(value: model.snapshot.albumCount, label: "tab_albums")
+                    metric(value: model.snapshot.artistCount, label: "tab_artists")
                 }
                 Rectangle().fill(PMColor.divider).frame(height: 0.5).padding(.vertical, 2)
                 // 设计稿: 封面绿 / 歌词红 / 可播放蓝 (跟"健康"语义不同维度区分)。
@@ -1108,7 +1171,7 @@ struct MacHomeView: View {
 
     /// macOS 首页与 iOS 一样只展示本地每日推荐；远程生成只由资料库推荐页负责。
     private var displayedRecommendationResults: [MusicDiscoveryResult] {
-        derived.recommendationResults
+        model.snapshot.recommendationResults
     }
 
     private var recommendationSection: some View {
@@ -1193,7 +1256,7 @@ struct MacHomeView: View {
                 alignment: .leading,
                 spacing: PMSpace.l
             ) {
-                ForEach(derived.recentlyAddedAlbums.prefix(12)) { album in
+                ForEach(model.snapshot.recentlyAddedAlbums.prefix(12)) { album in
                     NavigationLink(value: album) {
                         albumCard(album)
                     }
@@ -1280,7 +1343,7 @@ struct MacHomeView: View {
     }
 
     private var recentSongs: [Song] {
-        derived.recentSongs
+        model.snapshot.recentSongs
     }
 
     // MARK: - Artists (horizontal scroll)
@@ -1293,7 +1356,7 @@ struct MacHomeView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: PMSpace.l) {
-                    ForEach(derived.artists.prefix(14)) { artist in
+                    ForEach(model.snapshot.artists.prefix(14)) { artist in
                         NavigationLink(value: artist) {
                             artistChip(artist)
                         }
@@ -1384,7 +1447,7 @@ struct MacHomeView: View {
     }
 
     private func recentlyAddedAllView(onBack: @escaping () -> Void) -> some View {
-        let albums = derived.recentlyAddedAlbums
+        let albums = model.snapshot.recentlyAddedAlbums
 
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
@@ -1417,7 +1480,7 @@ struct MacHomeView: View {
     }
 
     private func recentlyPlayedAllView(onBack: @escaping () -> Void) -> some View {
-        let songs = derived.recentSongs
+        let songs = model.snapshot.recentSongs
 
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
@@ -1456,7 +1519,7 @@ struct MacHomeView: View {
             homeCollectionHeader(
                 eyebrow: "library_title",
                 title: "tab_artists",
-                detail: "\(derived.artists.count) \(String(localized: "artists_count"))",
+                detail: "\(model.snapshot.artists.count) \(String(localized: "artists_count"))",
                 onBack: onBack
             )
             .padding(.vertical, 24)
@@ -1465,7 +1528,7 @@ struct MacHomeView: View {
                 .fill(PMColor.divider)
                 .frame(height: 0.5)
 
-            ArtistListView(artists: derived.artists)
+            ArtistListView(artists: model.snapshot.artists)
         }
         .background(PMColor.bg.ignoresSafeArea())
         .navigationBarBackButtonHidden(true)
@@ -1553,13 +1616,13 @@ struct MacHomeView: View {
 
     private var enabledSourcesCount: Int { sourcesStore.sources.filter(\.isEnabled).count }
 
-    private var coverRatio: Double { ratio(count: derived.coverCount) }
-    private var lyricsRatio: Double { ratio(count: derived.lyricsCount) }
-    private var playableRatio: Double { ratio(count: derived.playableCount) }
+    private var coverRatio: Double { ratio(count: model.snapshot.coverCount) }
+    private var lyricsRatio: Double { ratio(count: model.snapshot.lyricsCount) }
+    private var playableRatio: Double { ratio(count: model.snapshot.playableCount) }
 
     private func ratio(count: Int) -> Double {
-        guard derived.songCount > 0 else { return 0 }
-        return Double(count) / Double(derived.songCount)
+        guard model.snapshot.songCount > 0 else { return 0 }
+        return Double(count) / Double(model.snapshot.songCount)
     }
 
     // MARK: - Actions

@@ -7,6 +7,7 @@ import PrimuseKit
 /// 不再依赖 NavigationSplitView。标题栏背景透明且内容延伸至顶部,导航和搜索由
 /// `PMTitleBar` 绘制,窗口控制保留 AppKit 原生实现。
 struct MacContentView: View {
+    @State private var homeModel = MacHomeView.Model()
     @State private var selection: MacRoute = .home
     @State private var detailNavigationID = UUID()
     @State private var sidebarCollapsed: Bool = false
@@ -72,6 +73,7 @@ struct MacContentView: View {
                 ZStack {
                     MacDetailContainer(
                         route: selection,
+                        homeModel: homeModel,
                         searchText: $searchText,
                         songLocationRequest: $songLocationRequest,
                         onShowSongInLibrary: showSongInLibrary,

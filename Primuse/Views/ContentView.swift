@@ -474,6 +474,7 @@ private enum SidebarItem: String, Hashable, Identifiable, CaseIterable {
 }
 
 struct ContentView: View {
+    @State private var homeModel = HomeView.Model()
     @Environment(AudioPlayerService.self) private var player
     @Environment(MusicLibrary.self) private var library
     @Environment(SourcesStore.self) private var sourcesStore
@@ -580,6 +581,7 @@ struct ContentView: View {
             Tab(String(localized: "home_title"), systemImage: "house.fill", value: 0) {
                 HomeView(
                     switchToSettingsTab: { selectedTab = 3 },
+                    model: homeModel,
                     openLibrarySongs: { openLibraryDeepLink(.section(.songs)) }
                 )
                     .id("primuse.tab.home")
@@ -783,6 +785,7 @@ struct ContentView: View {
                     sidebarSelection = .settings
                     selectedTab = 3
                 },
+                model: homeModel,
                 openLibrarySongs: { openLibraryDeepLink(.section(.songs)) }
             )
         case .library:

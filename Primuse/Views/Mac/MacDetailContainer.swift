@@ -7,6 +7,7 @@ import PrimuseKit
 /// macOS split view. Stack resets whenever sidebar selection changes.
 struct MacDetailContainer: View {
     let route: MacRoute
+    let homeModel: MacHomeView.Model
     @Binding var searchText: String
     @Binding var songLocationRequest: SongLibraryLocationRequest?
     let onShowSongInLibrary: (Song) -> Void
@@ -84,7 +85,7 @@ struct MacDetailContainer: View {
     private var content: some View {
         switch route {
         case .home:
-            MacHomeView(openLibrarySongs: onOpenLibrarySongs)
+            MacHomeView(model: homeModel, openLibrarySongs: onOpenLibrarySongs)
         case .stats:
             ListeningStatsView()
         case .sources:

@@ -25,20 +25,69 @@ enum HomeDiscoveryText {
 @MainActor
 @Observable
 final class HomeDiscoveryModel {
+    struct Request: Equatable {
+        let collection: Int
+        let playlists: Int
+        let hierarchy: Int
+        let names: Int
+        let sources: [LibraryFolderSourceDescriptor]
+    }
+
+    private struct HistorySignature: Equatable {
+        let revision: Int
+        let day: Date
+        let calendar: Calendar
+        let localeIdentifier: String
+    }
+
     private(set) var index: LibraryFolderIndex?
     private(set) var revision = 0
+    var nameRevision = 0
     @ObservationIgnored private(set) var songsByID: [String: Song] = [:]
     @ObservationIgnored private(set) var folderCoverSongIDs: [LibraryFolderNodeID: [String]] = [:]
     @ObservationIgnored private(set) var lastPlayedByFolder: [LibraryFolderNodeID: Date] = [:]
+    @ObservationIgnored private var preparedRequest: Request?
+    @ObservationIgnored var handledMetadataToken: UUID?
+    @ObservationIgnored private var preparedDirectoryNames: [String: [String: String]] = [:]
+    @ObservationIgnored private var historySignature: HistorySignature?
 
-    func publish(index: LibraryFolderIndex, songs: [String: Song], covers: [LibraryFolderNodeID: [String]]) {
+    func needsRebuild(
+        for request: Request,
+        metadataToken: UUID,
+        directoryNames: [String: [String: String]]
+    ) -> Bool {
+        index == nil || preparedRequest != request
+            || handledMetadataToken != metadataToken
+            || preparedDirectoryNames != directoryNames
+    }
+
+    func publish(
+        index: LibraryFolderIndex,
+        songs: [String: Song],
+        covers: [LibraryFolderNodeID: [String]],
+        request: Request,
+        metadataToken: UUID,
+        directoryNames: [String: [String: String]]
+    ) {
         self.songsByID = songs
         self.folderCoverSongIDs = covers
         self.index = index
+        preparedRequest = request
+        handledMetadataToken = metadataToken
+        preparedDirectoryNames = directoryNames
+        historySignature = nil
         refreshHistory()
     }
 
     func refreshHistory() {
+        let calendar = ListeningCalendar.current
+        let signature = HistorySignature(
+            revision: PlayHistoryStore.shared.revision,
+            day: calendar.startOfDay(for: Date()),
+            calendar: calendar,
+            localeIdentifier: Locale.current.identifier
+        )
+        guard historySignature != signature else { return }
         var dates: [LibraryFolderNodeID: Date] = [:]
         for entry in PlayHistoryStore.shared.entries {
             var nodeID = index?.nodeID(containingSongID: entry.songID)
@@ -48,6 +97,7 @@ final class HomeDiscoveryModel {
             }
         }
         lastPlayedByFolder = dates
+        historySignature = signature
         revision &+= 1
     }
 
@@ -87,15 +137,12 @@ struct HomeDiscoveryObserver: View {
     @Environment(SourcesStore.self) private var sourcesStore
     @Environment(ScanService.self) private var scanService
     @Environment(\.scenePhase) private var scenePhase
-    @State private var nameRevision = 0
     @State private var pendingMetadataIDs: Set<String> = []
+    @State private var isObserverVisible = false
 
-    private struct Request: Equatable {
-        let collection: Int
-        let playlists: Int
-        let hierarchy: Int
-        let names: Int
-        let sources: [LibraryFolderSourceDescriptor]
+    private struct RefreshRequest: Equatable {
+        let content: HomeDiscoveryModel.Request
+        let isActive: Bool
     }
 
     private struct ProviderInput: Sendable {
@@ -104,20 +151,25 @@ struct HomeDiscoveryObserver: View {
         let indexedRoots: Bool
     }
 
-    private var request: Request {
-        Request(
+    private var request: HomeDiscoveryModel.Request {
+        HomeDiscoveryModel.Request(
             collection: library.visibleSongCollectionRevision,
             playlists: library.playlistCollectionRevision,
             hierarchy: scanService.folderHierarchyRevision,
-            names: nameRevision,
+            names: model.nameRevision,
             sources: sourcesStore.allSources.map(LibraryFolderSourceDescriptor.init(source:))
         )
     }
 
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
-            .task(id: request) { await rebuild() }
+            .task(id: RefreshRequest(content: request, isActive: scenePhase == .active)) {
+                isObserverVisible = true
+                guard scenePhase == .active else { return }
+                await rebuild()
+            }
             .onChange(of: library.songReplacementToken) { _, _ in
+                guard isObserverVisible, scenePhase == .active else { return }
                 let sources = Dictionary(sourcesStore.allSources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 var structureChanged = false
                 for id in library.lastReplacedSongIDs {
@@ -132,7 +184,8 @@ struct HomeDiscoveryObserver: View {
                     }
                     model.updateMetadata(song: song)
                 }
-                if structureChanged { nameRevision &+= 1 }
+                model.handledMetadataToken = library.songReplacementToken
+                if structureChanged { model.nameRevision &+= 1 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .primuseListeningStatsDidChange)) { _ in
                 model.refreshHistory()
@@ -147,18 +200,35 @@ struct HomeDiscoveryObserver: View {
                 model.refreshHistory()
             }
             .onReceive(NotificationCenter.default.publisher(for: CloudDirectoryNameStore.didChangeNotification)) { _ in
-                nameRevision &+= 1
+                model.nameRevision &+= 1
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { model.refreshHistory() }
             }
+            .onDisappear { isObserverVisible = false }
     }
 
     private func rebuild() async {
+        let request = request
+        let directoryNames = Dictionary(
+            sourcesStore.allSources.filter { $0.type.isCloudDrive }.map {
+                ($0.id, CloudDirectoryNameStore.displayNames(for: $0.id))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        guard model.needsRebuild(
+            for: request,
+            metadataToken: library.songReplacementToken,
+            directoryNames: directoryNames
+        ) else {
+            model.refreshHistory()
+            return
+        }
         if model.index != nil {
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
         }
         guard !Task.isCancelled else { return }
+        let metadataToken = library.songReplacementToken
         pendingMetadataIDs.removeAll()
         let songs = library.visibleSongs
         let collections = library.appleMusicFolderCollections(availableSongs: songs)
@@ -177,7 +247,7 @@ struct HomeDiscoveryObserver: View {
             guard source.type.isCloudDrive || source.type.isServerLibrary || source.type == .upnp else { continue }
             providers[source.id] = ProviderInput(
                 items: scanService.libraryFolderSyncIndex(for: source.id),
-                rootNames: source.type.isCloudDrive ? CloudDirectoryNameStore.displayNames(for: source.id) : [:],
+                rootNames: directoryNames[source.id] ?? [:],
                 indexedRoots: source.type.isServerLibrary || source.type == .upnp
             )
         }
@@ -224,11 +294,16 @@ struct HomeDiscoveryObserver: View {
         } onCancel: {
             task.cancel()
         }
-        guard !Task.isCancelled else { return }
-        model.publish(index: result.0, songs: result.1, covers: result.2)
+        guard !Task.isCancelled, self.request == request else { return }
+        let patchedMetadataToken = pendingMetadataIDs.isEmpty ? metadataToken : model.handledMetadataToken
+        model.publish(
+            index: result.0, songs: result.1, covers: result.2,
+            request: request, metadataToken: metadataToken, directoryNames: directoryNames
+        )
         for id in pendingMetadataIDs {
             if let song = library.unobservedVisibleSong(id: id) { model.updateMetadata(song: song) }
         }
+        model.handledMetadataToken = patchedMetadataToken
         pendingMetadataIDs.removeAll()
     }
 }

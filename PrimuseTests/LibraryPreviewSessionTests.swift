@@ -4,6 +4,128 @@ import XCTest
 @testable import Primuse
 
 @MainActor
+final class HomePresentationCacheTests: XCTestCase {
+    private func signature(
+        library: Int = 1, history: Int = 1, pins: String = "",
+        recommendations: Bool = true
+    ) -> HomeView.HomeSnapshotSignature {
+        HomeView.HomeSnapshotSignature(
+            libraryRevision: library, playlistRevision: 1, historyRevision: history,
+            visibleSongCount: 2, visibleAlbumCount: 1, visibleArtistCount: 1,
+            recentSongIDs: ["one"], dayStamp: 20260908,
+            localeIdentifier: "zh-Hans_CN", timeZoneIdentifier: "Asia/Shanghai",
+            quickAccess: pins, quickAccessLimit: 6, showsRecommendations: recommendations
+        )
+    }
+
+    func testReturningToCompletedHomeReusesSnapshotButSameCountEditsInvalidateIt() {
+        let model = HomeView.Model()
+        let original = signature()
+        model.isPrepared = true
+        model.signature = original
+        model.highlightsSignature = original
+        model.recommendationSignature = original
+
+        XCTAssertFalse(model.needsRefresh(for: signature()))
+        XCTAssertTrue(model.needsRefresh(for: signature(library: 2)))
+        XCTAssertTrue(model.needsRefresh(for: signature(history: 2)))
+        XCTAssertTrue(model.needsRefresh(for: signature(pins: "changed-pins")))
+    }
+
+    func testLeavingDuringRefreshDoesNotMakePartialResultsReusable() {
+        let model = HomeView.Model()
+        let previous = signature(library: 1)
+        let current = signature(library: 2)
+        model.isPrepared = true
+        model.signature = current
+        model.highlightsSignature = current
+        model.recommendationSignature = previous
+
+        XCTAssertTrue(model.needsRefresh(for: current))
+        model.recommendationSignature = current
+        XCTAssertFalse(model.needsRefresh(for: current))
+    }
+
+    func testHiddenRecommendationsDoNotKeepHomeCachePending() {
+        let model = HomeView.Model()
+        let current = signature(recommendations: false)
+        model.isPrepared = true
+        model.signature = current
+        model.highlightsSignature = current
+
+        XCTAssertFalse(model.needsRefresh(for: current))
+        XCTAssertTrue(model.needsRefresh(for: signature(recommendations: true)))
+    }
+
+    func testReturningToFoldersReusesIndexAndCatchesMissedMetadataOrNames() {
+        let model = HomeDiscoveryModel()
+        let song = Song(
+            id: "one", title: "One", fileFormat: .mp3,
+            filePath: "/Music/one.mp3", sourceID: "source"
+        )
+        let source = LibraryFolderSourceDescriptor(
+            sourceID: "source", displayName: "Library",
+            scanRoots: ["/Music"], pathSemantics: .hierarchical
+        )
+        let request = HomeDiscoveryModel.Request(
+            collection: 1, playlists: 1, hierarchy: 1, names: 0, sources: [source]
+        )
+        let token = UUID()
+        let names = ["source": ["/Music": "Music"]]
+        XCTAssertTrue(model.needsRebuild(for: request, metadataToken: token, directoryNames: names))
+        model.publish(
+            index: LibraryFolderIndexBuilder.build(sources: [source], songs: [song]),
+            songs: [song.id: song], covers: [:], request: request,
+            metadataToken: token, directoryNames: names
+        )
+        let publishedRevision = model.revision
+
+        XCTAssertFalse(model.needsRebuild(for: request, metadataToken: token, directoryNames: names))
+        model.refreshHistory()
+        XCTAssertEqual(model.revision, publishedRevision)
+        XCTAssertEqual(model.songsByID[song.id]?.title, "One")
+        XCTAssertTrue(model.needsRebuild(for: request, metadataToken: UUID(), directoryNames: names))
+        XCTAssertTrue(model.needsRebuild(
+            for: request, metadataToken: token,
+            directoryNames: ["source": ["/Music": "Renamed"]]
+        ))
+
+        var updated = song
+        updated.title = "Edited title"
+        model.updateMetadata(song: updated)
+        let handledToken = UUID()
+        model.handledMetadataToken = handledToken
+        XCTAssertEqual(model.songsByID[song.id]?.title, "Edited title")
+        XCTAssertFalse(model.needsRebuild(for: request, metadataToken: handledToken, directoryNames: names))
+    }
+
+    func testFolderRequestIsOnlyReusableAfterSuccessfulPublication() {
+        let model = HomeDiscoveryModel()
+        let initial = HomeDiscoveryModel.Request(
+            collection: 1, playlists: 1, hierarchy: 1, names: 0, sources: []
+        )
+        let changed = HomeDiscoveryModel.Request(
+            collection: 1, playlists: 2, hierarchy: 1, names: 0, sources: []
+        )
+        let token = UUID()
+        model.publish(
+            index: LibraryFolderIndexBuilder.build(sources: [], songs: []),
+            songs: [:], covers: [:], request: initial,
+            metadataToken: token, directoryNames: [:]
+        )
+
+        XCTAssertTrue(model.needsRebuild(for: changed, metadataToken: token, directoryNames: [:]))
+        XCTAssertFalse(model.needsRebuild(for: initial, metadataToken: token, directoryNames: [:]))
+        model.publish(
+            index: LibraryFolderIndexBuilder.build(sources: [], songs: []),
+            songs: [:], covers: [:], request: changed,
+            metadataToken: token, directoryNames: [:]
+        )
+        XCTAssertFalse(model.needsRebuild(for: changed, metadataToken: token, directoryNames: [:]))
+    }
+}
+
+@MainActor
 final class LibraryPreviewSessionTests: XCTestCase {
     func testSuccessfulSourceSyncAdvancesPreviewInvalidationRevision() throws {
         let storageDirectory = FileManager.default.temporaryDirectory
