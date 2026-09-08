@@ -1,8 +1,66 @@
 import Foundation
+import PrimuseKit
 import XCTest
 @testable import Primuse
 
 final class RemoteMediaHTTPErrorTests: XCTestCase {
+    func testWebDAVDirectoryRemovalRequiresConsistentIndependentListings() {
+        let previous: Set<String> = ["/Music/A.flac", "/Music/B.flac"]
+        let firstMissing = WebDAVDirectoryListingConfirmationPolicy.missingPaths(
+            previouslyObserved: previous,
+            listed: ["/Music/A.flac"]
+        )
+
+        XCTAssertFalse(firstMissing.isEmpty)
+        XCTAssertTrue(WebDAVDirectoryListingConfirmationPolicy.acceptsIndependentConfirmation(
+            firstMissing: firstMissing,
+            secondMissing: firstMissing
+        ))
+        XCTAssertTrue(WebDAVDirectoryListingConfirmationPolicy.acceptsIndependentConfirmation(
+            firstMissing: firstMissing,
+            secondMissing: []
+        ))
+        XCTAssertFalse(WebDAVDirectoryListingConfirmationPolicy.acceptsIndependentConfirmation(
+            firstMissing: firstMissing,
+            secondMissing: ["/music/a.flac"]
+        ))
+    }
+
+    func testWebDAVDirectoryComparisonNormalizesCaseAndUnicode() {
+        XCTAssertTrue(WebDAVDirectoryListingConfirmationPolicy.missingPaths(
+            previouslyObserved: ["/Music/Caf\u{00E9}.flac"],
+            listed: ["/music/Cafe\u{0301}.flac"]
+        ).isEmpty)
+    }
+
+    func testWebDAVConfirmationIncludesPreviouslyIndexedAndLegacySongChildren() {
+        let indexed = SourceSyncIndexedItem(
+            stableKey: "path:/music/indexed",
+            path: "/Music/Indexed",
+            parentPath: "/Music",
+            isDirectory: true,
+            size: 0,
+            modifiedDate: nil,
+            revision: nil
+        )
+        let legacySong = Song(
+            id: "legacy",
+            title: "Legacy",
+            fileFormat: .flac,
+            filePath: "/Music/Legacy/Track.flac",
+            sourceID: "source"
+        )
+
+        XCTAssertEqual(
+            ConnectorScanner.previouslyObservedChildPaths(
+                in: "/Music/",
+                identityIndex: [indexed.stableKey: indexed],
+                existingSongs: [legacySong]
+            ),
+            ["/Music/Indexed", "/Music/Legacy"]
+        )
+    }
+
     func testRetryAfterParsesWholeSecondsWithoutClampingServerDelay() throws {
         for (header, expected) in [("120", 120.0), (" 0 ", 0.0), ("3600", 3600.0)] {
             XCTAssertEqual(

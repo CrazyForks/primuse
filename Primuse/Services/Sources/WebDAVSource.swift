@@ -3,7 +3,29 @@ import Foundation
 import FilesProvider
 import PrimuseKit
 
+enum WebDAVDirectoryListingConfirmationPolicy {
+    static func missingPaths(
+        previouslyObserved: Set<String>,
+        listed: Set<String>
+    ) -> Set<String> {
+        let listed = Set(listed.map(normalizedPath))
+        return Set(previouslyObserved.map(normalizedPath)).subtracting(listed)
+    }
+
+    static func acceptsIndependentConfirmation(
+        firstMissing: Set<String>,
+        secondMissing: Set<String>
+    ) -> Bool {
+        secondMissing.isEmpty || secondMissing == firstMissing
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        path.precomposedStringWithCanonicalMapping.lowercased()
+    }
+}
+
 actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
+    DestructiveDirectoryListingConfirmingConnector,
     EmbeddedMetadataWritebackAdapter {
     nonisolated let supportsSidecarWriting = true
     let sourceID: String
@@ -252,6 +274,38 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
                 }
             }
         }
+    }
+
+    func listFiles(
+        at path: String,
+        confirmingPreviouslyObservedPaths paths: Set<String>
+    ) async throws -> [RemoteFileItem] {
+        let first = try await listFiles(at: path)
+        let firstMissing = WebDAVDirectoryListingConfirmationPolicy.missingPaths(
+            previouslyObserved: paths,
+            listed: Set(first.map(\.path))
+        )
+        guard !firstMissing.isEmpty else { return first }
+
+        // A fresh transport prevents one truncated keep-alive response from
+        // becoming an authoritative deletion. Real removals are accepted when
+        // both independent directory snapshots omit the same paths.
+        resetDirectorySession()
+        let second = try await listFilesUsingTrustedTransport(at: path)
+        try Task.checkCancellation()
+        let secondMissing = WebDAVDirectoryListingConfirmationPolicy.missingPaths(
+            previouslyObserved: paths,
+            listed: Set(second.map(\.path))
+        )
+        guard WebDAVDirectoryListingConfirmationPolicy.acceptsIndependentConfirmation(
+            firstMissing: firstMissing,
+            secondMissing: secondMissing
+        ) else {
+            throw SourceError.connectionFailed(
+                "WebDAV directory changed while confirming removed files"
+            )
+        }
+        return second
     }
 
     private func requireTransportSession(_ session: URLSession?) throws -> URLSession {

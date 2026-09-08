@@ -663,7 +663,21 @@ actor ConnectorScanner {
                         )
 
                         do {
-                            let siblings = try await connector.listFiles(at: directory)
+                            let previouslyObservedPaths = Self.previouslyObservedChildPaths(
+                                in: directory,
+                                identityIndex: identityBaseline,
+                                existingSongs: existingSongs
+                            )
+                            let siblings: [RemoteFileItem]
+                            if let confirming = connector as?
+                                any DestructiveDirectoryListingConfirmingConnector {
+                                siblings = try await confirming.listFiles(
+                                    at: directory,
+                                    confirmingPreviouslyObservedPaths: previouslyObservedPaths
+                                )
+                            } else {
+                                siblings = try await connector.listFiles(at: directory)
+                            }
                             let sidecarIndex = SidecarHintResolver.DirectoryIndex(siblings)
                             for directoryItem in siblings where directoryItem.isDirectory {
                                 try validateStableIdentity(
@@ -1649,6 +1663,42 @@ actor ConnectorScanner {
             sidecarFingerprint: item.sidecarHints?.snapshotFingerprint,
             seenEpoch: seenEpoch
         )
+    }
+
+    nonisolated static func previouslyObservedChildPaths(
+        in directory: String,
+        identityIndex: [String: SourceSyncIndexedItem],
+        existingSongs: [Song]
+    ) -> Set<String> {
+        var paths = Set(identityIndex.values.compactMap { item in
+            immediateChildPath(descendant: item.path, of: directory)
+        })
+        for song in existingSongs {
+            if let path = immediateChildPath(descendant: song.filePath, of: directory) {
+                paths.insert(path)
+            }
+        }
+        return paths
+    }
+
+    private nonisolated static func immediateChildPath(
+        descendant: String,
+        of directory: String
+    ) -> String? {
+        var base = directory
+        while base.count > 1, base.hasSuffix("/") {
+            base.removeLast()
+        }
+        if base.isEmpty { base = "/" }
+        let prefix = base == "/" ? "/" : "\(base)/"
+        let candidate = descendant.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate.count > prefix.count,
+              candidate.lowercased().hasPrefix(prefix.lowercased()) else { return nil }
+        let suffix = candidate.dropFirst(prefix.count)
+        guard let component = suffix.split(separator: "/", omittingEmptySubsequences: true).first else {
+            return nil
+        }
+        return prefix + component
     }
 
     private func generatedSongID(for item: RemoteFileItem) -> String {

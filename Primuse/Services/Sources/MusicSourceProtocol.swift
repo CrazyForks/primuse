@@ -789,6 +789,16 @@ protocol MusicSourceConnector: Sendable {
     func prefetchMetadata(paths: [String]) async
 }
 
+/// Connectors whose directory protocol can occasionally return a valid but
+/// incomplete snapshot use an independent listing before a previously-seen
+/// child is treated as deleted.
+protocol DestructiveDirectoryListingConfirmingConnector: MusicSourceConnector {
+    func listFiles(
+        at path: String,
+        confirmingPreviouslyObservedPaths paths: Set<String>
+    ) async throws -> [RemoteFileItem]
+}
+
 struct RemoteDirectoryHTTPStatusError: Error, LocalizedError, Sendable {
     let service: String
     let statusCode: Int
