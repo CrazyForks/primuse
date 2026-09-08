@@ -9,8 +9,21 @@ enum SettingsDestination: Hashable {
 @MainActor
 @Observable
 final class SettingsSearchState {
+    enum Content {
+        case settings, recent, results
+    }
+
     var query = ""
-    var isPresented = false
+    var isPresented = false {
+        didSet {
+            if !isPresented { query = "" }
+        }
+    }
+
+    var content: Content {
+        guard isPresented else { return .settings }
+        return query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .recent : .results
+    }
 }
 
 @MainActor

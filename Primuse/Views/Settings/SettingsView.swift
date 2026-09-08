@@ -56,9 +56,9 @@ struct SettingsView: View {
     private var settingsContent: some View {
         SettingsFocusedPage(itemID: rootItemID) {
             List {
-                if !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if search.content == .results {
                     searchResults
-                } else if search.isPresented && !recentItems.isEmpty {
+                } else if search.content == .recent && !recentItems.isEmpty {
                     Section {
                         ForEach(recentItems) { item in
                             Button { open(item) } label: { SettingsSearchResultRow(item: item) }
@@ -152,7 +152,6 @@ struct SettingsView: View {
         if usesMinimalSearch { search.isPresented = false }
         if page == .about || page == .appleTV {
             search.isPresented = false
-            search.query = ""
             path = []
             rootItemID = item.id
             rootFocusRevision = UUID()

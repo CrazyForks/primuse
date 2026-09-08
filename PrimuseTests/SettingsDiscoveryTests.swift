@@ -22,6 +22,55 @@ final class SettingsDiscoveryTests: XCTestCase {
         XCTAssertFalse(SettingsCatalog.available.contains { $0.title.contains("%d") || $0.title.contains("%@") })
     }
 
+    @MainActor
+    func testDismissingSettingsSearchRestoresSettingsAndClearsQuery() {
+        let search = SettingsSearchState()
+        search.isPresented = true
+        search.query = "歌词"
+        XCTAssertEqual(search.content, .results)
+
+        search.isPresented = false
+        XCTAssertEqual(search.content, .settings)
+        XCTAssertEqual(search.query, "")
+
+        search.isPresented = true
+        XCTAssertEqual(search.content, .recent)
+    }
+
+    @MainActor
+    func testDismissingEmptySettingsSearchHidesRecentItems() {
+        for query in ["", " \n "] {
+            let search = SettingsSearchState()
+            search.isPresented = true
+            search.query = query
+            XCTAssertEqual(search.content, .recent)
+
+            search.isPresented = false
+            XCTAssertEqual(search.content, .settings)
+            XCTAssertEqual(search.query, "")
+        }
+    }
+
+    @MainActor
+    func testClearingSettingsSearchKeepsSearchOpen() {
+        let search = SettingsSearchState()
+        search.isPresented = true
+        search.query = "歌词"
+        search.query = ""
+
+        XCTAssertTrue(search.isPresented)
+        XCTAssertEqual(search.content, .recent)
+    }
+
+    @MainActor
+    func testInactiveSettingsSearchNeverShowsStaleResults() {
+        let search = SettingsSearchState()
+        search.query = "歌词"
+
+        XCTAssertFalse(search.isPresented)
+        XCTAssertEqual(search.content, .settings)
+    }
+
     func testSiriQueriesKeepDestructiveAndCredentialActionsOutOfWritableChoices() async throws {
         let writable = try await PrimuseToggleSettingQuery().suggestedEntities()
         XCTAssertTrue(writable.contains { $0.id == "lyrics.lockScreen" })

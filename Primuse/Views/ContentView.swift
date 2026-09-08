@@ -1023,10 +1023,7 @@ struct ContentView: View {
     }
 
     private func submitMinimalSearch() {
-        if selectedTab == 3 {
-            settingsSearch.isPresented = false
-            return
-        }
+        guard selectedTab != 3 else { return }
         selectMinimalPage(.search)
         SearchHistoryStore.record(searchText)
     }
@@ -1565,8 +1562,9 @@ private struct MinimalTopNavigationBar: View {
             }
         }
         .onChange(of: searchFieldFocused) { _, isFocused in
-            if selection == .settings {
-                settingsSearchPresented = isFocused
+            // Dismissing the keyboard leaves submitted search results visible.
+            if selection == .settings, isFocused {
+                settingsSearchPresented = true
             }
         }
         .onChange(of: settingsSearchPresented) { _, isPresented in
@@ -1598,7 +1596,10 @@ private struct MinimalTopNavigationBar: View {
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .focused($searchFieldFocused)
-                .onSubmit(onSubmitSearch)
+                .onSubmit {
+                    if selection == .settings { searchFieldFocused = false }
+                    onSubmitSearch()
+                }
                 .accessibilityIdentifier("minimal.search")
 
             if !searchText.isEmpty {
@@ -1765,6 +1766,10 @@ private struct MinimalTopNavigationBar: View {
     }
 
     private func select(_ page: MinimalNavigationPage) {
+        if selection == .settings {
+            settingsSearchPresented = false
+            searchFieldFocused = false
+        }
         if reduceMotion {
             onSelect(page)
         } else {
