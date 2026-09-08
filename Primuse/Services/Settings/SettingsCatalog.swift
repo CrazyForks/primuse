@@ -43,13 +43,13 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable, Sendable {
     case appearance, themeColor, player, fullscreen, appIcon, home, libraryDisplay
     case sources, scraping, artists, duplicates, deleted, storage
     case cacheSync, cloud, family, appleTV, relay, dlna
-    case intelligence, appleMusic, scrobble, statistics, siri
+    case intelligence, appleMusic, scrobble, statistics, siri, carplay
     case domains, about, diagnostics, licenses, keyboard, widgets
 
     var id: String { "page." + rawValue }
     var category: SettingsCategory {
         switch self {
-        case .playback, .equalizer, .effects, .keyboard, .siri: .playback
+        case .playback, .equalizer, .effects, .keyboard, .siri, .carplay: .playback
         case .lyrics, .transcription, .sources, .scraping, .artists, .duplicates, .deleted, .storage, .cacheSync: .library
         case .appearance, .themeColor, .player, .fullscreen, .appIcon, .home, .libraryDisplay, .widgets: .appearance
         case .cloud, .family: .sync
@@ -90,6 +90,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .scrobble: "scrobble_title"
         case .statistics: "stats_title"
         case .siri: "Siri & Shortcuts"
+        case .carplay: "CarPlay"
         case .domains: "trusted_domains"
         case .about: "about"
         case .diagnostics: "diagnostics_title"

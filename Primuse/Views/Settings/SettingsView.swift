@@ -205,6 +205,9 @@ struct SettingsView: View {
             }
 
             #if os(iOS)
+            NavigationLink(value: SettingsDestination.page(.carplay, nil)) {
+                Label("CarPlay", systemImage: "car")
+            }
             NavigationLink(value: SettingsDestination.page(.siri, nil)) {
                 Label("Siri", systemImage: "waveform")
             }
@@ -385,8 +388,9 @@ private struct SettingsPageContent: View {
         case .appIcon: AppIconSettingsView()
         case .cacheSync: StorageManagementView(opensCacheSync: true)
         case .siri: SiriSettingsView()
+        case .carplay: CarPlaySettingsView()
         #else
-        case .appearance, .themeColor, .player, .fullscreen, .appIcon, .cacheSync, .siri: EmptyView()
+        case .appearance, .themeColor, .player, .fullscreen, .appIcon, .cacheSync, .siri, .carplay: EmptyView()
         #endif
         case .keyboard, .widgets: EmptyView()
         }
