@@ -40,14 +40,12 @@ final class DuplicateDetectorTests: XCTestCase {
         XCTAssertTrue(DuplicateDetector.detect(in: songs).isEmpty)
     }
 
-    func testUntaggedByteIdenticalCopiesAreStillDuplicates() {
+    func testUntaggedSongsWithTheSameSizeAreNotDuplicates() {
         let songs = [
-            song("a", title: "01. Intro", size: 4_200_000, path: "/Album/01. Intro.mp3"),
-            song("b", title: "01. Intro", size: 4_200_000, path: "/Backup/01. Intro.mp3"),
+            song("a", title: "01. Intro", size: 4_200_000, path: "/Artist A/01. Intro.mp3"),
+            song("b", title: "01. Intro", size: 4_200_000, path: "/Artist B/01. Intro.mp3"),
         ]
-        let groups = DuplicateDetector.detect(in: songs)
-        XCTAssertEqual(groups.count, 1)
-        XCTAssertEqual(Set(groups.first?.songs.map(\.id) ?? []), ["a", "b"])
+        XCTAssertTrue(DuplicateDetector.detect(in: songs).isEmpty)
     }
 
     func testSongsWithoutAnyComparableEvidenceNeverMerge() {
@@ -58,12 +56,12 @@ final class DuplicateDetectorTests: XCTestCase {
         XCTAssertTrue(DuplicateDetector.detect(in: songs).isEmpty)
     }
 
-    func testUntaggedSongsWithMatchingDurationStillGroupWhenSizeIsUnknown() {
+    func testUntaggedSongsWithMatchingDurationAreNotDuplicates() {
         let songs = [
             song("a", title: "01. Intro", duration: 62.2),
             song("b", title: "01. Intro", duration: 62.9),
         ]
-        XCTAssertEqual(DuplicateDetector.detect(in: songs).count, 1)
+        XCTAssertTrue(DuplicateDetector.detect(in: songs).isEmpty)
 
         let differentSizes = [
             song("a", title: "01. Intro", duration: 62.2, size: 1_000),
@@ -83,7 +81,7 @@ final class DuplicateDetectorTests: XCTestCase {
         XCTAssertEqual(groups.first?.redundantSongs.map(\.id), ["mp3"])
     }
 
-    func testMissingTrackArtistFallsBackToAlbumArtistThenAlbum() {
+    func testMissingTrackArtistUsesAlbumArtistButNotAlbumTitleAlone() {
         let sameAlbumArtist = [
             song("a", title: "Intro", albumArtist: "Artist", duration: 60, size: 1),
             song("b", title: "Intro", albumArtist: "artist", duration: 61, size: 2),
@@ -95,6 +93,22 @@ final class DuplicateDetectorTests: XCTestCase {
             song("b", title: "Intro", album: "Electric Light", duration: 60, size: 2),
         ]
         XCTAssertTrue(DuplicateDetector.detect(in: differentAlbums).isEmpty)
+
+        let sameAlbumName = [
+            song("a", title: "Intro", album: "Greatest Hits", duration: 60, size: 1),
+            song("b", title: "Intro", album: "Greatest Hits", duration: 61, size: 2),
+        ]
+        XCTAssertTrue(DuplicateDetector.detect(in: sameAlbumName).isEmpty)
+    }
+
+    func testMatchingArtistAndSizeDoNotReplaceMissingOrInvalidDuration() {
+        for duration in [0, -1, TimeInterval.nan, TimeInterval.infinity] {
+            let songs = [
+                song("a", title: "Intro", artist: "Artist", duration: duration, size: 4_200_000),
+                song("b", title: "Intro", artist: "Artist", duration: duration, size: 4_200_000),
+            ]
+            XCTAssertTrue(DuplicateDetector.detect(in: songs).isEmpty, "duration: \(duration)")
+        }
     }
 
     func testKnownDurationStillSeparatesDifferentRecordingsOfTheSameTitle() {

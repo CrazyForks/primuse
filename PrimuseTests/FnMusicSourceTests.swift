@@ -140,6 +140,57 @@ final class FnMusicSourceTests: XCTestCase {
         XCTAssertNil(network.scan.nextAutomaticResumeDate(at: now, sourceStore: network.store))
     }
 
+    func testWebDAVDuplicateCleanupSurvivesRescanAndReloadWithoutSourceAccess() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DuplicateCleanup-\(UUID().uuidString)")
+        var source = MusicSource(id: UUID().uuidString, name: "WebDAV fixture", type: .webdav)
+        source.extraConfig = MusicSource.encodeScannedDirectories(["/"], into: nil, type: source.type)
+        let fixture = try makeScanFixture(count: 2, failAfterPage: false, source: source, root: root)
+        XCTAssertTrue(fixture.start())
+        await fixture.scan.waitForActiveScansToComplete()
+        await fixture.library.waitForPendingIndex()
+        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
+        XCTAssertEqual(Set(fixture.library.songs.map(\.id)), ["track-0", "track-1"])
+        let redundant = try XCTUnwrap(fixture.library.songs.first { $0.id == "track-1" })
+        // A source-side delete would fail before it can connect. Library-only
+        // cleanup must still succeed when the share is unavailable.
+        let unavailableManager = SourceManager(sourcesProvider: {
+            throw SourceError.connectionFailed("Source access is unavailable")
+        })
+        let cleanup = DuplicateCleanupService(
+            library: fixture.library, sourceManager: unavailableManager, sourcesStore: fixture.store
+        )
+        let revision = cleanup.completionRevision
+        let task = try XCTUnwrap(cleanup.cleanup([redundant]))
+        await task.value
+        XCTAssertEqual(fixture.library.songs.map(\.id), ["track-0"])
+        XCTAssertEqual(fixture.store.source(id: source.id)?.songCount, 1)
+        XCTAssertEqual(cleanup.lastCompletedCount, 1)
+        XCTAssertTrue(cleanup.lastFailedTitles.isEmpty)
+        XCTAssertEqual(cleanup.completionRevision, revision + 1)
+
+        XCTAssertTrue(fixture.start())
+        await fixture.scan.waitForActiveScansToComplete()
+        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
+        XCTAssertEqual(fixture.library.songs.map(\.id), ["track-0"])
+        XCTAssertEqual(fixture.store.source(id: source.id)?.songCount, 1)
+        try await fixture.library.persistNowAndWait().get()
+
+        let reloadedLibrary = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
+        let reloadedStore = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
+        await reloadedLibrary.waitForPendingIndex()
+        XCTAssertEqual(reloadedLibrary.songs.map(\.id), ["track-0"])
+        XCTAssertEqual(reloadedStore.source(id: source.id)?.songCount, 1)
+        XCTAssertTrue(fixture.scan.scanSource(
+            source, sourceManager: fixture.manager, library: reloadedLibrary, sourceStore: reloadedStore
+        ))
+        await fixture.scan.waitForActiveScansToComplete()
+        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
+        XCTAssertEqual(reloadedLibrary.songs.map(\.id), ["track-0"])
+        XCTAssertEqual(reloadedStore.source(id: source.id)?.songCount, 1)
+        let scanCount = await fixture.connector.scanCount
+        XCTAssertEqual(scanCount, 3)
+    }
+
     private struct ScanFixture {
         let source: MusicSource
         let connector: FnMusicScanFixtureConnector
@@ -163,9 +214,10 @@ final class FnMusicSourceTests: XCTestCase {
         count: Int,
         failAfterPage: Bool,
         source: MusicSource? = nil,
-        resumeAfter: Date? = nil
+        resumeAfter: Date? = nil,
+        root: URL? = nil
     ) throws -> ScanFixture {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("FnMusicScan-\(UUID().uuidString)")
+        let root = root ?? FileManager.default.temporaryDirectory.appendingPathComponent("FnMusicScan-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let source = source ?? MusicSource(id: UUID().uuidString, name: "Scan fixture", type: .fnMusic)
         let connector = FnMusicScanFixtureConnector(sourceID: source.id, count: count, failAfterPage: failAfterPage)
