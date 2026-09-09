@@ -131,6 +131,8 @@ struct CarPlaySettingsView: View {
                 playbackOptions = true
             } else if focusedAnchor == "carplay.folders" || focusedAnchor == "carplay.playlists" {
                 addingContent = true
+            } else if focusedAnchor == "carplay.preset" {
+                showingLibrary = true
             }
         }
     }
@@ -165,15 +167,23 @@ struct CarPlaySettingsView: View {
                     }
                     Button("carplay_now_playing", systemImage: "play.circle") { playbackOptions = true }
                         .accessibilityIdentifier("carplay.playbackSettings")
-                    Divider()
-                    Button("carplay_undo", systemImage: "arrow.uturn.backward", action: model.undo)
-                        .disabled(!model.history.canUndo)
-                        .accessibilityIdentifier("carplay.undo")
-                    Button("carplay_redo", systemImage: "arrow.uturn.forward", action: model.redo)
-                        .disabled(!model.history.canRedo)
-                        .accessibilityIdentifier("carplay.redo")
-                    Divider()
-                    Button("carplay_save_preset_short", systemImage: "square.and.arrow.down") { presetName = ""; savingPreset = true }
+                    Section("carplay_layout_title") {
+                        ForEach(CarPlayVisualStyle.allCases) { style in
+                            Button { model.apply(style) } label: {
+                                if model.configuration.visualStyle == style {
+                                    Label(LocalizedStringKey(style.titleKey), systemImage: "checkmark")
+                                } else {
+                                    Text(LocalizedStringKey(style.titleKey))
+                                }
+                            }
+                            .accessibilityIdentifier("carplay.style." + style.rawValue)
+                        }
+                        Button("carplay_styles_title", systemImage: "square.grid.2x2") { showingLibrary = true }
+                            .accessibilityIdentifier("carplay.styles")
+                    }
+                    Section {
+                        Button("carplay_save_preset_short", systemImage: "square.and.arrow.down") { presetName = ""; savingPreset = true }
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -196,32 +206,10 @@ struct CarPlaySettingsView: View {
     // MARK: - Preview
 
     private func previewColumn(width: CGFloat) -> some View {
-        VStack(spacing: 12) {
-            if panel != .inspector { styleRow }
-            canvas
-        }
-        .frame(width: width)
-        .padding(.top, 14)
-        .padding(.bottom, 6)
-    }
-
-    private var styleRow: some View {
-        HStack(spacing: 10) {
-            CarPlaySegment(values: CarPlayVisualStyle.allCases.map { ($0, $0.titleKey) },
-                selection: Binding(get: { model.configuration.visualStyle }, set: { model.apply($0) }))
-                .accessibilityIdentifier("carplay.presets")
-            Button { showingLibrary = true } label: {
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 44, height: 32)
-                    .background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(CarPlayEditorTheme.border, lineWidth: 1) }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("carplay_styles_title")
-            .accessibilityIdentifier("carplay.styles")
-        }
-        .settingsAnchor("carplay.preset")
+        canvas
+            .frame(width: width)
+            .padding(.top, 18)
+            .padding(.bottom, 6)
     }
 
     private var canvas: some View {
