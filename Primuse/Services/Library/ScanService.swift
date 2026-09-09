@@ -87,7 +87,20 @@ final class ScanService {
     /// still frequent enough for resume while avoiding a queue of full-library
     /// JSON encodes. Cancellation and completion always force a final write.
     private var lastCheckpointPersistenceAt = Date.distantPast
-    private static let checkpointPersistenceInterval: TimeInterval = 10
+    /// Size of the last checkpoint snapshot that reached disk. It drives the
+    /// adaptive persistence interval: a multi-megabyte checkpoint is rewritten
+    /// far less often than a small one (see ScanCheckpointPersistencePolicy).
+    private var lastCheckpointEncodedByteCount = 0
+    /// macOS has no scene-background flush before quit, so keep the widest
+    /// checkpoint interval shorter there than on iOS, where cancellation on
+    /// `.inactive` always forces a final write.
+    private static var maximumCheckpointPersistenceInterval: TimeInterval {
+        #if os(macOS)
+        60
+        #else
+        ScanCheckpointPersistencePolicy.maximumInterval
+        #endif
+    }
     #if os(iOS)
     private var backgroundTaskIDs: [String: UIBackgroundTaskIdentifier] = [:]
     #endif
@@ -3393,17 +3406,23 @@ final class ScanService {
     @discardableResult
     private func persistCheckpoints(force: Bool = false) -> Task<Bool, Never>? {
         let now = Date()
+        let interval = ScanCheckpointPersistencePolicy.interval(
+            encodedByteCount: lastCheckpointEncodedByteCount,
+            maximumInterval: Self.maximumCheckpointPersistenceInterval
+        )
         guard force
-                || now.timeIntervalSince(lastCheckpointPersistenceAt)
-                    >= Self.checkpointPersistenceInterval else { return nil }
+                || now.timeIntervalSince(lastCheckpointPersistenceAt) >= interval else { return nil }
         lastCheckpointPersistenceAt = now
         let snapshot = checkpoints
         let store = checkpointStore
         let previous = checkpointWriteTask
-        let writeTask = Task.detached(priority: .utility) {
+        let writeTask = Task.detached(priority: .utility) { [weak self] in
             _ = await previous?.value
             do {
-                try await store.replace(with: snapshot)
+                let byteCount = try await store.replace(with: snapshot)
+                if byteCount > 0 {
+                    await self?.recordCheckpointPersistence(encodedByteCount: byteCount)
+                }
                 return true
             } catch {
                 plog("⛔ Scan checkpoint persistence failed: \(error.localizedDescription)")
@@ -3412,6 +3431,10 @@ final class ScanService {
         }
         checkpointWriteTask = writeTask
         return writeTask
+    }
+
+    private func recordCheckpointPersistence(encodedByteCount: Int) {
+        lastCheckpointEncodedByteCount = encodedByteCount
     }
 
     private func waitForCheckpointPersistence(force: Bool = true) async throws {

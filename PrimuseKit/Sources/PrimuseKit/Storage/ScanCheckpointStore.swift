@@ -316,6 +316,27 @@ public enum ScanCheckpointStoreError: Error, Equatable {
     case invalidCheckpoint(String)
 }
 
+/// Every checkpoint write re-encodes the complete accumulated song arrays of
+/// all sources, so a large library turns a fixed ten-second cadence into
+/// gigabytes of flash writes per hour of scanning. The interval therefore
+/// grows with the payload that last reached disk while forced writes
+/// (cancellation, completion) stay immediate.
+public enum ScanCheckpointPersistencePolicy {
+    public static let minimumInterval: TimeInterval = 10
+    public static let maximumInterval: TimeInterval = 180
+    /// Sustained checkpoint write budget while a scan is running.
+    public static let bytesPerSecond: Double = 100 * 1024
+
+    public static func interval(
+        encodedByteCount: Int,
+        maximumInterval: TimeInterval = ScanCheckpointPersistencePolicy.maximumInterval
+    ) -> TimeInterval {
+        guard encodedByteCount > 0 else { return minimumInterval }
+        let ceiling = max(minimumInterval, maximumInterval)
+        return min(ceiling, max(minimumInterval, Double(encodedByteCount) / bytesPerSecond))
+    }
+}
+
 /// Serial checkpoint mutations plus a recoverable atomic JSON snapshot. The
 /// previous readable destination is retained as a backup until the next valid
 /// replacement succeeds.
@@ -341,6 +362,10 @@ public actor ScanCheckpointFileStore {
     private let backupURL: URL
     private let atomicWriter: AtomicWriter
     private var checkpoints: [String: ScanCheckpoint]
+    /// Initial checkpoints may come from the backup file or from a partially
+    /// recovered primary, so only a snapshot this store has written itself is
+    /// known to match the primary file byte for byte.
+    private var hasWrittenSnapshot = false
 
     public init(
         checkpointURL: URL,
@@ -362,14 +387,22 @@ public actor ScanCheckpointFileStore {
         checkpoints
     }
 
-    public func replace(with snapshot: [String: ScanCheckpoint]) throws {
-        try Self.writeSnapshot(
+    /// Writes `snapshot` and returns the encoded byte count. A snapshot equal
+    /// to the one this store last wrote returns 0 without touching the file:
+    /// the durable copy already matches, so re-encoding it would only cost
+    /// flash writes. Loaded-but-unwritten state is always written once.
+    @discardableResult
+    public func replace(with snapshot: [String: ScanCheckpoint]) throws -> Int {
+        guard !(hasWrittenSnapshot && snapshot == checkpoints) else { return 0 }
+        let byteCount = try Self.writeSnapshot(
             snapshot,
             to: checkpointURL,
             backupURL: backupURL,
             atomicWriter: atomicWriter
         )
         checkpoints = snapshot
+        hasWrittenSnapshot = true
+        return byteCount
     }
 
     public func upsert(_ checkpoint: ScanCheckpoint, for sourceID: String) throws {
@@ -385,6 +418,7 @@ public actor ScanCheckpointFileStore {
             atomicWriter: atomicWriter
         )
         checkpoints = candidate
+        hasWrittenSnapshot = true
     }
 
     public func remove(sourceID: String) throws {
@@ -397,6 +431,7 @@ public actor ScanCheckpointFileStore {
             atomicWriter: atomicWriter
         )
         checkpoints = candidate
+        hasWrittenSnapshot = true
     }
 
     public nonisolated static func defaultBackupURL(for checkpointURL: URL) -> URL {
@@ -418,12 +453,13 @@ public actor ScanCheckpointFileStore {
         return [:]
     }
 
+    @discardableResult
     public nonisolated static func writeSnapshot(
         _ checkpoints: [String: ScanCheckpoint],
         to checkpointURL: URL,
         backupURL: URL? = nil,
         atomicWriter: AtomicWriter = ScanCheckpointFileStore.defaultAtomicWriter
-    ) throws {
+    ) throws -> Int {
         if let invalid = checkpoints.first(where: { !$0.value.isUsable }) {
             throw ScanCheckpointStoreError.invalidCheckpoint(invalid.key)
         }
@@ -445,6 +481,7 @@ public actor ScanCheckpointFileStore {
             resolvedBackupURL,
             preserveExistingAsBackup
         )
+        return data.count
     }
 
     private nonisolated static func decoder() -> JSONDecoder {

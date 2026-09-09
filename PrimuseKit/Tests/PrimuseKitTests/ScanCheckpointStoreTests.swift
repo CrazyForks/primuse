@@ -719,6 +719,92 @@ struct SourceSyncStateFileStoreTests {
     }
 }
 
+@Suite("Scan checkpoint persistence budget")
+struct ScanCheckpointPersistenceBudgetTests {
+    @Test("Persistence interval grows with the encoded payload and stays bounded")
+    func intervalScalesWithPayload() {
+        #expect(ScanCheckpointPersistencePolicy.interval(encodedByteCount: 0) == 10)
+        #expect(ScanCheckpointPersistencePolicy.interval(encodedByteCount: 512 * 1024) == 10)
+        let twoMegabytes = ScanCheckpointPersistencePolicy.interval(encodedByteCount: 2 * 1024 * 1024)
+        #expect(twoMegabytes > 20 && twoMegabytes < 21)
+        let twelveMegabytes = ScanCheckpointPersistencePolicy.interval(encodedByteCount: 12 * 1024 * 1024)
+        #expect(twelveMegabytes > 120 && twelveMegabytes < 124)
+        #expect(ScanCheckpointPersistencePolicy.interval(encodedByteCount: 64 * 1024 * 1024) == 180)
+        #expect(ScanCheckpointPersistencePolicy.interval(encodedByteCount: 64 * 1024 * 1024, maximumInterval: 60) == 60)
+        #expect(ScanCheckpointPersistencePolicy.interval(encodedByteCount: 0, maximumInterval: 5) == 10)
+    }
+
+    @Test("Loaded checkpoints are written once even when the snapshot is unchanged")
+    func loadedSnapshotIsPersistedBeforeSkipping() async throws {
+        let urls = try makeTemporaryURLs()
+        defer { try? FileManager.default.removeItem(at: urls.directory) }
+        let recorder = CheckpointWriteCounter()
+        let loaded = ["source": makeCheckpoint(pendingDirectories: ["/Music/A"])]
+        let store = ScanCheckpointFileStore(
+            checkpointURL: urls.checkpoint,
+            backupURL: urls.backup,
+            initialCheckpoints: loaded,
+            atomicWriter: { data, destination, backup, preserve in
+                recorder.record(data.count)
+                try ScanCheckpointFileStore.defaultAtomicWriter(data, destination, backup, preserve)
+            }
+        )
+        #expect(try await store.replace(with: loaded) > 0)
+        #expect(recorder.writeCount == 1)
+        #expect(try await store.replace(with: loaded) == 0)
+        #expect(recorder.writeCount == 1)
+    }
+
+    @Test("Replacing the store with an identical snapshot does not rewrite the file")
+    func unchangedSnapshotIsNotRewritten() async throws {
+        let urls = try makeTemporaryURLs()
+        defer { try? FileManager.default.removeItem(at: urls.directory) }
+        let recorder = CheckpointWriteCounter()
+        let store = ScanCheckpointFileStore(
+            checkpointURL: urls.checkpoint,
+            backupURL: urls.backup,
+            initialCheckpoints: [:],
+            atomicWriter: { data, destination, backup, preserve in
+                recorder.record(data.count)
+                try ScanCheckpointFileStore.defaultAtomicWriter(data, destination, backup, preserve)
+            }
+        )
+        let checkpoint = makeCheckpoint(pendingDirectories: ["/Music/A", "/Music/B"])
+
+        let firstWrite = try await store.replace(with: ["source": checkpoint])
+        #expect(firstWrite > 0)
+        #expect(recorder.writeCount == 1)
+        #expect(recorder.lastByteCount == firstWrite)
+
+        let repeated = try await store.replace(with: ["source": checkpoint])
+        #expect(repeated == 0)
+        #expect(recorder.writeCount == 1)
+
+        var advanced = checkpoint
+        advanced.directoryState = SourceScanResumeState(pendingDirectories: ["/Music/B"])
+        let secondWrite = try await store.replace(with: ["source": advanced])
+        #expect(secondWrite > 0)
+        #expect(recorder.writeCount == 2)
+        #expect(await store.snapshot()["source"] == advanced)
+    }
+}
+
+private final class CheckpointWriteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var writes = 0
+    private var lastBytes = 0
+
+    var writeCount: Int { lock.withLock { writes } }
+    var lastByteCount: Int { lock.withLock { lastBytes } }
+
+    func record(_ byteCount: Int) {
+        lock.withLock {
+            writes += 1
+            lastBytes = byteCount
+        }
+    }
+}
+
 private func makeCheckpoint(
     phase: ScanCheckpointPhase = .scanning,
     intent: ScanCheckpointIntent = .fullScan,
