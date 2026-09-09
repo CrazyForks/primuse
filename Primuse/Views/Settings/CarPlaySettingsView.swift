@@ -17,11 +17,21 @@ struct CarPlaySettingsView: View {
     @State private var presetName = ""
     @State private var owner = UUID()
     @State private var previewItem: CarPlayHomeItem?
-    @State private var dropTargetID: String?
 
     init(settings: CarPlaySettingsStore = .shared, model: CarPlayEditorModel? = nil, showsLibrary: Bool = false) {
         _model = State(initialValue: model ?? CarPlayEditorModel(settings: settings))
         _showingLibrary = State(initialValue: showsLibrary)
+    }
+
+    private enum Panel { case menu, modules, inspector }
+
+    private var panel: Panel {
+        if model.inspectorVisible, model.selected != nil { return .inspector }
+        return model.homeEditorVisible ? .modules : .menu
+    }
+
+    private var inspectedBlock: CarPlayLayoutBlock? {
+        panel == .inspector ? model.selected : nil
     }
 
     private var nowPlaying: CarPlayHomeItem? {
@@ -36,37 +46,45 @@ struct CarPlaySettingsView: View {
         catalog.snapshot.blocks(for: model.configuration, folders: folders.index, nowPlaying: nowPlaying)
     }
 
+    private var navigationTitleText: Text {
+        if showingLibrary { return Text("carplay_styles_title") }
+        switch panel {
+        case .menu: return Text("carplay_editor_title")
+        case .modules: return Text("carplay_home_modules")
+        case .inspector:
+            guard let block = inspectedBlock else { return Text("carplay_home_modules") }
+            return block.title.isEmpty ? Text(LocalizedStringKey(block.kind.titleKey)) : Text(verbatim: block.title)
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             Group {
                 if showingLibrary {
                     CarPlayPresetLibrary(model: model) { showingLibrary = false }
+                } else if geometry.size.width >= 700 {
+                    HStack(alignment: .top, spacing: 0) {
+                        previewColumn(width: min(geometry.size.width * 0.5, max(320, (geometry.size.height - 140) * 16 / 9)))
+                            .padding(.leading, 20)
+                            .padding(.trailing, 4)
+                        editorPanel
+                            .frame(maxWidth: .infinity)
+                    }
                 } else {
                     VStack(spacing: 0) {
-                        canvas
-                            .frame(maxWidth: model.inspectorVisible ? min(600, max(300, (geometry.size.height - 330) * 16 / 9)) : 760)
-                            .padding(.horizontal, 16).padding(.top, 20)
-                        if model.inspectorVisible, let block = model.selected {
-                            Spacer(minLength: 0)
-                            CarPlayModuleInspector(model: model, block: block,
-                                items: blocks.first(where: { $0.id == block.id })?.items ?? [],
-                                add: { addingContent = true }, preview: { fullScreen = true })
-                                .frame(maxHeight: 492).padding(.top, 16)
-                        } else if model.homeEditorVisible {
-                            moduleList
-                        } else {
-                            CarPlayMainMenuEditor(model: model) { addingTabContent = true }
-                        }
+                        previewColumn(width: min(geometry.size.width - 32, max(280, (geometry.size.height - 340) * 16 / 9)))
+                            .frame(maxWidth: .infinity)
+                        editorPanel
                     }
                 }
             }
-            .frame(maxWidth: 800).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(CarPlayEditorTheme.background)
         }
         .foregroundStyle(CarPlayEditorTheme.text)
-        .navigationTitle(LocalizedStringKey(showingLibrary ? "carplay_styles_title" : "carplay_editor_title"))
+        .navigationTitle(navigationTitleText)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(showingLibrary || model.inspectorVisible || model.homeEditorVisible)
+        .navigationBarBackButtonHidden(showingLibrary || panel != .menu)
         .toolbar(.visible, for: .navigationBar)
         .toolbar { editorToolbar }
         .toolbar(.hidden, for: .tabBar)
@@ -117,53 +135,93 @@ struct CarPlaySettingsView: View {
         }
     }
 
+    // MARK: - Toolbar
+
     @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
-        if showingLibrary || model.inspectorVisible || model.homeEditorVisible {
+        if showingLibrary || panel != .menu {
             ToolbarItem(placement: .topBarLeading) {
-                Button("back", systemImage: "chevron.backward") {
-                    if showingLibrary { showingLibrary = false }
-                    else if model.inspectorVisible {
-                        model.inspectorVisible = false
-                        model.continuousChange(false)
-                    } else { model.showMainMenu() }
-                }.labelStyle(.iconOnly)
+                Button("back", systemImage: "chevron.backward", action: goBack)
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("carplay.back")
             }
         }
-        if !showingLibrary && !model.inspectorVisible {
-            ToolbarItem(placement: .principal) { presetStrip }
-        }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if model.inspectorVisible {
+            if showingLibrary {
+                EmptyView()
+            } else if panel == .inspector {
                 Button("done") { model.inspectorVisible = false; model.continuousChange(false) }
-            } else if !showingLibrary {
+            } else {
+                Button("carplay_undo", systemImage: "arrow.uturn.backward", action: model.undo)
+                    .labelStyle(.iconOnly)
+                    .disabled(!model.history.canUndo)
+                    .accessibilityIdentifier("carplay.undoButton")
+                Button("carplay_redo", systemImage: "arrow.uturn.forward", action: model.redo)
+                    .labelStyle(.iconOnly)
+                    .disabled(!model.history.canRedo)
+                    .accessibilityIdentifier("carplay.redoButton")
                 Menu {
-                    Button("carplay_main_menu", systemImage: "rectangle.3.group", action: model.showMainMenu)
+                    if panel == .modules {
+                        Button("carplay_main_menu", systemImage: "rectangle.3.group", action: model.showMainMenu)
+                    }
                     Button("carplay_now_playing", systemImage: "play.circle") { playbackOptions = true }
                         .accessibilityIdentifier("carplay.playbackSettings")
                     Divider()
-                    Button("carplay_undo", action: model.undo).disabled(!model.history.canUndo)
+                    Button("carplay_undo", systemImage: "arrow.uturn.backward", action: model.undo)
+                        .disabled(!model.history.canUndo)
                         .accessibilityIdentifier("carplay.undo")
-                    Button("carplay_redo", action: model.redo).disabled(!model.history.canRedo)
+                    Button("carplay_redo", systemImage: "arrow.uturn.forward", action: model.redo)
+                        .disabled(!model.history.canRedo)
                         .accessibilityIdentifier("carplay.redo")
                     Divider()
                     Button("carplay_save_preset_short", systemImage: "square.and.arrow.down") { presetName = ""; savingPreset = true }
-                } label: { Image(systemName: "ellipsis") }
-                    .accessibilityIdentifier("carplay.actions")
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("carplay.actions")
             }
         }
     }
 
-    private var presetStrip: some View {
-        HStack(spacing: 6) {
+    private func goBack() {
+        if showingLibrary {
+            showingLibrary = false
+        } else if model.inspectorVisible {
+            model.inspectorVisible = false
+            model.continuousChange(false)
+        } else {
+            model.showMainMenu()
+        }
+    }
+
+    // MARK: - Preview
+
+    private func previewColumn(width: CGFloat) -> some View {
+        VStack(spacing: 12) {
+            if panel != .inspector { styleRow }
+            canvas
+        }
+        .frame(width: width)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
+    }
+
+    private var styleRow: some View {
+        HStack(spacing: 10) {
             CarPlaySegment(values: CarPlayVisualStyle.allCases.map { ($0, $0.titleKey) },
                 selection: Binding(get: { model.configuration.visualStyle }, set: { model.apply($0) }))
-                .frame(width: 210).accessibilityIdentifier("carplay.presets")
+                .accessibilityIdentifier("carplay.presets")
             Button { showingLibrary = true } label: {
-                Image(systemName: "square.grid.2x2").frame(width: 30, height: 34)
-            }.accessibilityLabel("carplay_styles_title").accessibilityIdentifier("carplay.styles")
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 44, height: 32)
+                    .background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(CarPlayEditorTheme.border, lineWidth: 1) }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("carplay_styles_title")
+            .accessibilityIdentifier("carplay.styles")
         }
-        .buttonStyle(.plain).settingsAnchor("carplay.preset")
+        .settingsAnchor("carplay.preset")
     }
 
     private var canvas: some View {
@@ -187,95 +245,28 @@ struct CarPlaySettingsView: View {
             .settingsAnchor("carplay.sections")
     }
 
-    private var moduleList: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Text("carplay_home_modules").font(.system(size: 15, weight: .semibold))
-                Spacer()
-                Button { addingModule = true } label: { Label("carplay_add", systemImage: "plus").font(.system(size: 12, weight: .semibold)) }
-                    .accessibilityIdentifier("carplay.addModule")
-            }.padding(.horizontal, 16).padding(.top, 16)
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(model.configuration.blocks) { block in moduleRow(block) }
-                    if model.configuration.blocks.isEmpty {
-                        Button { addingModule = true } label: {
-                            Label("carplay_add_module", systemImage: "plus").frame(maxWidth: .infinity).padding(30)
-                        }.buttonStyle(.plain)
-                    }
-                    Color.clear.frame(height: 14).dropDestination(for: String.self) { values, _ in model.drop(values, before: nil) }
-                }.padding(.horizontal, 16).padding(.bottom, 12)
-            }.scrollIndicators(.hidden)
+    // MARK: - Panels
+
+    @ViewBuilder private var editorPanel: some View {
+        switch panel {
+        case .menu:
+            CarPlayMainMenuEditor(model: model,
+                addCollection: { addingTabContent = true },
+                openPlayback: { playbackOptions = true },
+                savePreset: { presetName = ""; savingPreset = true },
+                openLibrary: { showingLibrary = true })
+        case .modules:
+            CarPlayModuleList(model: model) { addingModule = true }
+        case .inspector:
+            if let block = inspectedBlock {
+                CarPlayModuleInspector(model: model, block: block,
+                    items: blocks.first(where: { $0.id == block.id })?.items ?? [],
+                    add: { addingContent = true }, preview: { fullScreen = true })
+            }
         }
     }
 
-    private func moduleRow(_ block: CarPlayLayoutBlock) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "line.3.horizontal").font(.system(size: 13)).foregroundStyle(CarPlayEditorTheme.muted)
-                .frame(width: 18, height: 36)
-                .draggable("carplay-block:" + block.id) {
-                    Label(block.title.isEmpty ? NSLocalizedString(block.kind.titleKey, comment: "") : block.title, systemImage: block.kind.symbol)
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(CarPlayEditorTheme.text)
-                        .frame(width: 260, height: 54).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-                }.accessibilityLabel("carplay_move_module").accessibilityIdentifier("carplay.drag." + block.id)
-            Button { model.select(block.id) } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: block.kind.symbol).font(.system(size: 15)).foregroundStyle(CarPlayEditorTheme.accentText)
-                        .frame(width: 28, height: 28).background(CarPlayEditorTheme.border.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(block.title.isEmpty ? NSLocalizedString(block.kind.titleKey, comment: "") : block.title).font(.system(size: 14, weight: .semibold))
-                        Text(moduleSummary(block)).font(.system(size: 11)).foregroundStyle(CarPlayEditorTheme.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityIdentifier("carplay.module." + block.id)
-            Button { model.update(block.id) { $0.isVisible.toggle() } } label: {
-                Image(systemName: block.isVisible ? "eye.fill" : "eye.slash").font(.system(size: 15))
-                    .foregroundStyle(block.isVisible ? CarPlayEditorTheme.accent : CarPlayEditorTheme.muted)
-                    .frame(width: 32, height: 36)
-            }.buttonStyle(.plain).accessibilityLabel(block.isVisible ? "carplay_hide_module" : "carplay_show_module")
-                .accessibilityIdentifier("carplay.visibility." + block.id)
-        }
-        .padding(.horizontal, 11).padding(.vertical, 9)
-        .background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder((model.selectedID == block.id || dropTargetID == block.id) ? CarPlayEditorTheme.accent.opacity(0.65) : CarPlayEditorTheme.border, lineWidth: 1) }
-        .opacity(block.isVisible ? 1 : 0.5)
-        .dropDestination(for: String.self) { values, _ in
-            dropTargetID = nil
-            return model.drop(values, before: block.id)
-        } isTargeted: { targeted in
-            if targeted { dropTargetID = block.id }
-            else if dropTargetID == block.id { dropTargetID = nil }
-        }
-        .accessibilityAction(named: Text("carplay_move_up")) { model.move(block.id, by: -1) }
-        .accessibilityAction(named: Text("carplay_move_down")) { model.move(block.id, by: 1) }
-    }
-
-    private func moduleSummary(_ block: CarPlayLayoutBlock) -> String {
-        guard block.isVisible else { return String(localized: "carplay_module_hidden") }
-        let style = block.style == .list || block.style == .capsules ? NSLocalizedString(block.style.titleKey, comment: "") : "\(block.columns)×\(block.rowsPerPage) " + String(localized: "carplay_style_covers")
-        return style + " · \(block.itemLimit) " + String(localized: "carplay_items_unit") + " · " + String(localized: block.playsImmediately ? "carplay_action_play" : "carplay_action_browse")
-    }
-
-    private var playbackInspector: some View {
-        Form {
-            Picker("carplay_player_style", selection: configurationBinding(\.minimalNowPlaying)) {
-                Text("carplay_player_standard").tag(false)
-                Text("carplay_preset_focus").tag(true)
-            }
-            Picker("carplay_connection_page", selection: configurationBinding(\.opensNowPlayingOnConnect)) {
-                Text("carplay_home_title").tag(false)
-                Text("carplay_now_playing").tag(true)
-            }
-            Picker("carplay_after_selection", selection: configurationBinding(\.opensNowPlayingAfterSelection)) {
-                Text("carplay_stay_here").tag(false)
-                Text("carplay_now_playing").tag(true)
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .contentMargins(.top, 16)
-        .accessibilityIdentifier("carplay.playbackOptions")
-    }
+    // MARK: - Now Playing options
 
     private var playbackSettings: some View {
         NavigationStack {
@@ -283,22 +274,50 @@ struct CarPlaySettingsView: View {
                 CarPlayEditorCanvas(blocks: [], configuration: model.configuration, selectedID: nil,
                     editing: false, playerPage: true, wide: false, previewItem: previewItem ?? nowPlaying,
                     select: { _ in }, activate: { _ in }, drop: { _, _, _ in false }, addContent: { _ in })
-                    .frame(maxWidth: 600).padding(16)
-                playbackInspector
+                    .frame(maxWidth: 600)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                List {
+                    Section {
+                        Picker("carplay_player_style", selection: configurationBinding(\.minimalNowPlaying)) {
+                            Text("carplay_player_standard").tag(false)
+                            Text("carplay_preset_focus").tag(true)
+                        }
+                        .settingsAnchor("carplay.minimal")
+                        Picker("carplay_connection_page", selection: configurationBinding(\.opensNowPlayingOnConnect)) {
+                            Text("carplay_home_title").tag(false)
+                            Text("carplay_now_playing").tag(true)
+                        }
+                        .settingsAnchor("carplay.onConnect")
+                        Picker("carplay_after_selection", selection: configurationBinding(\.opensNowPlayingAfterSelection)) {
+                            Text("carplay_stay_here").tag(false)
+                            Text("carplay_now_playing").tag(true)
+                        }
+                        .settingsAnchor("carplay.afterPlay")
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .contentMargins(.top, 8)
+                .accessibilityIdentifier("carplay.playbackOptions")
             }
             .background(CarPlayEditorTheme.background)
-            .navigationTitle("carplay_now_playing").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("carplay_now_playing")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("done") { playbackOptions = false }
                 }
             }
-        }.presentationDetents([.large])
+        }
+        .presentationDetents([.large])
     }
 
     private func configurationBinding(_ keyPath: WritableKeyPath<CarPlayLayoutConfiguration, Bool>) -> Binding<Bool> {
         Binding(get: { model.configuration[keyPath: keyPath] }, set: { value in model.change { $0[keyPath: keyPath] = value } })
     }
+
+    // MARK: - Full-screen preview
 
     private var expandedPreview: some View {
         GeometryReader { geometry in
@@ -318,7 +337,10 @@ struct CarPlaySettingsView: View {
                     Button { fullScreen = false } label: { Text("done").font(.system(size: 13, weight: .semibold)) }
                         .buttonStyle(.bordered).buttonBorderShape(.capsule)
                         .accessibilityIdentifier("carplay.closePreview")
-                }.padding(.horizontal, 16).padding(.vertical, 8).background(CarPlayEditorTheme.background.opacity(0.94), in: Capsule()).padding(16)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .padding(16)
             }
         }.foregroundStyle(CarPlayEditorTheme.text)
     }
@@ -333,15 +355,32 @@ struct CarPlaySettingsView: View {
 #if os(iOS) && DEBUG
 struct CarPlayEditorTestHost: View {
     @State private var settings: CarPlaySettingsStore
+    @State private var model: CarPlayEditorModel
     init() {
         let defaults = UserDefaults(suiteName: "CarPlayEditorUITests")!
         if ProcessInfo.processInfo.environment["PRIMUSE_CARPLAY_RESET"] == "1" {
             defaults.removePersistentDomain(forName: "CarPlayEditorUITests")
         }
-        _settings = State(initialValue: CarPlaySettingsStore(defaults: defaults))
+        let settings = CarPlaySettingsStore(defaults: defaults)
+        let model = CarPlayEditorModel(settings: settings)
+        if ProcessInfo.processInfo.environment["PRIMUSE_CARPLAY_SOURCE_REORDER"] == "1" {
+            if ProcessInfo.processInfo.environment["PRIMUSE_CARPLAY_RESET"] == "1" {
+                var block = CarPlayLayoutBlock(id: "reorder", kind: .custom, style: .list)
+                block.itemLimit = 3
+                block.items = (1...4).map { index in
+                    CarPlayLayoutItem(id: "source.\(index)", kind: .song,
+                        targetID: "unavailable.\(index)", title: "来源 \(index)")
+                }
+                model.change { $0.blocks = [block] }
+                model.flush()
+            }
+            model.select("reorder")
+        }
+        _settings = State(initialValue: settings)
+        _model = State(initialValue: model)
     }
     var body: some View {
-        NavigationStack { CarPlaySettingsView(settings: settings) }
+        NavigationStack { CarPlaySettingsView(settings: settings, model: model) }
     }
 }
 #endif

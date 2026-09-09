@@ -3812,3 +3812,4 @@
 "carplay_menu_name" = "メニュー名";
 "carplay_siri_button" = "上部のボタン";
 "carplay_siri_row" = "リスト行";
+"carplay_delete_module" = "モジュールを削除";

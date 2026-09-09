@@ -3717,3 +3717,4 @@
 "carplay_menu_name" = "Название меню";
 "carplay_siri_button" = "Кнопка вверху";
 "carplay_siri_row" = "Строка списка";
+"carplay_delete_module" = "Удалить модуль";

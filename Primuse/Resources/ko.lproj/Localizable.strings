@@ -3811,3 +3811,4 @@
 "carplay_menu_name" = "메뉴 이름";
 "carplay_siri_button" = "상단 버튼";
 "carplay_siri_row" = "목록 행";
+"carplay_delete_module" = "모듈 삭제";
