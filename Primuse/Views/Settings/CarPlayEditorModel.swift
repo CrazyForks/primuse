@@ -2,6 +2,16 @@
 import Foundation
 import Observation
 import PrimuseKit
+import CarPlay
+
+extension CarPlayMainTab {
+    var displayTitle: String {
+        let custom = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
+        if kind == .collection, let content { return content.title }
+        return NSLocalizedString(kind.titleKey, comment: "")
+    }
+}
 
 @MainActor @Observable
 final class CarPlayEditorModel {
@@ -9,8 +19,8 @@ final class CarPlayEditorModel {
     private(set) var history = CarPlayLayoutHistory()
     var selectedID: String?
     var inspectorVisible = false
-    var playerPage = false
-    var preview = false
+    var homeEditorVisible = false
+    var selectedTabID: String?
     @ObservationIgnored let settings: CarPlaySettingsStore
     @ObservationIgnored private var pendingSave: Task<Void, Never>?
     @ObservationIgnored private var continuousStart: CarPlayLayoutConfiguration?
@@ -22,10 +32,74 @@ final class CarPlayEditorModel {
     }
 
     var selected: CarPlayLayoutBlock? { configuration.blocks.first { $0.id == selectedID } }
+    var maximumTabCount: Int { max(1, CPTabBarTemplate.maximumTabCount) }
+    var visibleTabs: [CarPlayMainTab] { configuration.visibleTabs(maximumCount: maximumTabCount) }
+    var canAddTab: Bool {
+        configuration.tabs.count < CarPlayLayoutConfiguration.maximumSavedTabCount && configuration.tabs.filter(\.isVisible).count < maximumTabCount
+    }
+
+    func selectTab(_ id: String) {
+        continuousChange(false)
+        selectedTabID = id
+        homeEditorVisible = configuration.tabs.first { $0.id == id }?.kind == .home
+        inspectorVisible = false
+    }
+
+    func showMainMenu() {
+        continuousChange(false)
+        homeEditorVisible = false
+        inspectorVisible = false
+    }
+
+    func renameTab(_ id: String, title: String) {
+        change { config in
+            var tabs = config.tabs
+            guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+            tabs[index].title = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
+            config.tabs = tabs
+        }
+    }
+
+    @discardableResult func addTab(_ kind: CarPlayMainTab.Kind, content: CarPlayLayoutItem? = nil) -> Bool {
+        guard canAddTab else { return false }
+        let tab = CarPlayMainTab(kind: kind, content: content)
+        guard tab.isValid else { return false }
+        change { $0.tabs.append(tab) }
+        selectTab(tab.id)
+        return true
+    }
+
+    func removeTab(_ id: String) {
+        guard let tab = configuration.tabs.first(where: { $0.id == id }),
+              !tab.isVisible || configuration.tabs.filter(\.isVisible).count > 1 else { return }
+        change { $0.tabs.removeAll { $0.id == id } }
+        reconcileSelection()
+    }
+
+    func toggleTab(_ tab: CarPlayMainTab) {
+        change { $0.setTabVisible(tab.id, visible: !tab.isVisible, maximumCount: maximumTabCount) }
+        reconcileSelection()
+    }
+
+    @discardableResult func dropTab(_ values: [String], before id: String?) -> Bool {
+        guard let value = values.first, value.hasPrefix("carplay-tab:") else { return false }
+        var accepted = false
+        change { accepted = $0.moveTab(String(value.dropFirst("carplay-tab:".count)), before: id) }
+        return accepted
+    }
+
+    func moveTab(_ id: String, by offset: Int) {
+        let tabs = configuration.tabs
+        guard let index = tabs.firstIndex(where: { $0.id == id }), tabs.indices.contains(index + offset) else { return }
+        let destination = offset < 0 ? index - 1 : index + 2
+        change { $0.moveTab(id, before: tabs.indices.contains(destination) ? tabs[destination].id : nil) }
+    }
 
     func select(_ id: String) {
         guard configuration.blocks.contains(where: { $0.id == id }) else { return }
         selectedID = id
+        homeEditorVisible = true
+        selectedTabID = configuration.tabs.first { $0.kind == .home }?.id
         inspectorVisible = true
     }
 
@@ -81,6 +155,8 @@ final class CarPlayEditorModel {
 
     func add(_ kind: CarPlayLayoutBlockKind) {
         guard configuration.blocks.count < CarPlayLayoutConfiguration.maximumBlockCount else { return }
+        homeEditorVisible = true
+        selectedTabID = configuration.tabs.first { $0.kind == .home }?.id
         if kind != .custom, let existing = configuration.blocks.first(where: { $0.kind == kind }) {
             selectedID = existing.id
             update(existing.id) { $0.isVisible = true }
@@ -96,7 +172,6 @@ final class CarPlayEditorModel {
         }
         change { $0.blocks.append(block) }
         selectedID = block.id
-        playerPage = false
     }
 
     func remove(_ id: String) {
@@ -173,6 +248,11 @@ final class CarPlayEditorModel {
     }
 
     private func reconcileSelection() {
+        if !visibleTabs.contains(where: { $0.id == selectedTabID }) { selectedTabID = visibleTabs.first?.id }
+        if !configuration.tabs.contains(where: { $0.id == selectedTabID && $0.kind == .home }) {
+            homeEditorVisible = false
+            inspectorVisible = false
+        }
         if !configuration.blocks.contains(where: { $0.id == selectedID }) {
             selectedID = configuration.blocks.first?.id
         }

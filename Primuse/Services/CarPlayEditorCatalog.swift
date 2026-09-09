@@ -14,6 +14,8 @@ final class CarPlayEditorCatalog {
         var ranking: [CarPlayHomeItem] = []
         var memberships: [String: [String]] = [:]
         var albumSongs: [String: [String]] = [:]
+        var artists: [Artist] = []
+        var artistSongs: [String: [String]] = [:]
         var searchItems: [CarPlayLayoutItem.Kind: [CarPlayLayoutItem]] = [:]
 
         func resolve(_ item: CarPlayLayoutItem, directly: Bool) -> CarPlayHomeItem {
@@ -89,6 +91,7 @@ final class CarPlayEditorCatalog {
         var stations: [CarPlayHomeItem]
         var artistNames: ArtistNameConfiguration
         var history: [HomeListeningEvent] = []
+        var artists: [Artist] = []
     }
 
     private(set) var snapshot = Snapshot()
@@ -148,7 +151,7 @@ final class CarPlayEditorCatalog {
             playlists: playlists, memberships: Dictionary(uniqueKeysWithValues: playlists.map { ($0.id, library.rawSongIDs(forPlaylist: $0.id)) }),
             stations: AppServices.shared.radioStationsStore.stations.map {
                 CarPlayHomeItem(id: $0.id, title: $0.name, subtitle: $0.playbackSubtitle, symbol: "radio", target: .radio($0.id))
-            }, artistNames: library.artistNameConfiguration, history: PlayHistoryStore.shared.entries.map(\.listeningEvent))
+            }, artistNames: library.artistNameConfiguration, history: PlayHistoryStore.shared.entries.map(\.listeningEvent), artists: library.visibleArtists)
         load(input, sourceVersion: version)
     }
 
@@ -177,6 +180,8 @@ final class CarPlayEditorCatalog {
         guard !Task.isCancelled else { return result }
         let valid = Set(input.songs.map(\.id))
         result.memberships = input.memberships
+        result.artists = input.artists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        result.artistSongs = Dictionary(grouping: input.songs, by: { $0.artistID ?? "" }).mapValues { $0.map(\.id) }
         let songs = input.songs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         result.entries[.song] = songs.map {
             CarPlayHomeItem(id: $0.id, title: $0.title, subtitle: $0.displayArtistName(configuration: input.artistNames), artwork: .songReference(id: $0.id, coverRef: $0.coverArtFileName), target: .song($0.id, queue: [$0.id]))

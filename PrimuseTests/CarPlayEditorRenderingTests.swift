@@ -30,6 +30,15 @@ final class CarPlayEditorRenderingTests: XCTestCase {
                                           playerPage: false, wide: true, previewItem: nil,
                                           select: { _ in }, activate: { _ in }, drop: { _, _, _ in false }, addContent: { _ in })
         try await render(preview, size: CGSize(width: 1120, height: 480), name: "CarPlay-canvas-wide")
+        for style in [CarPlayVisualStyle.wall, .capsules] {
+            var menuConfig = config
+            menuConfig.applyVisualStyle(style)
+            menuConfig.tabs = [.init(id: "playlists", kind: .playlists)]
+            let menu = CarPlayEditorCanvas(blocks: [], configuration: menuConfig, selectedID: nil, editing: false,
+                playerPage: false, wide: false, previewItem: nil, select: { _ in }, activate: { _ in },
+                drop: { _, _, _ in false }, addContent: { _ in }, catalog: .init(entries: [.playlist: items]))
+            try await render(menu, size: CGSize(width: 800, height: 480), name: "CarPlay-playlists-menu-\(style.rawValue)")
+        }
         config.minimalNowPlaying = true
         let player = CarPlayEditorCanvas(blocks: [], configuration: config, selectedID: nil, editing: false,
                                          playerPage: true, wide: false, previewItem: items[1],
@@ -50,11 +59,11 @@ final class CarPlayEditorRenderingTests: XCTestCase {
         model.select(try XCTUnwrap(model.configuration.blocks.first?.id))
         try await render(NavigationStack { CarPlaySettingsView(settings: settings, model: model) }, size: CGSize(width: 390, height: 844), name: "CarPlay-module-inspector")
         try await render(CarPlayModulePicker(model: model, close: {}), size: CGSize(width: 390, height: 660), name: "CarPlay-add-module")
-        let playerModel = CarPlayEditorModel(settings: settings)
-        playerModel.playerPage = true
+        let homeModel = CarPlayEditorModel(settings: settings)
+        homeModel.selectTab("tab.home")
         for scheme in [ColorScheme.light, .dark] {
-            try await render(NavigationStack { CarPlaySettingsView(settings: settings, model: playerModel) },
-                size: CGSize(width: 390, height: 844), name: "CarPlay-native-player-\(scheme)", scheme: scheme)
+            try await render(NavigationStack { CarPlaySettingsView(settings: settings, model: homeModel) },
+                size: CGSize(width: 390, height: 844), name: "CarPlay-home-editor-\(scheme)", scheme: scheme)
         }
         XCTAssertEqual(settings.configuration, original)
     }
@@ -234,10 +243,20 @@ final class CarPlayEditorRenderingTests: XCTestCase {
         var configuration = CarPlayLayoutConfiguration()
         delegate.configureNavigation(on: template, configuration: configuration, isTabRoot: true)
         XCTAssertTrue(template.trailingNavigationBarButtons.isEmpty, "Tab roots do not support custom navigation buttons")
+        if #available(iOS 26.0, *) { XCTAssertEqual(template.headerGridButtons?.count, 1) }
         delegate.configureNavigation(on: template, configuration: configuration)
         XCTAssertNil(template.assistantCellConfiguration)
         XCTAssertEqual(template.trailingNavigationBarButtons.count, 1)
         configuration.blocks.append(.init(id: "siri", kind: .siri))
+        delegate.configureNavigation(on: template, configuration: configuration)
+        if #available(iOS 26.0, *) {
+            XCTAssertNil(template.assistantCellConfiguration)
+            XCTAssertEqual(template.trailingNavigationBarButtons.count, 2)
+            delegate.configureNavigation(on: template, configuration: configuration, isTabRoot: true)
+            XCTAssertEqual(template.headerGridButtons?.count, 2)
+            XCTAssertTrue(template.trailingNavigationBarButtons.isEmpty)
+        }
+        configuration.siriPresentation = .row
         delegate.configureNavigation(on: template, configuration: configuration)
         XCTAssertNotNil(template.assistantCellConfiguration)
         XCTAssertEqual(template.trailingNavigationBarButtons.count, 1)
@@ -245,6 +264,85 @@ final class CarPlayEditorRenderingTests: XCTestCase {
         XCTAssertNil(CarPlayHomeContent.httpArtworkReference("file:///artwork.jpg"))
         XCTAssertNil(CarPlayHomeContent.httpArtworkReference("https:///"))
         XCTAssertEqual(CarPlayHomeContent.httpArtworkReference("https://example.com/cover.jpg"), "https://example.com/cover.jpg")
+    }
+
+    func testMainMenuEditingPersistsAndProjectsToNativeTabs() async throws {
+        let suite = "CarPlayMenuTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = CarPlayEditorModel(settings: CarPlaySettingsStore(defaults: defaults))
+        let initial = model.configuration
+        XCTAssertFalse(model.homeEditorVisible)
+        model.selectTab("tab.home")
+        XCTAssertTrue(model.homeEditorVisible)
+        model.select(try XCTUnwrap(model.selectedID))
+        XCTAssertTrue(model.inspectorVisible)
+        model.selectTab("tab.library")
+        XCTAssertFalse(model.homeEditorVisible)
+        XCTAssertFalse(model.inspectorVisible)
+        model.showMainMenu()
+        XCTAssertEqual(model.configuration, initial)
+        model.toggleTab(try XCTUnwrap(model.configuration.tabs.first { $0.kind == .radio }))
+        XCTAssertTrue(model.addTab(.collection, content: .init(kind: .playlist, targetID: "commute", title: "Commute")))
+        let id = try XCTUnwrap(model.selectedTabID)
+        model.renameTab(id, title: "出发就听")
+        XCTAssertTrue(model.dropTab(["carplay-tab:" + id], before: "tab.home"))
+        XCTAssertEqual(model.visibleTabs.first?.id, id)
+        model.undo()
+        XCTAssertEqual(model.visibleTabs.last?.id, id)
+        model.redo()
+        model.flush()
+        XCTAssertEqual(CarPlaySettingsStore(defaults: defaults).configuration, model.configuration)
+        let delegate = CarPlaySceneDelegate()
+        let tabs = delegate.makeRootTabBar(configuration: model.configuration)
+        XCTAssertEqual(tabs.templates.map(\.tabTitle), model.visibleTabs.map { Optional($0.displayTitle) })
+        XCTAssertEqual(tabs.templates.count, model.visibleTabs.count)
+        XCTAssertLessThanOrEqual(tabs.templates.count, model.maximumTabCount)
+        model.showMainMenu()
+        try await render(NavigationStack { CarPlaySettingsView(settings: model.settings, model: model) },
+            size: CGSize(width: 390, height: 844), name: "CarPlay-main-menu-editor")
+    }
+
+    func testNavigationAndArtworkPoliciesStayInsideSystemBudgets() {
+        XCTAssertEqual(CarPlayNavigationStackPolicy.action(currentDepth: 1), .push)
+        XCTAssertEqual(CarPlayNavigationStackPolicy.action(currentDepth: 4), .push)
+        XCTAssertEqual(CarPlayNavigationStackPolicy.action(currentDepth: 5), .replaceTop)
+        XCTAssertEqual(CarPlayNavigationStackPolicy.action(currentDepth: 6), .resetToRoot)
+        XCTAssertTrue(CarPlayArtworkLoadPolicy.shouldLoad(index: 0))
+        XCTAssertTrue(CarPlayArtworkLoadPolicy.shouldLoad(index: 63))
+        XCTAssertFalse(CarPlayArtworkLoadPolicy.shouldLoad(index: 64))
+        XCTAssertFalse(CarPlayArtworkLoadPolicy.shouldLoad(index: -1))
+    }
+
+    private actor ArtworkDecodeProbe {
+        var active = 0
+        var maximumActive = 0
+
+        func load() async -> UIImage? {
+            active += 1
+            maximumActive = max(maximumActive, active)
+            defer { active -= 1 }
+            try? await Task.sleep(for: .milliseconds(20))
+            return UIImage()
+        }
+    }
+
+    func testCarPlayArtworkSchedulerSerializesDecodeWork() async {
+        let scheduler = CarPlayArtworkScheduler(
+            minimumCooldown: 0,
+            maximumCooldown: 0,
+            dynamicCooldownMultiplier: 0
+        )
+        let probe = ArtworkDecodeProbe()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<12 {
+                group.addTask {
+                    _ = await scheduler.image { await probe.load() }
+                }
+            }
+        }
+        let maximumActive = await probe.maximumActive
+        XCTAssertEqual(maximumActive, 1)
     }
 
     private func pixel(_ image: UIImage, x: Int, y: Int) -> [UInt8] {

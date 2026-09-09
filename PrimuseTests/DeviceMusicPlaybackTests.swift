@@ -65,6 +65,129 @@ final class DeviceMusicPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testCarPlayAppleMusicPlaylistAdvancesWithoutLosingQueue() async throws {
+        let root = try fixtureDirectory()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        guard MusicAuthorization.currentStatus == .authorized else { throw XCTSkip("Apple Music is not authorized.") }
+        let services = AppServices.shared
+        let library = services.musicLibrary
+        let requestedID = ProcessInfo.processInfo.environment["PRIMUSE_CARPLAY_PLAYLIST_ID"]
+        func candidate() -> PrimuseKit.Playlist? {
+            library.playlists.first { playlist in
+                if let requestedID, playlist.id != requestedID { return false }
+                let songs = library.songs(forPlaylist: playlist.id).filteredPlayable()
+                return songs.count >= 4 && songs.allSatisfy { $0.sourceID == AppleMusicLibraryService.systemSourceID }
+            }
+        }
+        let loaded = await waitUntil(timeout: 30) { candidate() != nil }
+        XCTAssertTrue(loaded, "A selected Apple Music playlist with at least four tracks must be available.")
+        let playlist = try XCTUnwrap(candidate())
+        let songs = library.songs(forPlaylist: playlist.id).filteredPlayable()
+        let player = services.playerService
+        let repeatMode = player.repeatMode
+        let shuffleEnabled = player.shuffleEnabled
+        let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        player.pause()
+        player.repeatMode = .off
+        player.shuffleEnabled = false
+        defer {
+            player.pause()
+            player.repeatMode = repeatMode
+            player.shuffleEnabled = shuffleEnabled
+            UIApplication.shared.isIdleTimerDisabled = idleTimerWasDisabled
+        }
+
+        var results: [[String: Any]] = []
+        func currentSystemTitle() -> String? { ApplicationMusicPlayer.shared.queue.currentEntry?.title }
+        func matches(_ index: Int) -> Bool {
+            player.currentSong?.id == songs[index].id && player.currentIndex == index
+                && currentSystemTitle() == songs[index].title && player.isPlaying
+        }
+        let delegate = CarPlaySceneDelegate()
+        let item = CarPlayHomeItem(id: playlist.id, title: playlist.name, target: .playlist(playlist.id, directly: true))
+        delegate.activateHomeItem(item)
+        let started = await waitUntil(timeout: 30) { matches(0) && player.currentTime > 0.5 }
+        XCTAssertTrue(started, "CarPlay playlist selection must start its first track: \(player.lastPlaybackError ?? "no progress")")
+        XCTAssertEqual(player.queue.map(\.id), songs.map(\.id))
+        XCTAssertEqual(ApplicationMusicPlayer.shared.queue.entries.count, songs.count)
+        results.append(["step": "playlist-start", "passed": started, "queueCount": player.queue.count,
+                        "systemQueueCount": ApplicationMusicPlayer.shared.queue.entries.count,
+                        "title": currentSystemTitle() ?? ""])
+        try writeResults(results, name: "carplay-queue", root: root)
+        guard started else { return }
+
+        // Run the same home action again before the terminal boundary; it must
+        // not detach the canonical queue from the active MusicKit request.
+        let currentSlot = try XCTUnwrap(player.queueEntries.first?.id)
+        let nativeEntry = ApplicationMusicPlayer.shared.queue.currentEntry?.id
+        let previousTime = player.currentTime
+        delegate.activateHomeItem(item)
+        let restarted = await waitUntil(timeout: 30) {
+            matches(0) && !player.isLoading && player.currentTime > previousTime + 0.5
+                && ApplicationMusicPlayer.shared.queue.entries.count == songs.count
+        }
+        XCTAssertTrue(restarted)
+        XCTAssertEqual(player.queueEntries.first?.id, currentSlot)
+        XCTAssertEqual(ApplicationMusicPlayer.shared.queue.currentEntry?.id, nativeEntry)
+        guard restarted else { return }
+        player.seek(to: max(0, player.duration - 5))
+        let advanced = await waitUntil(timeout: 25) { matches(1) && player.currentTime > 0.5 }
+        XCTAssertTrue(advanced, "The first song ending must start the second song without a new tap.")
+        XCTAssertEqual(player.queue.map(\.id), songs.map(\.id))
+        results.append(["step": "natural-end", "passed": advanced, "queueCount": player.queue.count,
+                        "index": player.currentIndex, "title": currentSystemTitle() ?? ""])
+        try writeResults(results, name: "carplay-queue", root: root)
+        guard advanced else { return }
+
+        // Exercise the system path used by CarPlay, independently of the
+        // app's own next() handler.
+        try await ApplicationMusicPlayer.shared.skipToNextEntry()
+        let skipped = await waitUntil(timeout: 30) { matches(2) && player.currentTime > 0.5 }
+        XCTAssertTrue(skipped, "Next must select the third playlist entry after automatic advancement.")
+        XCTAssertEqual(player.queue.map(\.id), songs.map(\.id))
+        results.append(["step": "system-next", "passed": skipped, "queueCount": player.queue.count,
+                        "index": player.currentIndex, "title": currentSystemTitle() ?? ""])
+        try writeResults(results, name: "carplay-queue", root: root)
+        guard skipped else { return }
+
+        player.pause()
+        let activeNativeEntry = ApplicationMusicPlayer.shared.queue.currentEntry?.id
+        player.insertNextInQueue([songs[0]])
+        let insertedID = player.queueEntries[3].id
+        let updated = await waitUntil {
+            ApplicationMusicPlayer.shared.queue.entries.count == songs.count + 1
+        }
+        XCTAssertTrue(updated, "Editing a paused queue must update the native successors.")
+        XCTAssertEqual(ApplicationMusicPlayer.shared.queue.currentEntry?.id, activeNativeEntry)
+        player.resume()
+        try await ApplicationMusicPlayer.shared.skipToNextEntry()
+        let insertedPlayed = await waitUntil {
+            player.currentSong?.id == songs[0].id && player.currentIndex == 3
+                && services.appleMusic.nowPlayingQueueEntryID == insertedID && player.isPlaying
+        }
+        XCTAssertTrue(insertedPlayed, "An inserted duplicate must advance to its own queue occurrence.")
+        results.append(["step": "insert-duplicate-while-paused", "passed": updated && insertedPlayed])
+        try writeResults(results, name: "carplay-queue", root: root)
+        guard insertedPlayed else { return }
+
+        await player.next()
+        let appSkipped = await waitUntil(timeout: 30) {
+            player.currentIndex == 4 && player.currentSong?.id == songs[3].id && player.isPlaying
+        }
+        XCTAssertTrue(appSkipped)
+        results.append(["step": "app-next", "passed": appSkipped])
+        player.clearQueue()
+        XCTAssertTrue(player.queue.isEmpty)
+        XCTAssertEqual(ApplicationMusicPlayer.shared.queue.entries.count, 1)
+        results.append(["step": "clear-native-successors", "passed": player.queue.isEmpty
+                        && ApplicationMusicPlayer.shared.queue.entries.count == 1])
+        try writeResults(results, name: "carplay-queue", root: root)
+        player.pause()
+        player.setQueue(songs, startAt: min(3, songs.count - 1))
+    }
+
+    @MainActor
     func testLocalAudioFormatMatrix() async throws {
         let root = try fixtureDirectory()
         let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled

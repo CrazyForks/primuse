@@ -3712,3 +3712,8 @@
 "library_review_comment_hint" = "Opens the comment editor.";
 "library_review_comment_title" = "Comment";
 "library_review_star_format" = "%d Stars";
+
+"carplay_main_menu" = "मुख्य मेन्यू";
+"carplay_menu_name" = "मेन्यू का नाम";
+"carplay_siri_button" = "ऊपर बटन";
+"carplay_siri_row" = "सूची की पंक्ति";

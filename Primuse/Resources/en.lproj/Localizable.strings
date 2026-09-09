@@ -3584,3 +3584,8 @@
 "carplay_module_siri_detail" = "Ask Siri to choose music";
 "carplay_cover_wall" = "Cover wall";
 "carplay_module_hidden" = "Hidden";
+
+"carplay_main_menu" = "Main menu";
+"carplay_menu_name" = "Menu name";
+"carplay_siri_button" = "Top button";
+"carplay_siri_row" = "List row";

@@ -3807,3 +3807,8 @@
 "library_review_comment_hint" = "Opens the comment editor.";
 "library_review_comment_title" = "Comment";
 "library_review_star_format" = "%d Stars";
+
+"carplay_main_menu" = "メインメニュー";
+"carplay_menu_name" = "メニュー名";
+"carplay_siri_button" = "上部のボタン";
+"carplay_siri_row" = "リスト行";

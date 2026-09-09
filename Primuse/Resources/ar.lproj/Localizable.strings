@@ -3712,3 +3712,8 @@
 "library_review_comment_hint" = "Opens the comment editor.";
 "library_review_comment_title" = "Comment";
 "library_review_star_format" = "%d Stars";
+
+"carplay_main_menu" = "القائمة الرئيسية";
+"carplay_menu_name" = "اسم القائمة";
+"carplay_siri_button" = "زر علوي";
+"carplay_siri_row" = "صف في القائمة";

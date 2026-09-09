@@ -23,24 +23,103 @@ struct CarPlayEditorActivePreferenceKey: PreferenceKey {
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
 
-struct CarPlayCompactAccessory: View {
-    let onTap: () -> Void
-    @Environment(AudioPlayerService.self) private var player
+struct CarPlayMainMenuEditor: View {
+    let model: CarPlayEditorModel
+    let addCollection: () -> Void
+    @State private var renaming: CarPlayMainTab?
+    @State private var name = ""
+
     var body: some View {
-        HStack(spacing: 4) {
-            MiniPlayerSwipeContent(onTap: onTap, artworkSize: 22, artworkCornerRadius: 5,
-                artworkTrailingSpacing: 8, titleFont: .system(size: 12, weight: .medium), contentHeight: 28)
-            Button { player.togglePlayPause() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 14)).frame(width: 36, height: 36)
-            }.buttonStyle(.plain).accessibilityLabel(player.isPlaying ? "pause" : "play")
+        VStack(spacing: 0) {
+            HStack {
+                Text("carplay_main_menu").font(.headline)
+                Text("\(model.configuration.tabs.filter(\.isVisible).count)/\(model.maximumTabCount)").foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(CarPlayMainTab.Kind.allCases.filter { $0 != .collection }, id: \.self) { kind in
+                        if !model.configuration.tabs.contains(where: { $0.kind == kind }) {
+                            Button(LocalizedStringKey(kind.titleKey), systemImage: kind.symbol) { model.addTab(kind) }
+                        }
+                    }
+                    Divider()
+                    Button("carplay_content_sources", systemImage: "folder.badge.plus", action: addCollection)
+                } label: { Label("carplay_add", systemImage: "plus") }
+                    .disabled(!model.canAddTab).accessibilityIdentifier("carplay.addTab")
+            }.font(.subheadline).padding(.horizontal, 16).padding(.top, 18)
+            List {
+                Section {
+                    ForEach(model.configuration.tabs) { tab in
+                        HStack(spacing: 12) {
+                            Image(systemName: tab.symbol).frame(width: 26).foregroundStyle(.secondary)
+                            Button {
+                                model.selectTab(tab.id)
+                            } label: {
+                                HStack {
+                                    Text(tab.displayTitle).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                    if tab.kind == .home {
+                                        Image(systemName: "chevron.forward").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }.buttonStyle(.plain).accessibilityIdentifier("carplay.editTab." + tab.id)
+                            Button {
+                                name = tab.displayTitle
+                                renaming = tab
+                            } label: {
+                                Image(systemName: "pencil").frame(width: 28, height: 36)
+                            }.buttonStyle(.borderless)
+                                .accessibilityLabel("carplay_menu_name")
+                                .accessibilityIdentifier("carplay.renameTab." + tab.id)
+                            Button { model.toggleTab(tab) } label: {
+                                Image(systemName: tab.isVisible ? "eye" : "eye.slash").frame(width: 32, height: 36)
+                            }.buttonStyle(.borderless)
+                                .disabled(tab.isVisible ? model.visibleTabs.count <= 1 : model.configuration.tabs.filter(\.isVisible).count >= model.maximumTabCount)
+                                .accessibilityLabel(LocalizedStringKey(tab.isVisible ? "carplay_hide_module" : "carplay_show_module"))
+                                .accessibilityIdentifier("carplay.tabVisibility." + tab.id)
+                        }
+                        .opacity(tab.isVisible ? 1 : 0.5)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("carplay.menuRow." + tab.id)
+                        .contextMenu {
+                            Button("carplay_menu_name", systemImage: "pencil") {
+                                name = tab.displayTitle
+                                renaming = tab
+                            }
+                            Button("carplay_move_up") { model.moveTab(tab.id, by: -1) }
+                            Button("carplay_move_down") { model.moveTab(tab.id, by: 1) }
+                            Button("delete", role: .destructive) { model.removeTab(tab.id) }
+                                .disabled(tab.isVisible && model.visibleTabs.count <= 1)
+                        }
+                    }
+                    .onMove { source, destination in
+                        model.change { configuration in
+                            var tabs = configuration.tabs
+                            tabs.move(fromOffsets: source, toOffset: destination)
+                            configuration.tabs = tabs
+                        }
+                    }
+                }
+                if model.configuration.showsSiri {
+                    Section {
+                        Picker("Siri", selection: Binding(get: { model.configuration.siriPresentation }, set: { value in
+                            model.change { $0.siriPresentation = value }
+                        })) {
+                            Text("carplay_siri_button").tag(CarPlaySiriPresentation.button)
+                            Text("carplay_siri_row").tag(CarPlaySiriPresentation.row)
+                        }
+                    }
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .listStyle(.insetGrouped).scrollContentBackground(.hidden).contentMargins(.top, 12)
         }
-        .padding(.leading, 8).frame(height: 36)
-        .foregroundStyle(CarPlayEditorTheme.text)
-        .background(CarPlayEditorTheme.surface, in: Capsule())
-        .overlay { Capsule().strokeBorder(CarPlayEditorTheme.border, lineWidth: 1) }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(CarPlayEditorTheme.background)
+        .alert("carplay_menu_name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("carplay_menu_name", text: $name)
+            Button("cancel", role: .cancel) { renaming = nil }
+            Button("save") {
+                if let renaming { model.renameTab(renaming.id, title: name) }
+                renaming = nil
+            }
+        }
     }
 }
 
@@ -86,12 +165,6 @@ struct CarPlayStyleThumbnail: View {
                 Spacer(minLength: 0)
                 Image(systemName: "square.grid.2x2")
             }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.vertical, 10).frame(width: 22)
-            if style == .split {
-                VStack(alignment: .leading, spacing: 7) {
-                    RoundedRectangle(cornerRadius: 6).fill(CarPlayEditorTheme.artwork)
-                    Capsule().fill(.tertiary).frame(height: 4)
-                }.frame(maxWidth: .infinity)
-            }
             let columns = style == .wall ? 3 : style == .capsules ? 2 : 1
             let rows = style == .wall ? 2 : 3
             VStack(spacing: 6) {

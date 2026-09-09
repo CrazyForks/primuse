@@ -1,5 +1,6 @@
 #if os(iOS)
 import PrimuseKit
+import CarPlay
 import SwiftUI
 
 struct CarPlayEditorCanvas: View {
@@ -15,6 +16,17 @@ struct CarPlayEditorCanvas: View {
     let drop: ([String], String?, String?) -> Bool
     let addContent: (String?) -> Void
     var catalog = CarPlayEditorCatalog.Snapshot()
+    var selectedTabID: String?
+    var selectTab: (String) -> Void = { _ in }
+    var moveTab: ([String], String?) -> Bool = { _, _ in false }
+    var editingMenu = false
+    @State private var localTabID: String?
+    @State private var browseKind: CarPlayMainTab.Kind?
+    @State private var artist: Artist?
+    @State private var assistantPage = false
+    @State private var searchPage = false
+    @State private var searchQuery: String?
+
     @State private var detail: CarPlayHomeItem?
     @State private var localPlayer: CarPlayHomeItem?
 
@@ -32,9 +44,11 @@ struct CarPlayEditorCanvas: View {
         .background(CarPlayEditorTheme.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(CarPlayEditorTheme.border, lineWidth: 1) }
+        .onChange(of: selectedTabID) { localTabID = nil; clearNavigation() }
         .onChange(of: playerPage) { detail = nil; localPlayer = nil }
         .onChange(of: editing) { detail = nil; localPlayer = nil }
         .onChange(of: configuration.visualStyle) { detail = nil; localPlayer = nil }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("carplay.canvas")
     }
 
@@ -43,7 +57,10 @@ struct CarPlayEditorCanvas: View {
             sidebar
             VStack(spacing: 0) {
                 if playerPage || localPlayer != nil { player(localPlayer ?? previewItem) }
+                else if assistantPage { assistantDetail }
+                else if searchPage { searchDetail }
                 else if let detail { detailPage(detail) }
+                else if browseKind != nil || artist != nil { browseDetail }
                 else { home }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -68,32 +85,225 @@ struct CarPlayEditorCanvas: View {
         .background(CarPlayEditorTheme.sidebar)
     }
 
+    private var tabs: [CarPlayMainTab] { configuration.visibleTabs(maximumCount: CPTabBarTemplate.maximumTabCount) }
+    private var activeTab: CarPlayMainTab {
+        if editing { return configuration.tabs.first { $0.kind == .home } ?? CarPlayMainTab.defaults[0] }
+        return tabs.first { $0.id == (localTabID ?? selectedTabID) } ?? tabs[0]
+    }
+    private var compactSiri: Bool {
+        if #available(iOS 26.0, *) { return configuration.siriPresentation == .button }
+        return false
+    }
+
     private var home: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 34) {
-                tab("carplay_home_title", symbol: "house.fill", selected: true)
-                tab("library_title", symbol: "music.note.house", selected: false)
-                tab("radio_title", symbol: "radio.fill", selected: false)
-                tab("playlists_title", symbol: "music.note.list", selected: false)
-            }.padding(.vertical, 8)
-            if configuration.showsSiri {
-            HStack(spacing: 6) {
-                Image(systemName: "waveform")
-                Text("carplay_ask_siri")
-                Spacer()
+            HStack(spacing: 8) {
+                HStack(spacing: 3) {
+                    ForEach(tabs) { tab in
+                        Button {
+                            localTabID = tab.id
+                            clearNavigation()
+                            selectTab(tab.id)
+                        } label: {
+                            Text(tab.displayTitle).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                                .padding(.horizontal, 12).frame(minHeight: 38)
+                                .background(activeTab.id == tab.id ? CarPlayEditorTheme.border : .clear, in: Capsule())
+                        }
+                        .accessibilityIdentifier("carplay.previewTab." + tab.id)
+                        .draggable(editingMenu ? "carplay-tab:" + tab.id : "")
+                        .dropDestination(for: String.self) { values, _ in editingMenu && moveTab(values, tab.id) }
+                    }
+                }.padding(3).background(CarPlayEditorTheme.surface, in: Capsule())
+                if previewItem != nil {
+                    Button { localPlayer = previewItem } label: { Image(systemName: "waveform").frame(width: 38, height: 38) }
+                        .background(CarPlayEditorTheme.surface, in: Circle()).accessibilityLabel("carplay_now_playing")
+                }
+            }.padding(.vertical, 8).padding(.horizontal, 8)
+            if activeTab.kind == .home { blockScroll }
+            else {
+                ScrollView {
+                    VStack(spacing: 10) {
+                        rootActions
+                        tabContents(activeTab)
+                    }.padding(.horizontal, 12).padding(.bottom, 12)
+                }.scrollIndicators(.hidden)
             }
-            .font(.system(size: 12, weight: .medium)).foregroundStyle(CarPlayEditorTheme.secondary)
-            .padding(.horizontal, 10).frame(height: 26)
-            .background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 6))
-            .padding(.horizontal, 12).padding(.bottom, 10)
-            .onTapGesture { if editing, let block = blocks.first(where: { $0.configuration.kind == .siri }) { select(block.id) } }
+        }
+    }
+
+    @ViewBuilder private var rootActions: some View {
+        if #available(iOS 26.0, *) {
+            HStack(spacing: 18) {
+                if activeTab.kind != .search {
+                    Button { searchPage = true } label: { headerAction("search_title", symbol: "magnifyingglass") }
+                        .accessibilityIdentifier("carplay.previewSearch")
+                }
+                if configuration.showsSiri && compactSiri {
+                    Button { assistantPage = true } label: { headerAction("Siri", symbol: "mic") }
+                        .accessibilityIdentifier("carplay.previewSiri")
+                }
+                Spacer(minLength: 0)
+            }.padding(.vertical, 4)
+        }
+        if configuration.showsSiri && !compactSiri { assistantRow }
+    }
+
+    private func headerAction(_ title: LocalizedStringKey, symbol: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 23))
+            Text(title).font(.system(size: 12, weight: .medium))
+        }.frame(width: 74, height: 56).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var assistantRow: some View {
+        HStack(spacing: 8) {
+            Text("carplay_ask_siri").font(.system(size: 18, weight: .medium))
+            Spacer()
+            Image(systemName: "mic.circle").font(.system(size: 22))
+        }.padding(14).background(CarPlayEditorTheme.surface, in: Capsule())
+            .accessibilityIdentifier("carplay.previewAssistantRow")
+    }
+
+    @ViewBuilder private func tabContents(_ tab: CarPlayMainTab) -> some View {
+        switch tab.kind {
+        case .home: EmptyView()
+        case .library:
+            ForEach([CarPlayMainTab.Kind.folders, .playlists, .songs, .albums, .artists, .radio, .search], id: \.self) { kind in
+                Button { browseKind = kind } label: { menuRow(NSLocalizedString(kind.titleKey, comment: ""), symbol: kind.symbol) }
             }
-            if configuration.visualStyle == .split && !editing {
-                HStack(alignment: .top, spacing: 12) {
-                    compactPlayer.frame(width: 186)
-                    blockScroll
-                }.padding(.leading, 12)
-            } else { blockScroll }
+        case .songs: mediaRows(Array((catalog.entries[.song] ?? []).prefix(60)))
+        case .albums: mediaRows(Array((catalog.entries[.album] ?? []).prefix(60)).map { $0.configured(directly: false) })
+        case .playlists: playlistRows
+        case .radio: mediaRows(Array((catalog.entries[.radio] ?? []).prefix(60)))
+        case .artists:
+            ForEach(catalog.artists.prefix(60)) { entry in
+                Button { artist = entry } label: { menuRow(entry.name, symbol: "music.mic") }
+            }
+            if catalog.artists.isEmpty { emptyContent }
+        case .folders:
+            mediaRows((CarPlayFolderLibrary.shared.index?.sourceNodes ?? []).prefix(60).map { CarPlayEditorCatalog.Snapshot.folder($0).configured(directly: false) })
+        case .search: searchRows
+        case .collection:
+            if let content = tab.content {
+                if let folderID = content.folderID, let node = CarPlayFolderLibrary.shared.index?.node(withID: folderID) {
+                    collectionRows(CarPlayEditorCatalog.Snapshot.folder(node))
+                } else { collectionRows(catalog.resolve(content, directly: false)) }
+            }
+        }
+    }
+
+    private var playlistRows: some View {
+        var block = CarPlayLayoutBlock(id: "menu.playlists", kind: .playlists, style: configuration.browseStyle)
+        block.columns = configuration.visualStyle == .wall ? 3 : 2
+        block.showsTitle = false
+        block.playsImmediately = configuration.playsCollectionsDirectly
+        let items = Array((catalog.entries[.playlist] ?? []).prefix(60)).map { $0.configured(directly: configuration.playsCollectionsDirectly) }
+        return blockView(CarPlayHomeBlock(configuration: block, items: items))
+    }
+
+    private func menuRow(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).frame(width: 30)
+            Text(title).font(.system(size: 19, weight: .medium)).lineLimit(1)
+            Spacer()
+        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(CarPlayEditorTheme.row, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var emptyContent: some View {
+        Text("carplay_no_content").font(.system(size: 16)).foregroundStyle(CarPlayEditorTheme.secondary).padding(24)
+    }
+
+    @ViewBuilder private func mediaRows(_ rows: [CarPlayHomeItem]) -> some View {
+        if rows.isEmpty { emptyContent }
+        ForEach(rows) { item in
+            Button { open(item) } label: {
+                HStack(spacing: 12) {
+                    CarPlayPreviewArtwork(item: item, pixelSize: 88).frame(width: 38, height: 38)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title).font(.system(size: 17, weight: .medium)).lineLimit(1)
+                        if let subtitle = item.subtitle { Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1) }
+                    }
+                    Spacer(minLength: 0)
+                }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(CarPlayEditorTheme.row, in: RoundedRectangle(cornerRadius: 8))
+            }.disabled(!item.enabled)
+        }
+    }
+
+    @ViewBuilder private func collectionRows(_ item: CarPlayHomeItem) -> some View {
+        let rows = detailItems(item)
+        if !rows.isEmpty {
+            Button { localPlayer = item; activate(item) } label: { menuRow(String(localized: "carplay_play_all"), symbol: "play.fill") }
+            Button { localPlayer = item; activate(item) } label: { menuRow(String(localized: "carplay_shuffle_all"), symbol: "shuffle") }
+        }
+        mediaRows(rows)
+    }
+
+    private func clearNavigation() {
+        detail = nil; localPlayer = nil; browseKind = nil; artist = nil
+        searchPage = false; searchQuery = nil; assistantPage = false
+    }
+
+    private func detailHeader(_ title: String) -> some View {
+        HStack {
+            Button {
+                if assistantPage { assistantPage = false }
+                else if searchPage { if searchQuery != nil { searchQuery = nil } else { searchPage = false } }
+                else if detail != nil { detail = nil }
+                else if artist != nil { artist = nil }
+                else { browseKind = nil }
+            } label: { Image(systemName: "chevron.left").padding(12) }
+            Text(title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
+            Spacer()
+            if !searchPage {
+                Button { searchPage = true } label: { Image(systemName: "magnifyingglass").padding(12) }
+            }
+            if configuration.showsSiri && compactSiri && !assistantPage {
+                Button { assistantPage = true } label: { Image(systemName: "mic").padding(12) }
+            }
+        }
+    }
+
+    private var assistantDetail: some View {
+        VStack {
+            detailHeader("Siri")
+            assistantRow.padding(12)
+            Spacer()
+        }
+    }
+
+    private var searchDetail: some View {
+        VStack {
+            detailHeader(String(localized: "recent_searches"))
+            ScrollView { VStack(spacing: 10) { searchRows }.padding(12) }
+        }
+    }
+
+    @ViewBuilder private var searchRows: some View {
+        if let searchQuery {
+            mediaRows(Array((catalog.entries[.song] ?? []).lazy.filter {
+                $0.title.localizedStandardContains(searchQuery) || ($0.subtitle?.localizedStandardContains(searchQuery) ?? false)
+            }.prefix(60)))
+        } else {
+            let queries = UserDefaults.standard.stringArray(forKey: CloudKVSKey.recentSearches) ?? []
+            if queries.isEmpty { Text("carplay_search_no_results").font(.system(size: 16)).foregroundStyle(.secondary).padding(20) }
+            ForEach(Array(queries.prefix(12).enumerated()), id: \.offset) { _, query in
+                Button { searchQuery = query } label: { menuRow(query, symbol: "magnifyingglass") }
+            }
+        }
+    }
+
+    private var browseDetail: some View {
+        VStack {
+            detailHeader(artist?.name ?? NSLocalizedString((browseKind ?? .library).titleKey, comment: ""))
+            ScrollView {
+                VStack(spacing: 10) {
+                    if let artist {
+                        mediaRows(Array((catalog.artistSongs[artist.id] ?? []).lazy.compactMap { catalog.lookup[.song]?[$0] }.prefix(60)))
+                    } else if let browseKind { tabContents(CarPlayMainTab(kind: browseKind)) }
+                }.padding(12)
+            }
         }
     }
 
@@ -101,8 +311,13 @@ struct CarPlayEditorCanvas: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 15) {
+                    rootActions
                     ForEach(blocks.filter { $0.configuration.isVisible && $0.configuration.kind != .siri }) { block in
                         blockView(block).id(block.id)
+                    }
+                    if !editing {
+                        Button { browseKind = .folders } label: { menuRow(String(localized: "library_browse_folder"), symbol: "folder") }
+                        Button { browseKind = .library } label: { menuRow(String(localized: "library_title"), symbol: "square.stack") }
                     }
                     if editing {
                         Button { addContent(nil) } label: {
@@ -121,13 +336,6 @@ struct CarPlayEditorCanvas: View {
                 if editing, let id { proxy.scrollTo(id, anchor: .top) }
             }
         }
-    }
-
-    private func tab(_ title: LocalizedStringKey, symbol: String, selected: Bool) -> some View {
-        VStack(spacing: 3) {
-            Image(systemName: symbol).font(.system(size: 13))
-            Text(title).font(.system(size: 10, weight: .semibold))
-        }.foregroundStyle(selected ? CarPlayEditorTheme.accent : CarPlayEditorTheme.secondary)
     }
 
     private func blockView(_ block: CarPlayHomeBlock) -> some View {
@@ -235,28 +443,8 @@ struct CarPlayEditorCanvas: View {
 
     private func detailPage(_ item: CarPlayHomeItem) -> some View {
         VStack(spacing: 10) {
-            HStack {
-                Button { detail = nil } label: { Image(systemName: "chevron.left").padding(12) }
-                Text(item.title).font(.system(size: 19, weight: .semibold)).lineLimit(1)
-                Spacer()
-                Button { localPlayer = item; activate(item) } label: { Image(systemName: "play.fill").padding(12) }
-            }
-            ScrollView {
-                let rows = detailItems(item)
-                if rows.isEmpty {
-                    Text("carplay_no_content").font(.system(size: 16)).foregroundStyle(CarPlayEditorTheme.secondary).padding(30)
-                }
-                ForEach(rows) { entry in
-                    Button { open(entry) } label: {
-                        HStack {
-                            Image(systemName: entry.symbol).frame(width: 24)
-                            Text(entry.title).font(.system(size: 17)).lineLimit(1)
-                            Spacer()
-                            Image(systemName: "play.fill").font(.system(size: 12))
-                        }.padding(12).background(CarPlayEditorTheme.row, in: RoundedRectangle(cornerRadius: 8))
-                    }
-                }
-            }.padding(.horizontal, 12)
+            detailHeader(item.title)
+            ScrollView { VStack(spacing: 10) { collectionRows(item) }.padding(.horizontal, 12) }
         }
     }
 
@@ -268,17 +456,6 @@ struct CarPlayEditorCanvas: View {
             return children + songs
         }
         return catalog.detail(for: item)
-    }
-
-    private var compactPlayer: some View {
-        Button { localPlayer = previewItem ?? blocks.flatMap(\.items).first } label: {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("carplay_continue_listening").font(.system(size: 13)).foregroundStyle(CarPlayEditorTheme.secondary)
-                CarPlayPreviewArtwork(item: displayedItem(previewItem)).frame(height: 118)
-                Text(displayedItem(previewItem).title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                Image(systemName: "play.fill").font(.system(size: 20)).frame(maxWidth: .infinity).padding(10)
-            }.padding(12).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-        }
     }
 
     private func displayedItem(_ item: CarPlayHomeItem?) -> CarPlayHomeItem {
@@ -293,7 +470,7 @@ struct CarPlayEditorCanvas: View {
         let item = displayedItem(source)
         return VStack(spacing: 12) {
             HStack {
-                if localPlayer != nil { Button { localPlayer = nil; detail = nil } label: { Image(systemName: "chevron.left") } }
+                if localPlayer != nil { Button { localPlayer = nil } label: { Image(systemName: "chevron.left") } }
                 Text("carplay_now_playing").font(.system(size: 16, weight: .semibold))
                 Spacer()
                 Image(systemName: "list.bullet")

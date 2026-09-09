@@ -314,10 +314,14 @@ enum CarPlayHomeContent {
         case .uploaded(let contentID):
             return await Task.detached(priority: .utility) {
                 guard let data = MetadataAssetStore.shared.customArtworkData(contentID: contentID),
-                      let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      data.count <= 16 * 1_024 * 1_024,
+                      let source = CGImageSourceCreateWithData(data as CFData, [
+                        kCGImageSourceShouldCache: false
+                      ] as CFDictionary),
                       let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                         kCGImageSourceCreateThumbnailFromImageAlways: true,
                         kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
                         kCGImageSourceThumbnailMaxPixelSize: pixelSize
                       ] as CFDictionary) else { return nil as UIImage? }
                 return UIImage(cgImage: image)

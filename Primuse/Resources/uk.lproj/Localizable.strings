@@ -3712,3 +3712,8 @@
 "library_review_comment_hint" = "Opens the comment editor.";
 "library_review_comment_title" = "Comment";
 "library_review_star_format" = "%d Stars";
+
+"carplay_main_menu" = "Головне меню";
+"carplay_menu_name" = "Назва меню";
+"carplay_siri_button" = "Кнопка вгорі";
+"carplay_siri_row" = "Рядок списку";

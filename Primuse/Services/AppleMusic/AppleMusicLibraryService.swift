@@ -348,6 +348,124 @@ final class AppleMusicLibraryService {
         )
     }
 
+    struct ManagedQueue: Sendable {
+        let entries: [QueueEntry]
+        let startIndex: Int
+        let repeatMode: PrimuseKit.RepeatMode
+    }
+
+    private struct ResolvedManagedQueue {
+        let songs: [MusicKit.Song]
+        let entryIDs: [UUID]
+        let startIndex: Int
+        let repeatMode: PrimuseKit.RepeatMode
+        let source: AppleMusicPlaybackSource
+    }
+
+    func playManagedQueue(_ queue: ManagedQueue, requestID: UUID) async {
+        guard let resolved = await resolveManagedQueue(queue, requestID: requestID, lookupLimit: 100),
+              playbackRequestCanContinue(requestID) else {
+            failUnavailablePlaybackRequestIfCurrent(requestID)
+            return
+        }
+        await appleMusic.playUserLibrary(
+            songs: resolved.songs,
+            startAt: resolved.startIndex,
+            queueEntryIDs: resolved.entryIDs,
+            source: resolved.source,
+            expectedDuration: queue.entries[queue.startIndex].song.duration,
+            requestID: requestID,
+            requestCanContinue: { [weak self] in self?.playbackRequestCanContinue(requestID) == true }
+        )
+        guard appleMusic.isPlaybackRequestActive(requestID),
+              appleMusic.playbackPhase(for: requestID) == .started else { return }
+        // A rejected multi-item queue may have recovered with the selected
+        // item alone. Never repeat that fallback as if it were the full list.
+        let repeatMode = resolved.repeatMode == .all
+            && ApplicationMusicPlayer.shared.queue.entries.count != resolved.songs.count
+            ? .off : resolved.repeatMode
+        appleMusic.setAppleMusicRepeat(repeatMode)
+        plog("Apple Music managed queue started items=\(ApplicationMusicPlayer.shared.queue.entries.count) selected=\(resolved.startIndex)")
+    }
+
+    func updateManagedQueue(_ queue: ManagedQueue, requestID: UUID) async {
+        guard let resolved = await resolveManagedQueue(queue, requestID: requestID),
+              !Task.isCancelled else { return }
+        appleMusic.updateManagedQueue(
+            songs: resolved.songs,
+            entryIDs: resolved.entryIDs,
+            currentEntryID: queue.entries[queue.startIndex].id,
+            repeatMode: resolved.repeatMode,
+            requestID: requestID
+        )
+    }
+
+    private func resolveManagedQueue(
+        _ queue: ManagedQueue, requestID: UUID, lookupLimit: Int? = nil
+    ) async -> ResolvedManagedQueue? {
+        guard queue.entries.indices.contains(queue.startIndex) else { return nil }
+        await ensureLocalFileProvenanceLoaded()
+        let lookupOrder = Array(queue.entries[queue.startIndex...]) + queue.entries[..<queue.startIndex].reversed()
+        var seen = Set<String>()
+        let missing = lookupOrder.map { $0.song.filePath }.filter { songCache[$0] == nil && seen.insert($0).inserted }
+        let fileIDs = Array(missing.prefix(lookupLimit ?? missing.count))
+        // Resolve only this traversal in bounded requests. Opening a playlist
+        // must not wait for an unrelated full-library synchronization.
+        for useLibrary in [true, false] {
+            let ids = fileIDs.filter {
+                AppleMusicItemLookupPolicy.shouldUseUserLibrary(
+                    itemID: $0, confirmedLocalFileIDs: subscriptionIndependentLocalFileIDs
+                ) == useLibrary
+            }
+            for start in stride(from: 0, to: ids.count, by: 100) {
+                guard appleMusic.isPlaybackRequestActive(requestID), !Task.isCancelled else { return nil }
+                let batch = ids[start..<min(start + 100, ids.count)].map { MusicItemID(rawValue: $0) }
+                do {
+                    let songs: [MusicKit.Song]
+                    if useLibrary {
+                        var request = MusicLibraryRequest<MusicKit.Song>()
+                        request.filter(matching: \.id, memberOf: batch)
+                        request.limit = batch.count
+                        songs = Array(try await request.response().items)
+                    } else {
+                        let request = MusicCatalogResourceRequest<MusicKit.Song>(matching: \.id, memberOf: batch)
+                        songs = Array(try await request.response().items)
+                    }
+                    for song in songs {
+                        songCache[song.id.rawValue] = song
+                        if useLibrary {
+                            canonicalLibrarySongCache[song.id.rawValue] = song
+                            canonicalLibraryTrackIdentityIndex.upsert(Self.trackIdentity(song))
+                        }
+                    }
+                } catch {
+                    plog("Apple Music queue lookup failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        let selected = queue.entries[queue.startIndex].song
+        guard let starting = await musicKitSong(amID: selected.filePath),
+              appleMusic.isPlaybackRequestActive(requestID), !Task.isCancelled,
+              AppleMusicFeatureSettings.syncUserLibraryEnabled,
+              !library.disabledSourceIDs.contains(Self.systemSourceID) else { return nil }
+        let source = playbackSource(for: starting)
+        let indices = PlaybackQueueSegmentPolicy.indices(
+            traversal: Array(queue.entries.indices), currentIndex: queue.startIndex
+        ) { index in
+            guard let song = songCache[queue.entries[index].song.filePath] else { return false }
+            return source != .subscriptionIndependentUserLibrary
+                || playbackSource(for: song) == .subscriptionIndependentUserLibrary
+        }
+        guard let startIndex = indices.firstIndex(of: queue.startIndex) else { return nil }
+        return ResolvedManagedQueue(
+            songs: indices.compactMap { songCache[queue.entries[$0].song.filePath] },
+            entryIDs: indices.map { queue.entries[$0].id },
+            startIndex: startIndex,
+            repeatMode: queue.repeatMode == .all && indices.count != queue.entries.count ? .off : queue.repeatMode,
+            source: source
+        )
+    }
+
     /// 取 songCache 的稳定排序 ── 用 libraryAddedDate 倒序 (新加的在前),
     /// fallback 用 title。保证两次调用得到同样的 queue 顺序, skipToPrev/Next
     /// 行为可预期。

@@ -883,10 +883,10 @@ final class AudioPlayerService {
     /// 的副作用, 避免 mirror → setRepeat/setShuffle → polling → mirror 的回环。
     private var isMirroringFromAppleMusic = false
 
-    /// `true` when playback came from Primuse's canonical queue. MusicKit only
-    /// receives the current DRM track; Primuse retains ordering, repeat and
-    /// shuffle so every Apple Music boundary advances the same visible queue.
+    /// MusicKit renders a contiguous segment; Primuse retains the complete
+    /// queue and each occurrence's identity across providers and edits.
     private var isPrimuseManagingAppleMusicQueue = false
+    @ObservationIgnored private var appleMusicQueueUpdateTask: Task<Void, Never>?
 
     // MARK: - DLNA Casting (推到外部 Renderer)
 
@@ -1031,7 +1031,9 @@ final class AudioPlayerService {
     private var sleepTimerTask: Task<Void, Never>?
     /// "曲终停止" 模式: 持有当前歌曲的 id, 一旦切到下一首 (或 currentSong
     /// 变 nil) 立即 pause。比固定分钟数更智能 ── 不会在曲子中间硬切。
-    private(set) var sleepStopAfterSongID: String?
+    private(set) var sleepStopAfterSongID: String? {
+        didSet { if sleepStopAfterSongID != oldValue { synchronizeAppleMusicQueue() } }
+    }
     var isSleepTimerActive: Bool { sleepTimerEndDate != nil || sleepStopAfterSongID != nil }
 
     private var displayLink: Timer?
@@ -4351,10 +4353,9 @@ final class AudioPlayerService {
         updateNowPlayingArtworkIfNeeded()
         updatePlaybackState()
 
-        // Primuse's visible queue remains the only ordering authority. Giving
-        // MusicKit a separate multi-song context lets it diverge whenever the
-        // user appends/reorders songs or mixes providers. MusicKit therefore
-        // receives only the current DRM item for every Primuse queue.
+        // Native CarPlay/lock-screen commands are handled by MusicKit itself.
+        // It needs the actual compatible traversal, while Primuse keeps the
+        // complete queue and maps native transitions back to its slot UUIDs.
         let selectedQueueEntryMatches = queueEntries.indices.contains(currentIndex)
             && (
                 queueEntries[currentIndex].song.id == song.id
@@ -4371,9 +4372,8 @@ final class AudioPlayerService {
         }
         // Capture before starting the mirror: its immediate first sync may
         // still contain the previous MusicKit queue.
-        let queueContext = isPrimuseManagingAppleMusicQueue
-            ? [song]
-            : queue.filter { $0.sourceID == AppleMusicLibraryService.systemSourceID }
+        let managedQueue = isPrimuseManagingAppleMusicQueue ? appleMusicQueueProjection() : nil
+        let queueContext = queue.filter { $0.sourceID == AppleMusicLibraryService.systemSourceID }
         startAppleMusicMirror(requestID: id)
         let appleMusicLibrary = AppServices.shared.appleMusicLibrary
 
@@ -4417,17 +4417,54 @@ final class AudioPlayerService {
         // 不阻塞 play(song:) 调用方。成功后 AppleMusicService 的 mirror 会把
         // nowPlaying / progress 同步回来；失败或卡住由上面的 timeout 收口。
         let playbackTask = Task { @MainActor [weak self] in
-            await appleMusicLibrary.play(
-                primuseSong: song,
-                queueContext: queueContext,
-                requestID: id
-            )
+            if let managedQueue {
+                await appleMusicLibrary.playManagedQueue(managedQueue, requestID: id)
+            } else {
+                await appleMusicLibrary.play(primuseSong: song, queueContext: queueContext, requestID: id)
+            }
             guard let self,
                   self.activeAppleMusicRequestID == id,
                   self.playID == id else { return }
             self.appleMusicPlaybackTask = nil
+            self.synchronizeAppleMusicQueue()
         }
         appleMusicPlaybackTask = playbackTask
+    }
+
+    private func appleMusicQueueProjection() -> AppleMusicLibraryService.ManagedQueue? {
+        guard queueEntries.indices.contains(currentIndex),
+              queueEntries[currentIndex].song.id == currentSong?.id
+                || queueEntries[currentIndex].song.filePath == currentSong?.filePath else { return nil }
+        if sleepStopAfterSongID == currentSong?.id {
+            return .init(entries: [queueEntries[currentIndex]], startIndex: 0, repeatMode: .off)
+        }
+        let traversal = (usesManagedShuffleOrder ? shuffledIndices : Array(queueEntries.indices))
+            .filter { queueEntries.indices.contains($0) && isSongAvailableForNewPlayback(queueEntries[$0].song) }
+        let indices = PlaybackQueueSegmentPolicy.indices(traversal: traversal, currentIndex: currentIndex) {
+            queueEntries[$0].song.sourceID == AppleMusicLibraryService.systemSourceID
+        }
+        guard let startIndex = indices.firstIndex(of: currentIndex) else { return nil }
+        let nativeRepeat = repeatMode == .all && indices.count != traversal.count ? .off : repeatMode
+        return .init(entries: indices.map { queueEntries[$0] }, startIndex: startIndex, repeatMode: nativeRepeat)
+    }
+
+    private func synchronizeAppleMusicQueue() {
+        appleMusicQueueUpdateTask?.cancel()
+        appleMusicQueueUpdateTask = nil
+        if isPrimuseManagingAppleMusicQueue, queueEntries.isEmpty {
+            AppServices.shared.appleMusic.retainCurrentManagedQueueEntry()
+            return
+        }
+        guard isPrimuseManagingAppleMusicQueue,
+              let requestID = activeAppleMusicRequestID,
+              AppServices.shared.appleMusic.playbackPhase(for: requestID) == .started else { return }
+        guard let projection = appleMusicQueueProjection() else {
+            AppServices.shared.appleMusic.retainCurrentManagedQueueEntry()
+            return
+        }
+        appleMusicQueueUpdateTask = Task { @MainActor in
+            await AppServices.shared.appleMusicLibrary.updateManagedQueue(projection, requestID: requestID)
+        }
     }
 
     /// 启动 Apple Music 状态镜像 ── observation tracking 监听 appleMusic 的
@@ -4475,6 +4512,7 @@ final class AudioPlayerService {
              withObservationTracking {
                  _ = am.nowPlayingSong?.id
                  _ = am.nowPlayingRawSongID
+                 _ = am.nowPlayingQueueEntryID
                  _ = am.isAppleMusicPlaying
                  _ = am.currentPlaybackTime
                  _ = am.currentDuration
@@ -4494,6 +4532,8 @@ final class AudioPlayerService {
          // observed values and may wake the old checked continuation before
          // its cancelled task has otherwise had a chance to exit.
          appleMusicMirrorGeneration &+= 1
+         appleMusicQueueUpdateTask?.cancel()
+         appleMusicQueueUpdateTask = nil
          appleMusicMirrorTask?.cancel()
          appleMusicMirrorTask = nil
      }
@@ -4545,9 +4585,32 @@ final class AudioPlayerService {
          isMirroringFromAppleMusic = true
          defer { isMirroringFromAppleMusic = false }
 
-         // MusicKit owns the current song only for direct plays that did not
-         // originate from Primuse's queue. Queued playback keeps the original
-         // Song identity and currentIndex here.
+         // Adopt only a known occurrence in this queue. A native segment must
+         // never replace the canonical mixed queue or collapse duplicate songs.
+         if isPrimuseManagingAppleMusicQueue,
+            let entryID = am.nowPlayingQueueEntryID,
+            let index = queueEntries.firstIndex(where: { $0.id == entryID }),
+            index != currentIndex || queueEntries[index].song.id != currentSong?.id {
+             let song = queueEntries[index].song
+             currentIndex = index
+             if usesManagedShuffleOrder, let position = shuffledIndices.firstIndex(of: index) {
+                 shufflePosition = position
+             }
+             currentSong = song
+             currentTime = am.currentPlaybackTime
+             duration = am.currentDuration > 0 ? am.currentDuration : song.duration
+             isAtTrackEnd = false
+             _ = beginAutomaticAdvanceTransport(itemID: song.id, reason: "apple-music-native-transition")
+             library?.recordPlayback(of: song.id)
+             ScrobbleService.shared.handlePlaybackStarted(song: song)
+             PlayHistoryStore.shared.beginSession(song: song)
+             persistPlaybackSession()
+             updateNowPlayingInfo()
+             updateNowPlayingArtworkIfNeeded()
+             updatePlaybackState()
+             synchronizeAppleMusicQueue()
+             plog("Apple Music native transition adopted index=\(index) queueCount=\(queueEntries.count)")
+         }
          let pSong = AppServices.shared.appleMusicLibrary.canonicalPrimuseSong(for: nps)
          if let rawSongID = am.nowPlayingRawSongID, rawSongID != pSong.id {
              let aliasKey = "\(rawSongID)→\(pSong.id)"
@@ -4605,10 +4668,10 @@ final class AudioPlayerService {
          }
      }
 
-    /// Called when the one-item MusicKit queue reaches a terminal boundary.
-    /// Primuse then advances its canonical queue, regardless of the next
-    /// song's provider.
+    /// At the end of a native segment, Primuse performs the next provider
+    /// handoff or stops at the end of its canonical queue.
     func handleAppleMusicPlaybackEnded(requestID: UUID) {
+        mirrorAppleMusicState(sessionGeneration: appleMusicMirrorGeneration, requestID: requestID)
         let appleMusic = AppServices.shared.appleMusic
         guard isPrimuseManagingAppleMusicQueue,
               isAppleMusicMode,
@@ -6331,6 +6394,7 @@ final class AudioPlayerService {
     }
 
     private func prefetchNextSong() {
+        synchronizeAppleMusicQueue()
         prefetchTask?.cancel()
         // Prefetch 接下来几首,而不是只 1 首 —— 用户连续 next 切歌时
         // (4-5s/次), 单首 prefetch chain 来不及, 第 2、3 首切到时 partial
@@ -8568,13 +8632,24 @@ final class AudioPlayerService {
             return
         }
 
+        let preservedEntryID = transition == .preserveCurrentTransport
+            && queueEntries.indices.contains(currentIndex) ? queueEntries[currentIndex].id : nil
+        var reusableEntryIDs: [String: [UUID]] = [:]
+        if transition == .preserveCurrentTransport {
+            for entry in queueEntries.reversed() where entry.id != preservedEntryID {
+                reusableEntryIDs[entry.song.id, default: []].append(entry.id)
+            }
+        }
         switch transition {
         case .prepareNewSelection:
             invalidateQueueTransitions(rebuildCurrentTransport: false)
         case .preserveCurrentTransport:
             invalidatePreparedQueueSuccessor()
         }
-        queueEntries = songs.map { QueueEntry(song: $0) }
+        queueEntries = songs.enumerated().map { offset, song in
+            let id = offset == index ? preservedEntryID : reusableEntryIDs[song.id]?.popLast()
+            return QueueEntry(song: song, id: id ?? UUID())
+        }
         currentIndex = max(0, min(index, songs.count - 1))
         // Protect any newly-installed canonical queue from an existing Apple
         // Music mirror during the short interval before `play(song:)` runs.
@@ -8589,8 +8664,9 @@ final class AudioPlayerService {
         pendingNextShuffleIndices = nil
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
-        if transition == .preserveCurrentTransport, isPlaybackActuallyActive {
-            prefetchNextSong()
+        if transition == .preserveCurrentTransport {
+            if isPlaybackActuallyActive { prefetchNextSong() }
+            else { synchronizeAppleMusicQueue() }
         }
     }
 
@@ -8623,6 +8699,7 @@ final class AudioPlayerService {
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
         if isPlaybackActuallyActive { prefetchNextSong() }
+        else { synchronizeAppleMusicQueue() }
     }
 
     /// Insert songs immediately after the current queue position. If there is
@@ -8646,6 +8723,7 @@ final class AudioPlayerService {
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
         if isPlaybackActuallyActive { prefetchNextSong() }
+        else { synchronizeAppleMusicQueue() }
         return insertionIndex
     }
     /// Remove every occurrence of the target songs from the canonical queue
@@ -8700,18 +8778,23 @@ final class AudioPlayerService {
         if shuffleEnabled { rebuildShuffleOrder() }
         persistPlaybackSession()
         if isPlaybackActuallyActive { prefetchNextSong() }
+        else { synchronizeAppleMusicQueue() }
     }
 
     /// Wipe the queue. Replaces the legacy `player.queue = []` setter,
     /// which is no longer accessible since `queue` is now computed.
     func clearQueue() {
+        let retainedAppleMusicTransport = isAppleMusicMode && isPrimuseManagingAppleMusicQueue
+        appleMusicQueueUpdateTask?.cancel()
+        appleMusicQueueUpdateTask = nil
+        if retainedAppleMusicTransport { AppServices.shared.appleMusic.retainCurrentManagedQueueEntry() }
         invalidateQueueTransitions()
         queueEntries = []
         currentIndex = 0
         pendingNextShuffleIndices = nil
         shuffledIndices = []
         shufflePosition = 0
-        isPrimuseManagingAppleMusicQueue = false
+        isPrimuseManagingAppleMusicQueue = retainedAppleMusicTransport
         persistPlaybackSession()
     }
 
@@ -8937,10 +9020,7 @@ final class AudioPlayerService {
             return
         }
 
-        // Apple Music mode owns its own queue/order via the system player —
-        // route through `play(song:)` and let the mirror keep state in sync,
-        // mirroring how `shuffleEnabled.didSet` short-circuits there.
-        if shuffleEnabled, !isAppleMusicMode, !isMirroringFromAppleMusic {
+        if usesManagedShuffleOrder, !isMirroringFromAppleMusic {
             if let targetPos = shuffledIndices.firstIndex(of: index) {
                 // Pull the tapped track into the current shuffle position. The
                 // displaced index moves to where the tapped one was, so every
@@ -11452,6 +11532,7 @@ final class AudioPlayerService {
     private let nowPlayingArtworkCache: NSCache<NSString, MPMediaItemArtwork> = {
         let cache = NSCache<NSString, MPMediaItemArtwork>()
         cache.countLimit = 8
+        cache.totalCostLimit = 24 * 1_024 * 1_024
         return cache
     }()
 
@@ -11462,6 +11543,8 @@ final class AudioPlayerService {
     /// 请求重叠;只有最后一次请求可以回写内存缓存和 Now Playing,避免旧任务
     /// 在新封面发布后又把车机显示回滚。
     @ObservationIgnored private var nowPlayingArtworkLoadTokens: [String: UUID] = [:]
+    @ObservationIgnored private var nowPlayingArtworkLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var nowPlayingArtworkPrefetchTask: Task<Void, Never>?
 
     /// 单调递增的封面刷新 token。当刮削回写完成、cache 失效但 coverArtFileName
     /// 字符串可能没变（hash deterministic）时, view 上的 onChange(coverRef) 不会
@@ -11558,6 +11641,12 @@ final class AudioPlayerService {
     }
 
     private func clearNowPlayingInfo() {
+        nowPlayingArtworkLoadTask?.cancel()
+        nowPlayingArtworkLoadTask = nil
+        nowPlayingArtworkPrefetchTask?.cancel()
+        nowPlayingArtworkPrefetchTask = nil
+        prefetchingArtworkSongID = nil
+        nowPlayingArtworkLoadTokens.removeAll()
         lastArtworkSongID = nil
         publishedArtworkSongID = nil
         let nowPlayingCenter = MPNowPlayingInfoCenter.default()
@@ -11593,6 +11682,16 @@ final class AudioPlayerService {
     ) {
         let songID = currentSong?.id
         guard forceReload || songID != lastArtworkSongID else { return }
+        // A token prevents stale publication, but it does not stop the old
+        // ImageIO work. Cancel both the former current-song load and its
+        // speculative prefetch before starting the new track so rapid skips
+        // cannot accumulate sustained decode work on SpringBoard's behalf.
+        nowPlayingArtworkLoadTask?.cancel()
+        nowPlayingArtworkLoadTask = nil
+        nowPlayingArtworkPrefetchTask?.cancel()
+        nowPlayingArtworkPrefetchTask = nil
+        prefetchingArtworkSongID = nil
+        nowPlayingArtworkLoadTokens.removeAll()
         lastArtworkSongID = songID
 
         let shouldClearArtwork = NowPlayingArtworkPublicationPolicy
@@ -11634,7 +11733,7 @@ final class AudioPlayerService {
         let capturedFileFormat = currentSong?.fileFormat
         let capturedSourceManager = sourceManager
 
-        Task.detached(priority: .userInitiated) { [weak self] in
+        nowPlayingArtworkLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard self != nil else { return }
             let loadedImage = await Self.loadSystemArtworkImage(
                 songID: songID,
@@ -11644,17 +11743,20 @@ final class AudioPlayerService {
                 fileFormat: capturedFileFormat,
                 sourceManager: capturedSourceManager
             )
+            guard !Task.isCancelled else { return }
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard self.nowPlayingArtworkLoadTokens[songID] == loadToken else { return }
+                self.nowPlayingArtworkLoadTask = nil
                 self.nowPlayingArtworkLoadTokens[songID] = nil
                 if let image = loadedImage {
                     // 歌已切走也照样入缓存: 切回来 / 之后再播到这首时,
                     // 第一份快照就能同步带图。
                     self.nowPlayingArtworkCache.setObject(
                         Self.makeArtwork(from: image),
-                        forKey: songID as NSString
+                        forKey: songID as NSString,
+                        cost: Self.nowPlayingArtworkCost(image)
                     )
                 }
                 guard self.currentSong?.id == songID else { return }
@@ -11692,7 +11794,7 @@ final class AudioPlayerService {
         let filePath = next.filePath
         let fileFormat = next.fileFormat
         let capturedSourceManager = sourceManager
-        Task.detached(priority: .utility) { [weak self] in
+        nowPlayingArtworkPrefetchTask = Task.detached(priority: .utility) { [weak self] in
             guard self != nil else { return }
             let image = await Self.loadSystemArtworkImage(
                 songID: songID,
@@ -11702,15 +11804,18 @@ final class AudioPlayerService {
                 fileFormat: fileFormat,
                 sourceManager: capturedSourceManager
             )
+            guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 if self.prefetchingArtworkSongID == songID {
                     self.prefetchingArtworkSongID = nil
+                    self.nowPlayingArtworkPrefetchTask = nil
                 }
                 if let image {
                     self.nowPlayingArtworkCache.setObject(
                         Self.makeArtwork(from: image),
-                        forKey: songID as NSString
+                        forKey: songID as NSString,
+                        cost: Self.nowPlayingArtworkCost(image)
                     )
                 }
             }
@@ -11727,11 +11832,13 @@ final class AudioPlayerService {
         fileFormat: AudioFormat?,
         sourceManager: SourceManager?
     ) async -> PlatformImage? {
+        guard !Task.isCancelled else { return nil }
         let store = MetadataAssetStore.shared
 
         // Tier 1: songID-based cache (透明处理 content-addressed redirect)
         let hashedName = store.expectedCoverFileName(for: songID)
         if let data = store.readCoverData(named: hashedName) {
+            guard !Task.isCancelled else { return nil }
             if let image = decodeArtworkImage(from: data) {
                 return image
             }
@@ -11742,6 +11849,7 @@ final class AudioPlayerService {
         if let coverRef, !coverRef.isEmpty,
            !coverRef.contains("/"), !coverRef.contains("://"),
            let data = store.readCoverData(named: coverRef),
+           !Task.isCancelled,
            let image = decodeArtworkImage(from: data) {
             return image
         }
@@ -11775,6 +11883,7 @@ final class AudioPlayerService {
             }
 
             if let data = fetchedData, let image = decodeArtworkImage(from: data) {
+                guard !Task.isCancelled else { return nil }
                 await store.cacheCover(data, forSongID: songID)
                 return image
             }
@@ -11788,8 +11897,10 @@ final class AudioPlayerService {
             let dummySong = Song(id: "", title: "", fileFormat: inferredFormat, filePath: filePath,
                                  sourceID: sourceID, fileSize: 0, dateAdded: Date())
             if let cachedURL = await sourceManager.cachedURL(for: dummySong) {
+                guard !Task.isCancelled else { return nil }
                 let metadata = await FileMetadataReader.read(from: cachedURL)
                 if let coverData = metadata.coverArtData {
+                    guard !Task.isCancelled else { return nil }
                     await store.cacheCover(coverData, forSongID: songID)
                     return decodeArtworkImage(from: coverData)
                 }
@@ -11798,12 +11909,14 @@ final class AudioPlayerService {
         return nil
     }
 
-    /// 从原始图片数据解码封面, 统一降采样到 ≤1024px 并强制立即解码。
+    /// 从原始图片数据解码封面, 统一降采样到 ≤768px 并强制立即解码。
     /// 锁屏/车机的显示尺寸远小于原图; 蓝牙 AVRCP 封面走 OBEX 慢速通道,
     /// 超大位图会显著拖慢传输甚至失败, 懒解码则会把解码开销转嫁给
     /// MPMediaItemArtwork 的系统回调队列。
     nonisolated private static func decodeArtworkImage(from data: Data) -> PlatformImage? {
-        guard ArtworkImageCompatibility.isCompleteImage(data),
+        guard !Task.isCancelled,
+              data.count <= 16 * 1_024 * 1_024,
+              ArtworkImageCompatibility.isCompleteImage(data),
               !ArtworkImageCompatibility.hasRedundantJPEGSampling(data) else {
             return nil
         }
@@ -11811,9 +11924,11 @@ final class AudioPlayerService {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: 1024,
+            kCGImageSourceThumbnailMaxPixelSize: 768,
         ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+        guard let source = CGImageSourceCreateWithData(data as CFData, [
+                kCGImageSourceShouldCache: false,
+              ] as CFDictionary),
               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return nil
         }
@@ -11854,7 +11969,11 @@ final class AudioPlayerService {
         lastArtworkSongID = songID
         publishedArtworkSongID = songID
         let artwork = Self.makeArtwork(from: image)
-        nowPlayingArtworkCache.setObject(artwork, forKey: songID as NSString)
+        nowPlayingArtworkCache.setObject(
+            artwork,
+            forKey: songID as NSString,
+            cost: Self.nowPlayingArtworkCost(image)
+        )
         updateNowPlayingInfo(
             artwork: artwork,
             artworkSongID: songID
@@ -11867,6 +11986,19 @@ final class AudioPlayerService {
     nonisolated private static func makeArtwork(from image: PlatformImage) -> MPMediaItemArtwork {
         let safeImage = image
         return MPMediaItemArtwork(boundsSize: image.size) { _ in safeImage }
+    }
+
+    nonisolated private static func nowPlayingArtworkCost(_ image: PlatformImage) -> Int {
+        #if os(iOS)
+        if let cgImage = image.cgImage {
+            return cgImage.bytesPerRow * cgImage.height
+        }
+        let pixelWidth = image.size.width * image.scale
+        let pixelHeight = image.size.height * image.scale
+        return max(0, Int(pixelWidth * pixelHeight * 4))
+        #else
+        return max(0, Int(image.size.width * image.size.height * 4))
+        #endif
     }
 
     // MARK: - Remote Commands

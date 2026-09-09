@@ -3806,3 +3806,8 @@
 "library_review_comment_hint" = "Opens the comment editor.";
 "library_review_comment_title" = "Comment";
 "library_review_star_format" = "%d Stars";
+
+"carplay_main_menu" = "Menu principal";
+"carplay_menu_name" = "Nom du menu";
+"carplay_siri_button" = "Bouton en haut";
+"carplay_siri_row" = "Ligne de liste";

@@ -883,11 +883,6 @@ struct ContentView: View {
         }
         .environment(\.librarySearchNavigation, searchNavigation)
         .environment(\.appNavigationMode, navigationMode)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if carPlayEditorActive && miniPlayerActive && !showNowPlaying {
-                CarPlayCompactAccessory(onTap: presentNowPlaying)
-            }
-        }
         .onPreferenceChange(CarPlayEditorActivePreferenceKey.self) { carPlayEditorActive = $0 }
         .songBatchRemovalFeedback()
         .onPreferenceChange(SongBatchSelectionActivePreferenceKey.self) { isActive in

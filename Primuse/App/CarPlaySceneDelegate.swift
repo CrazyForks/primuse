@@ -14,6 +14,135 @@ private struct CarPlaySendableBox<T>: @unchecked Sendable {
     let value: T
 }
 
+/// CarPlay allows at most five levels for audio apps. The framework can raise
+/// an Objective-C exception before its completion handler reports an error, so
+/// callers must make room before issuing the push.
+enum CarPlayNavigationStackPolicy {
+    static let maximumDepth = 5
+
+    enum Action: Equatable {
+        case push
+        case replaceTop
+        case resetToRoot
+    }
+
+    static func action(currentDepth: Int) -> Action {
+        if currentDepth > maximumDepth { return .resetToRoot }
+        if currentDepth == maximumDepth { return .replaceTop }
+        return .push
+    }
+}
+
+/// A full CarPlay list may contain hundreds of rows, but CarPlay does not
+/// expose row-visibility callbacks. Keep the useful first screenfuls rich and
+/// leave later rows on lightweight placeholders instead of retaining tens of
+/// megabytes of backing bitmaps in both the app and the template host.
+enum CarPlayArtworkLoadPolicy {
+    static let maximumEagerArtworkCount = 64
+
+    static func shouldLoad(index: Int, budget: Int = maximumEagerArtworkCount) -> Bool {
+        index >= 0 && index < max(0, budget)
+    }
+}
+
+/// Serializes and spaces out CarPlay artwork work. ImageIO decoding on the
+/// cooperative pool is off-main, but hundreds of uninterrupted decodes still
+/// trip iOS's sustained-CPU watchdog and starve the CarPlay template host.
+actor CarPlayArtworkScheduler {
+    static let shared = CarPlayArtworkScheduler()
+
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    private var isOccupied = false
+    private var waiters: [Waiter] = []
+    private var nextStart = Date.distantPast
+    private let minimumCooldown: TimeInterval
+    private let maximumCooldown: TimeInterval
+    private let dynamicCooldownMultiplier: Double
+
+    init(
+        minimumCooldown: TimeInterval = 0.075,
+        maximumCooldown: TimeInterval = 0.75,
+        dynamicCooldownMultiplier: Double = 1.5
+    ) {
+        self.minimumCooldown = max(0, minimumCooldown)
+        self.maximumCooldown = max(self.minimumCooldown, maximumCooldown)
+        self.dynamicCooldownMultiplier = max(0, dynamicCooldownMultiplier)
+    }
+
+    func image(_ operation: @escaping @Sendable () async -> UIImage?) async -> UIImage? {
+        let acquired = await acquire()
+        guard acquired, !Task.isCancelled else {
+            if acquired { release() }
+            return nil
+        }
+        defer { release() }
+
+        let wait = nextStart.timeIntervalSinceNow
+        if wait > 0 {
+            do {
+                try await Task.sleep(for: .milliseconds(Int64((wait * 1_000).rounded(.up))))
+            } catch {
+                return nil
+            }
+        }
+        guard !Task.isCancelled else { return nil }
+        switch ProcessInfo.processInfo.thermalState {
+        case .serious, .critical:
+            return nil
+        default:
+            break
+        }
+
+        let started = Date()
+        let image = await operation()
+        let elapsed = Date().timeIntervalSince(started)
+        var cooldown = max(minimumCooldown, elapsed * dynamicCooldownMultiplier)
+        if ProcessInfo.processInfo.isLowPowerModeEnabled
+            || ProcessInfo.processInfo.thermalState == .fair {
+            cooldown *= 2
+        }
+        nextStart = Date().addingTimeInterval(min(maximumCooldown, cooldown))
+        return Task.isCancelled ? nil : image
+    }
+
+    private func acquire() async -> Bool {
+        if !isOccupied {
+            isOccupied = true
+            return true
+        }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters.append(Waiter(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id: id) }
+        }
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(returning: false)
+    }
+
+    private func release() {
+        if let waiter = waiters.popLast() {
+            waiter.continuation.resume(returning: true)
+        } else {
+            isOccupied = false
+        }
+    }
+}
+
 /// Keeps CarPlay artwork decode off the main actor, deduplicates repeat rows,
 /// and repairs a Jellyfin/Emby JPEG variant that iOS ImageIO cannot decode
 /// cleanly (`NULL _blockArray`).
@@ -50,7 +179,10 @@ actor CarPlayArtworkDecoder {
             await MetadataAssetStore.shared.cacheCover(repaired, forSongID: songID)
         }
 
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+        guard data.count <= 16 * 1_024 * 1_024,
+              let source = CGImageSourceCreateWithData(data as CFData, [
+                kCGImageSourceShouldCache: false
+              ] as CFDictionary) else {
             return nil
         }
         let options: [CFString: Any] = [
@@ -74,7 +206,10 @@ actor CarPlayArtworkDecoder {
     func thumbnail(forRadioID radioID: String, data: Data) -> UIImage? {
         let key = "radio:\(radioID)" as NSString
         if let cached = thumbnails.object(forKey: key) { return cached }
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        guard data.count <= 16 * 1_024 * 1_024,
+              let source = CGImageSourceCreateWithData(data as CFData, [
+                kCGImageSourceShouldCache: false
+              ] as CFDictionary) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -118,6 +253,8 @@ final class CarPlaySceneDelegate: UIResponder {
     private var libraryTemplate: CPListTemplate?
     private var radioTemplate: CPListTemplate?
     private var playlistsTemplate: CPListTemplate?
+    private var configuredTabs: [CarPlayMainTab] = []
+    private var menuTemplates: [String: CPListTemplate] = [:]
 
     /// Root tab bar — kept so library refreshes can rebuild only the
     /// currently-selected tab and lazily refresh the others when the user
@@ -158,6 +295,7 @@ final class CarPlaySceneDelegate: UIResponder {
     private var nowPlayingPresentationTask: Task<Void, Never>?
     private var nowPlayingPresentationRequestID: UUID?
     private var isNowPlayingTransitionInFlight = false
+    private var navigationTransitionInFlight = false
     private let folderLibraryOwner = UUID()
     private var connectionGeneration = 0
     private var likeChangesObserver: NSObjectProtocol?
@@ -182,6 +320,8 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
             _ = AppServices.shared.playerService
             NotificationCenter.default.post(name: .primuseCarPlaySceneDidConnect, object: nil)
             self.interfaceController = interfaceController
+            self.navigationTransitionInFlight = false
+            self.isNowPlayingTransitionInFlight = false
             self.connectionGeneration &+= 1
             let generation = self.connectionGeneration
             interfaceController.delegate = self
@@ -224,6 +364,8 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
             self.radioTemplate = nil
             self.playlistsTemplate = nil
             self.tabBarTemplate = nil
+            self.configuredTabs = []
+            self.menuTemplates = [:]
             self.staleRootTemplates.removeAll()
             self.libraryRefreshTask?.cancel()
             self.libraryRefreshTask = nil
@@ -231,6 +373,7 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
             self.nowPlayingPresentationTask = nil
             self.nowPlayingPresentationRequestID = nil
             self.isNowPlayingTransitionInFlight = false
+            self.navigationTransitionInFlight = false
             self.openQueueTemplate = nil
             self.cancelArtworkTasks()
             self.artworkUpdates.removeAll()
@@ -325,46 +468,79 @@ extension CarPlaySceneDelegate: CPTabBarTemplateDelegate {
 // MARK: - Root tab bar + per-tab templates
 
 extension CarPlaySceneDelegate {
-    private func makeRootTabBar() -> CPTabBarTemplate {
-        // Audio-category CarPlay apps may only navigate among the template
-        // classes granted by their entitlement. Search therefore uses nested
-        // CPListTemplate screens rather than CPSearchTemplate, which is present
-        // in the SDK but rejected at runtime for this app category.
-        // tab 上限随系统/车机而变 (maximumTabCount 可能是 4 而非 5), 超出会在
-        // init 抛 NSException。只构建真正能显示的页签，避免为被截断的大列表创建
-        // 数百个 CPListItem 和封面任务。电台是根目录，不再附属于“最近”。
-        let maximumTabCount = CPTabBarTemplate.maximumTabCount
-        var orderedTabs: [CPListTemplate] = []
-
-        func appendIfVisible(
-            _ makeTemplate: () -> CPListTemplate,
-            assign: (CPListTemplate) -> Void
-        ) {
-            guard orderedTabs.count < maximumTabCount else { return }
-            let template = makeTemplate()
-            assign(template)
-            orderedTabs.append(template)
+    func makeRootTabBar(configuration: CarPlayLayoutConfiguration? = nil) -> CPTabBarTemplate {
+        let configuration = configuration ?? layout
+        configuredTabs = configuration.visibleTabs(maximumCount: CPTabBarTemplate.maximumTabCount)
+        menuTemplates = [:]
+        let templates = configuredTabs.map { tab -> CPListTemplate in
+            let template = makeMenuTemplate(tab, configuration: configuration)
+            menuTemplates[tab.id] = template
+            staleRootTemplates.insert(ObjectIdentifier(template))
+            return template
         }
-
-        appendIfVisible(makeHomeTemplate) { homeTemplate = $0 }
-        appendIfVisible(makeLibraryTemplate) { libraryTemplate = $0 }
-        appendIfVisible(makeRadioTemplate) { radioTemplate = $0 }
-        appendIfVisible(makePlaylistsTemplate) { playlistsTemplate = $0 }
-
-        let tabBar = CPTabBarTemplate(templates: orderedTabs)
+        assignRootReferences()
+        if let first = templates.first { rebuildRootTemplate(first, configuration: configuration) }
+        let tabBar = CPTabBarTemplate(templates: templates)
         tabBar.delegate = self
         tabBarTemplate = tabBar
         return tabBar
     }
 
+    private func makeMenuTemplate(_ tab: CarPlayMainTab, configuration: CarPlayLayoutConfiguration) -> CPListTemplate {
+        let template = CPListTemplate(title: tab.displayTitle, sections: [])
+        template.tabTitle = tab.displayTitle
+        template.tabImage = Self.symbolImage(tab.symbol)
+        if tab.kind == .search { template.userInfo = "carplay.search" }
+        template.emptyViewTitleVariants = [String(localized: "carplay_no_content")]
+        configureNavigation(on: template, configuration: configuration, isTabRoot: true)
+        return template
+    }
+
+    private func assignRootReferences() {
+        func template(_ kind: CarPlayMainTab.Kind) -> CPListTemplate? {
+            configuredTabs.first { $0.kind == kind }.flatMap { menuTemplates[$0.id] }
+        }
+        homeTemplate = template(.home)
+        libraryTemplate = template(.library)
+        radioTemplate = template(.radio)
+        playlistsTemplate = template(.playlists)
+    }
+
+    private func updateMenuTemplates() {
+        guard let tabBarTemplate else { return }
+        let next = layout.visibleTabs(maximumCount: CPTabBarTemplate.maximumTabCount)
+        guard next != configuredTabs else { return }
+        let selectedID = menuTemplates.first { $0.value === tabBarTemplate.selectedTemplate }?.key
+        let previous = Dictionary(uniqueKeysWithValues: configuredTabs.map { ($0.id, $0) })
+        var templates: [String: CPListTemplate] = [:]
+        for tab in next {
+            if let old = previous[tab.id], old.kind == tab.kind, old.content == tab.content,
+               let template = menuTemplates[tab.id] {
+                template.tabTitle = tab.displayTitle
+                templates[tab.id] = template
+            } else { templates[tab.id] = makeMenuTemplate(tab, configuration: layout) }
+        }
+        configuredTabs = next
+        menuTemplates = templates
+        assignRootReferences()
+        staleRootTemplates = Set(templates.values.map(ObjectIdentifier.init))
+        tabBarTemplate.updateTemplates(next.compactMap { templates[$0.id] })
+        if let selectedID, let selected = templates[selectedID] { tabBarTemplate.select(selected) }
+    }
+
     private func pushSearchTemplate() {
+        let template = CPListTemplate(title: String(localized: "recent_searches"), sections: searchSections())
+        template.userInfo = "carplay.search"
+        safePush(template, label: "Search")
+    }
+
+    private func searchSections() -> [CPListSection] {
         let recentQueries = UserDefaults.standard
             .stringArray(forKey: CloudKVSKey.recentSearches) ?? []
         let items = recentQueries.prefix(12).map { query -> CPListItem in
-            let matchCount = searchMatches(query).count
             let item = CPListItem(
                 text: query,
-                detailText: "\(matchCount) \(String(localized: "songs_count"))",
+                detailText: nil,
                 image: CarPlayTemplateImages.placeholder("magnifyingglass", artwork: false)
             )
             item.handler = { [weak self] _, completion in
@@ -389,17 +565,17 @@ extension CarPlaySceneDelegate {
             sectionItems = items
         }
 
-        let template = CPListTemplate(
-            title: String(localized: "recent_searches"),
-            sections: [CPListSection(items: sectionItems)]
-        )
-        safePush(template, label: "Search")
+        return [CPListSection(items: sectionItems)]
     }
 
     private func pushSearchResults(for query: String) {
         let matches = searchMatches(query)
         let items = matches.enumerated().map { index, song -> CPListItem in
-            let item = songItem(song, queueProvider: { (matches, index) })
+            let item = songItem(
+                song,
+                queueProvider: { (matches, index) },
+                loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: index)
+            )
             return item
         }
         let template = CPListTemplate(
@@ -423,15 +599,62 @@ extension CarPlaySceneDelegate {
         }.prefix(100))
     }
 
-    /// Wraps `pushTemplate` so completion errors (max nav depth, duplicate
-    /// singleton push, etc.) are logged instead of becoming an uncaught
-    /// framework exception.
+    /// Serializes navigation and makes room before the five-level framework
+    /// limit. A completion handler alone is insufficient: recent CarPlay builds
+    /// can raise `clientExceededHierarchyDepthLimit` before returning an error.
     private func safePush(_ template: CPTemplate, label: String) {
         if let list = template as? CPListTemplate { configureNavigation(on: list) }
-        interfaceController?.pushTemplate(template, animated: true) { success, error in
-            if let error {
-                carplayLog.error("📱 pushTemplate(\(label, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+        guard let ic = interfaceController else { return }
+        guard !navigationTransitionInFlight, !isNowPlayingTransitionInFlight else {
+            carplayLog.notice("📱 pushTemplate(\(label, privacy: .public)) ignored while another transition is active")
+            return
+        }
+        navigationTransitionInFlight = true
+        switch CarPlayNavigationStackPolicy.action(currentDepth: ic.templates.count) {
+        case .push:
+            performPush(template, label: label, interfaceController: ic)
+        case .replaceTop:
+            ic.popTemplate(animated: false) { [weak self] success, error in
+                Task { @MainActor in
+                    guard let self, self.interfaceController === ic else { return }
+                    guard success else {
+                        self.finishNavigationTransition(label: label, error: error)
+                        return
+                    }
+                    self.performPush(template, label: label, interfaceController: ic)
+                }
             }
+        case .resetToRoot:
+            ic.popToRootTemplate(animated: false) { [weak self] success, error in
+                Task { @MainActor in
+                    guard let self, self.interfaceController === ic else { return }
+                    guard success else {
+                        self.finishNavigationTransition(label: label, error: error)
+                        return
+                    }
+                    self.performPush(template, label: label, interfaceController: ic)
+                }
+            }
+        }
+    }
+
+    private func performPush(
+        _ template: CPTemplate,
+        label: String,
+        interfaceController: CPInterfaceController
+    ) {
+        interfaceController.pushTemplate(template, animated: true) { [weak self] _, error in
+            Task { @MainActor in
+                guard let self, self.interfaceController === interfaceController else { return }
+                self.finishNavigationTransition(label: label, error: error)
+            }
+        }
+    }
+
+    private func finishNavigationTransition(label: String, error: Error?) {
+        navigationTransitionInFlight = false
+        if let error {
+            carplayLog.error("📱 navigation(\(label, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -484,9 +707,15 @@ extension CarPlaySceneDelegate {
         let albums = Array(library.visibleAlbums
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
             .prefix(500))
+        let indexByID = Dictionary(
+            albums.enumerated().map { ($1.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let sections = Self.sectionedByIndexLetter(albums, titleKey: \.title) { album in
             let item = CPListItem(text: album.title, detailText: album.artistName, image: CarPlayTemplateImages.placeholder("square.stack"))
-            self.loadArtwork(forAlbumID: album.id, into: item)
+            if CarPlayArtworkLoadPolicy.shouldLoad(index: indexByID[album.id] ?? 0) {
+                self.loadArtwork(for: album, into: item)
+            }
             item.handler = { [weak self] _, completion in
                 Task { @MainActor in
                     self?.pushAlbumDetail(album)
@@ -530,14 +759,20 @@ extension CarPlaySceneDelegate {
             uniquingKeysWith: { first, _ in first }
         )
         let sections = Self.sectionedByIndexLetter(songs, titleKey: \.title) { song in
-            self.songItem(song, queueProvider: { (songs, indexByID[song.id] ?? 0) })
+            let index = indexByID[song.id] ?? 0
+            return self.songItem(
+                song,
+                queueProvider: { (songs, index) },
+                loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: index)
+            )
         }
         return sections
     }
 
     private func playlistsSections(browseOnly: Bool = false) -> [CPListSection] {
         let playlists = AppServices.shared.musicLibrary.playlists.sorted { $0.updatedAt > $1.updatedAt }
-        return collectionSections(Array(playlists.prefix(CPListTemplate.maximumItemCount)).map { playlistEntry($0, browseOnly: browseOnly) })
+        return collectionSections(Array(playlists.prefix(CPListTemplate.maximumItemCount)).map { playlistEntry($0, browseOnly: browseOnly) },
+                                  columns: layout.visualStyle == .wall ? 3 : 2)
     }
 }
 
@@ -560,14 +795,43 @@ extension CarPlaySceneDelegate {
     }
 
     func configureNavigation(on template: CPListTemplate, configuration: CarPlayLayoutConfiguration? = nil, isTabRoot: Bool = false) {
-        if !isTabRoot, template.title != String(localized: "recent_searches") {
-            template.trailingNavigationBarButtons = [CPBarButton(image: Self.symbolImage("magnifyingglass")) { [weak self] _ in
-                self?.pushSearchTemplate()
-            }]
-        } else { template.trailingNavigationBarButtons = [] }
-        template.assistantCellConfiguration = (configuration ?? layout).showsSiri ? CPAssistantCellConfiguration(
+        let configuration = configuration ?? layout
+        let siriPage = template.userInfo as? String == "carplay.siri"
+        let searchPage = template.userInfo as? String == "carplay.search"
+        var inlineSiri = configuration.siriPresentation == .row
+        if #unavailable(iOS 26.0) { inlineSiri = true }
+        let siriShortcut = configuration.showsSiri && !inlineSiri && !siriPage
+        var buttons: [CPBarButton] = []
+        if !isTabRoot {
+            if !searchPage {
+                buttons.append(CPBarButton(image: Self.symbolImage("magnifyingglass")) { [weak self] _ in self?.pushSearchTemplate() })
+            }
+            if siriShortcut {
+                buttons.append(CPBarButton(image: Self.symbolImage("mic")) { [weak self] _ in self?.pushAssistantTemplate() })
+            }
+        }
+        template.trailingNavigationBarButtons = buttons
+        template.assistantCellConfiguration = siriPage || (configuration.showsSiri && inlineSiri) ? CPAssistantCellConfiguration(
             position: .top, visibility: .always, assistantAction: .playMedia
         ) : nil
+        if #available(iOS 26.0, *) {
+            var actions: [CPGridButton] = []
+            if isTabRoot {
+                if !searchPage {
+                    actions.append(CPGridButton(titleVariants: [String(localized: "search_title")], image: Self.symbolImage("magnifyingglass")) { [weak self] _ in self?.pushSearchTemplate() })
+                }
+                if siriShortcut {
+                    actions.append(CPGridButton(titleVariants: ["Siri"], image: Self.symbolImage("mic")) { [weak self] _ in self?.pushAssistantTemplate() })
+                }
+            }
+            template.headerGridButtons = Array(actions.prefix(CPListTemplate.maximumHeaderGridButtonCount))
+        }
+    }
+
+    private func pushAssistantTemplate() {
+        let template = CPListTemplate(title: "Siri", sections: [])
+        template.userInfo = "carplay.siri"
+        safePush(template, label: "Siri")
     }
 
     private func makeLibraryTemplate() -> CPListTemplate {
@@ -624,13 +888,18 @@ extension CarPlaySceneDelegate {
     }
 
     private func homeSections() -> [CPListSection] {
+        var remainingArtworkBudget = CarPlayArtworkLoadPolicy.maximumEagerArtworkCount
         let sections = CarPlayHomeContent.resolve(layout).flatMap { block in
-            collectionSections(block.items.map(homeEntry),
-                               title: block.configuration.showsTitle ? block.title : nil,
-                               style: block.configuration.style,
-                               columns: CarPlayHomeContent.rowSize(for: block.configuration))
+            let entries = block.items.map(homeEntry)
+            let artworkBudget = min(remainingArtworkBudget, entries.count)
+            remainingArtworkBudget -= artworkBudget
+            return collectionSections(entries,
+                                      title: block.configuration.showsTitle ? block.title : nil,
+                                      style: block.configuration.style,
+                                      columns: CarPlayHomeContent.rowSize(for: block.configuration),
+                                      artworkBudget: artworkBudget)
         }
-        let navigation = [
+        var navigation = [
             CollectionEntry(title: String(localized: "library_browse_folder"), symbol: "folder") { [weak self] in
                 self?.pushFolderBrowser()
             },
@@ -641,11 +910,11 @@ extension CarPlaySceneDelegate {
             CollectionEntry(title: String(localized: "carplay_layout_title"),
                             symbol: "rectangle.3.group") { [weak self] in
                 self?.pushLayoutPresets()
-            },
-            CollectionEntry(title: String(localized: "carplay_search_title"), symbol: "magnifyingglass") { [weak self] in
-                self?.pushSearchTemplate()
             }
         ]
+        if #unavailable(iOS 26.0) {
+            navigation.append(CollectionEntry(title: String(localized: "carplay_search_title"), symbol: "magnifyingglass") { [weak self] in self?.pushSearchTemplate() })
+        }
         return sections + collectionSections(navigation, style: .list)
     }
 
@@ -656,7 +925,7 @@ extension CarPlaySceneDelegate {
         }
     }
 
-    private func activateHomeItem(_ item: CarPlayHomeItem) {
+    func activateHomeItem(_ item: CarPlayHomeItem) {
         let library = AppServices.shared.musicLibrary
         switch item.target {
         case .nowPlaying:
@@ -734,21 +1003,28 @@ extension CarPlaySceneDelegate {
     }
 
     private func collectionSections(_ entries: [CollectionEntry], title: String? = nil,
-                                    style: CarPlayBrowseStyle? = nil, columns: Int = 6) -> [CPListSection] {
+                                    style: CarPlayBrowseStyle? = nil, columns: Int = 6,
+                                    artworkBudget: Int = CarPlayArtworkLoadPolicy.maximumEagerArtworkCount) -> [CPListSection] {
         guard !entries.isEmpty else { return [] }
         let entries = Array(entries.prefix(CPListTemplate.maximumItemCount))
         let style = style ?? layout.browseStyle
         if style == .list {
-            return [CPListSection(items: entries.map(collectionItem), header: title, sectionIndexTitle: nil)]
+            return [CPListSection(items: entries.enumerated().map { index, entry in
+                collectionItem(entry, loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: index, budget: artworkBudget))
+            }, header: title, sectionIndexTitle: nil)]
         }
         let rowSize = max(1, min(Int(CPMaximumNumberOfGridImages), columns))
         let rows = stride(from: 0, to: entries.count, by: rowSize).map { offset in
-            imageRow(Array(entries[offset..<min(offset + rowSize, entries.count)]), style: style)
+            imageRow(
+                Array(entries[offset..<min(offset + rowSize, entries.count)]),
+                style: style,
+                artworkBudget: max(0, artworkBudget - offset)
+            )
         }
         return [CPListSection(items: rows, header: title, sectionIndexTitle: nil)]
     }
 
-    func collectionItem(_ entry: CollectionEntry) -> CPListItem {
+    func collectionItem(_ entry: CollectionEntry, loadsArtwork: Bool = true) -> CPListItem {
         let item = CPListItem(text: entry.title, detailText: entry.subtitle, image: CarPlayTemplateImages.placeholder(entry.symbol, scale: artworkScale, artwork: entry.artwork != nil))
         item.isEnabled = entry.enabled
         item.handler = { _, completion in
@@ -758,7 +1034,7 @@ extension CarPlaySceneDelegate {
                 completion.value()
             }
         }
-        if let artwork = entry.artwork {
+        if loadsArtwork, let artwork = entry.artwork {
             let scale = artworkScale
             loadObservedArtwork(artwork, pixelSize: Int(CarPlayTemplateImages.listSide * scale), owner: item) { [weak item] image in
                 item?.setImage(CarPlayTemplateImages.square(image, scale: scale))
@@ -769,7 +1045,11 @@ extension CarPlaySceneDelegate {
 
     private var artworkScale: CGFloat { max(1, interfaceController?.carTraitCollection.displayScale ?? 2) }
 
-    func imageRow(_ entries: [CollectionEntry], style: CarPlayBrowseStyle) -> CPListImageRowItem {
+    func imageRow(
+        _ entries: [CollectionEntry],
+        style: CarPlayBrowseStyle,
+        artworkBudget: Int = CarPlayArtworkLoadPolicy.maximumEagerArtworkCount
+    ) -> CPListImageRowItem {
         let side = CarPlayTemplateImages.rowSide(for: style)
         let scale = artworkScale
         let placeholders = entries.map { CarPlayTemplateImages.placeholder($0.symbol, side: side, scale: scale) }
@@ -815,7 +1095,8 @@ extension CarPlaySceneDelegate {
         }
         var images = placeholders
         for (index, entry) in entries.enumerated() {
-            guard let artwork = entry.artwork else { continue }
+            guard CarPlayArtworkLoadPolicy.shouldLoad(index: index, budget: artworkBudget),
+                  let artwork = entry.artwork else { continue }
             loadObservedArtwork(artwork, pixelSize: Int(side * scale), owner: row) { [weak row] image in
                 guard let row else { return }
                 images[index] = CarPlayTemplateImages.square(image, side: side, scale: scale)
@@ -841,7 +1122,9 @@ extension CarPlaySceneDelegate {
                 defer { self?.artworkTasks[id] = nil }
                 repeat {
                     pendingRefresh = false
-                    let image = await CarPlayHomeContent.artwork(artwork, pixelSize: pixelSize)
+                    let image = await CarPlayArtworkScheduler.shared.image {
+                        await CarPlayHomeContent.artwork(artwork, pixelSize: pixelSize)
+                    }
                     guard !Task.isCancelled, owner != nil else { return }
                     if let image { apply(image) }
                 } while pendingRefresh
@@ -906,6 +1189,7 @@ extension CarPlaySceneDelegate {
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.interfaceController != nil, self.connectionGeneration == generation else { return }
+                self.updateMenuTemplates()
                 self.refreshRootTemplates()
                 self.refreshNowPlayingButtons()
                 self.observeLayoutChanges(generation: generation)
@@ -960,7 +1244,11 @@ extension CarPlaySceneDelegate {
         if let nodeID {
             let songs = folders.songs(in: nodeID, scope: .direct)
             let items = songs.prefix(100).enumerated().map { index, song in
-                songItem(song, queueProvider: { (songs, index) })
+                songItem(
+                    song,
+                    queueProvider: { (songs, index) },
+                    loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: index)
+                )
             }
             if !items.isEmpty { sections.append(CPListSection(items: items)) }
         }
@@ -1051,7 +1339,7 @@ extension CarPlaySceneDelegate {
     private func radioStationsSection() -> CPListSection {
         let stations = AppServices.shared.radioStationsStore.stations
         let player = AppServices.shared.playerService
-        let items = stations.map { station -> CPListItem in
+        let items = stations.enumerated().map { index, station -> CPListItem in
             let isCurrent = player.isLiveRadio && player.currentRadioStation?.id == station.id
             let detail = isCurrent
                 ? (player.radioMetadataTitle ?? station.playbackSubtitle)
@@ -1065,7 +1353,9 @@ extension CarPlaySceneDelegate {
                 item.isPlaying = player.isPlaying
                 item.playingIndicatorLocation = .leading
             }
-            loadArtwork(for: station, into: item)
+            if CarPlayArtworkLoadPolicy.shouldLoad(index: index) {
+                loadArtwork(for: station, into: item)
+            }
             item.handler = { [weak self] _, completion in
                 Task { @MainActor in
                     self?.play(station: station, within: stations)
@@ -1103,7 +1393,7 @@ extension CarPlaySceneDelegate {
         // playlistSongIDs 已经按用户排序保留, 不需要再 sort。
         let songs = AppServices.shared.musicLibrary.songs(forPlaylist: playlistID)
         let items = songs.prefix(max(0, CPListTemplate.maximumItemCount - 2)).enumerated().map { idx, song in
-            songItem(song, queueProvider: { (songs, idx) })
+            songItem(song, queueProvider: { (songs, idx) }, loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: idx))
         }
         return CPListSection(items: collectionPlaybackItems(songs) + items)
     }
@@ -1112,7 +1402,7 @@ extension CarPlaySceneDelegate {
         let songs = AppServices.shared.musicLibrary.songs(forAlbum: albumID)
             .sorted { ($0.discNumber ?? 0, $0.trackNumber ?? 0) < ($1.discNumber ?? 0, $1.trackNumber ?? 0) }
         let items = songs.prefix(max(0, CPListTemplate.maximumItemCount - 2)).enumerated().map { idx, song in
-            songItem(song, queueProvider: { (songs, idx) })
+            songItem(song, queueProvider: { (songs, idx) }, loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: idx))
         }
         return CPListSection(items: collectionPlaybackItems(songs) + items)
     }
@@ -1121,7 +1411,7 @@ extension CarPlaySceneDelegate {
         let songs = AppServices.shared.musicLibrary.songs(forArtist: artistID)
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         let items = songs.prefix(max(0, CPListTemplate.maximumItemCount - 2)).enumerated().map { idx, song in
-            songItem(song, queueProvider: { (songs, idx) })
+            songItem(song, queueProvider: { (songs, idx) }, loadsArtwork: CarPlayArtworkLoadPolicy.shouldLoad(index: idx))
         }
         return CPListSection(items: collectionPlaybackItems(songs) + items)
     }
@@ -1159,14 +1449,18 @@ extension CarPlaySceneDelegate {
 // MARK: - Item factory + playback
 
 extension CarPlaySceneDelegate {
-    private func songItem(_ song: Song, queueProvider: @escaping () -> ([Song], Int)) -> CPListItem {
+    private func songItem(
+        _ song: Song,
+        queueProvider: @escaping () -> ([Song], Int),
+        loadsArtwork: Bool = true
+    ) -> CPListItem {
         let item = CPListItem(
             text: song.title,
             detailText: AppServices.shared.musicLibrary.artistDisplayName(for: song)
                 ?? song.albumTitle,
             image: CarPlayTemplateImages.placeholder("music.note")
         )
-        loadArtwork(for: song, into: item)
+        if loadsArtwork { loadArtwork(for: song, into: item) }
         item.handler = { [weak self] _, completion in
             // queueProvider 不访问 @MainActor(只读捕获的 Sendable 值), 在外层调用;
             // 只把 Sendable 结果带进 hop, 避免把非 @Sendable 的 queueProvider 捕获进 Task。
@@ -1200,13 +1494,12 @@ extension CarPlaySceneDelegate {
             return
         }
         let player = AppServices.shared.playerService
-        player.setQueue(filtered, startAt: newIndex)
         let song = filtered[newIndex]
         let requestID = UUID()
         nowPlayingPresentationTask?.cancel()
         nowPlayingPresentationRequestID = requestID
         nowPlayingPresentationTask = Task { @MainActor [weak self] in
-            await player.play(song: song)
+            await player.play(queue: filtered, startingAt: newIndex)
             // play() returns once setup is kicked off, but actual playback
             // (esp. for cloud sources) may take a few seconds. Poll briefly
             // for the loading-or-playing state, then either push Now Playing
@@ -1272,32 +1565,53 @@ extension CarPlaySceneDelegate {
         let nowPlaying = CPNowPlayingTemplate.shared
         if ic.topTemplate === nowPlaying {
             isNowPlayingTransitionInFlight = false
+            navigationTransitionInFlight = false
             carplayLog.notice("📱 NowPlaying already on top, skipping push")
             return
         }
-        guard !isNowPlayingTransitionInFlight else {
+        guard !isNowPlayingTransitionInFlight, !navigationTransitionInFlight else {
             carplayLog.notice("📱 NowPlaying transition already in flight, skipping duplicate")
             return
         }
         isNowPlayingTransitionInFlight = true
+        navigationTransitionInFlight = true
+        let finish: @MainActor (Error?) -> Void = { [weak self] error in
+            guard let self else { return }
+            self.isNowPlayingTransitionInFlight = false
+            self.finishNavigationTransition(label: "NowPlaying", error: error)
+        }
         if ic.templates.contains(where: { $0 === nowPlaying }) {
             ic.pop(to: nowPlaying, animated: true) { [weak self] success, error in
                 Task { @MainActor in
-                    self?.isNowPlayingTransitionInFlight = false
-                    if let error {
-                        carplayLog.error("📱 popToTemplate(NowPlaying) failed: \(error.localizedDescription, privacy: .public)")
-                    }
+                    guard self?.interfaceController === ic else { return }
+                    finish(error)
                 }
             }
             return
         }
-        ic.pushTemplate(nowPlaying, animated: true) { [weak self] success, error in
-            Task { @MainActor in
-                self?.isNowPlayingTransitionInFlight = false
-                if let error {
-                    carplayLog.error("📱 pushTemplate(NowPlaying) failed: \(error.localizedDescription, privacy: .public)")
+
+        let push = { [weak self] in
+            guard let self, self.interfaceController === ic else { return }
+            ic.pushTemplate(nowPlaying, animated: true) { [weak self] _, error in
+                Task { @MainActor in
+                    guard self?.interfaceController === ic else { return }
+                    finish(error)
                 }
             }
+        }
+        if ic.templates.count >= CarPlayNavigationStackPolicy.maximumDepth {
+            ic.popToRootTemplate(animated: false) { [weak self] success, error in
+                Task { @MainActor in
+                    guard self?.interfaceController === ic else { return }
+                    guard success else {
+                        finish(error)
+                        return
+                    }
+                    push()
+                }
+            }
+        } else {
+            push()
         }
     }
 
@@ -1346,32 +1660,10 @@ extension CarPlaySceneDelegate {
         artworkTasks.removeAll()
     }
 
-    private func loadArtwork(forAlbumID albumID: String, into item: CPListItem) {
-        let library = AppServices.shared.musicLibrary
-        let songs = library.songs(forAlbum: albumID)
-        let resolution = library.artworkOverrideResolution(
-            for: LibraryArtworkOwner(kind: .album, id: albumID),
-            eligibleSongs: songs
-        )
-        switch resolution {
-        case .uploaded(let contentID):
-            let id = UUID()
-            let task = Task { [weak self, weak item] in
-                defer { self?.artworkTasks[id] = nil }
-                let image = await Task.detached(priority: .utility) {
-                    MetadataAssetStore.shared.customArtworkData(contentID: contentID)
-                        .flatMap(UIImage.init(data:))
-                }.value
-                guard !Task.isCancelled, let image, let item else { return }
-                item.setImage(CarPlayTemplateImages.square(image, scale: self?.artworkScale ?? 2))
-            }
-            artworkTasks[id] = task
-        case .selectedSong(let songID):
-            guard let song = songs.first(where: { $0.id == songID }) else { return }
-            loadArtwork(for: song, into: item)
-        case .automatic:
-            guard let firstSong = songs.first else { return }
-            loadArtwork(for: firstSong, into: item)
+    private func loadArtwork(for album: Album, into item: CPListItem) {
+        let scale = artworkScale
+        loadObservedArtwork(.album(album), pixelSize: Int(CarPlayTemplateImages.listSide * scale), owner: item) { [weak item] image in
+            item?.setImage(CarPlayTemplateImages.square(image, scale: scale))
         }
     }
 
@@ -1380,7 +1672,9 @@ extension CarPlaySceneDelegate {
         let id = UUID()
         let task = Task { [weak self, weak item] in
             defer { self?.artworkTasks[id] = nil }
-            let image = await CarPlayArtworkDecoder.shared.thumbnail(forRadioID: station.id, data: data)
+            let image = await CarPlayArtworkScheduler.shared.image {
+                await CarPlayArtworkDecoder.shared.thumbnail(forRadioID: station.id, data: data)
+            }
             guard !Task.isCancelled, let image, let item else { return }
             item.setImage(CarPlayTemplateImages.square(image, scale: self?.artworkScale ?? 2))
         }
@@ -1507,7 +1801,7 @@ extension CarPlaySceneDelegate {
         // i ∈ [0, count] — passing a stale currentIndex larger than count
         // (queue replaced before currentIndex caught up) would crash.
         let safeIdx = min(max(0, player.currentIndex), queue.count)
-        let upcoming = Array(queue.suffix(from: safeIdx))
+        let upcoming = Array(queue.suffix(from: safeIdx).prefix(CPListTemplate.maximumItemCount))
         let items = upcoming.enumerated().map { offset, song -> CPListItem in
             let item = CPListItem(
                 text: song.title,
@@ -1515,7 +1809,9 @@ extension CarPlaySceneDelegate {
                     ?? song.albumTitle,
                 image: CarPlayTemplateImages.placeholder("music.note")
             )
-            loadArtwork(for: song, into: item)
+            if CarPlayArtworkLoadPolicy.shouldLoad(index: offset) {
+                loadArtwork(for: song, into: item)
+            }
             // First row corresponds to currently-playing track — show indicator.
             if offset == 0 {
                 item.isPlaying = true
@@ -1661,14 +1957,14 @@ extension CarPlaySceneDelegate {
         // scan firing a refresh every cycle leaves hundreds of orphaned
         // setImage tasks stacked on the main actor (the stutter root cause).
         cancelArtworkTasks()
-        let roots = [homeTemplate, libraryTemplate, radioTemplate, playlistsTemplate]
+        let roots = configuredTabs.compactMap { menuTemplates[$0.id] }
         // Identify which tab is on screen. If we can't tell (no tab bar yet),
         // treat "home" as visible — it's the default first tab — so we
         // always rebuild at least one tab now; the rest refresh lazily on
         // selection via the tab-bar delegate.
-        let selected = (tabBarTemplate?.selectedTemplate as? CPListTemplate) ?? homeTemplate
+        let selected = (tabBarTemplate?.selectedTemplate as? CPListTemplate) ?? roots.first
         let rootIsVisible = interfaceController?.templates.count == 1
-        for case let template? in roots {
+        for template in roots {
             if rootIsVisible, template === selected {
                 rebuildRootTemplate(template)
                 staleRootTemplates.remove(ObjectIdentifier(template))
@@ -1680,8 +1976,8 @@ extension CarPlaySceneDelegate {
     }
 
     private func markRootTemplatesStale() {
-        let roots = [homeTemplate, libraryTemplate, radioTemplate, playlistsTemplate]
-        for case let template? in roots {
+        let roots = configuredTabs.compactMap { menuTemplates[$0.id] }
+        for template in roots {
             staleRootTemplates.insert(ObjectIdentifier(template))
         }
     }
@@ -1703,19 +1999,35 @@ extension CarPlaySceneDelegate {
         staleRootTemplates.remove(key)
     }
 
-    /// Re-renders one root tab's sections from the latest library state.
-    private func rebuildRootTemplate(_ template: CPListTemplate) {
-        configureNavigation(on: template, isTabRoot: true)
-        if template === homeTemplate {
-            template.updateSections(homeSections())
-        } else if template === libraryTemplate {
-            template.updateSections(libraryMenuSections())
-        } else if template === radioTemplate {
-            template.updateSections([radioStationsSection()])
-        } else if template === playlistsTemplate {
-            template.updateSections(playlistsSections())
+    private func rebuildRootTemplate(_ template: CPListTemplate, configuration: CarPlayLayoutConfiguration? = nil) {
+        guard let tab = configuredTabs.first(where: { menuTemplates[$0.id] === template }) else { return }
+        configureNavigation(on: template, configuration: configuration, isTabRoot: true)
+        switch tab.kind {
+        case .home: template.updateSections(homeSections())
+        case .library: template.updateSections(libraryMenuSections())
+        case .radio: template.updateSections([radioStationsSection()])
+        case .playlists: template.updateSections(playlistsSections())
+        case .songs: template.updateSections(songsSections())
+        case .albums: template.updateSections(albumsSections())
+        case .artists: template.updateSections(artistsSections())
+        case .search: template.updateSections(searchSections())
+        case .folders:
+            if case .folder(let id) = template.userInfo as? DetailContext { updateFolderTemplate(template, nodeID: id) }
+            else { updateFolderTemplate(template, nodeID: nil) }
+        case .collection:
+            guard let content = tab.content else { return }
+            switch content.kind {
+            case .playlist: template.updateSections([playlistDetailSection(playlistID: content.targetID)])
+            case .album: template.updateSections([albumDetailSection(albumID: content.targetID)])
+            case .folder:
+                if case .folder(let id) = template.userInfo as? DetailContext { updateFolderTemplate(template, nodeID: id) }
+                else { updateFolderTemplate(template, nodeID: content.folderID) }
+            default: break
+            }
         }
+        staleRootTemplates.remove(ObjectIdentifier(template))
     }
+
 }
 
 #endif

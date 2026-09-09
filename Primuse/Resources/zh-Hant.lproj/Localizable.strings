@@ -3783,3 +3783,8 @@
 "carplay_module_siri_detail" = "用 Siri 选择音乐";
 "carplay_cover_wall" = "封面墙";
 "carplay_module_hidden" = "已隐藏";
+
+"carplay_main_menu" = "主選單";
+"carplay_menu_name" = "選單名稱";
+"carplay_siri_button" = "頂部按鈕";
+"carplay_siri_row" = "列表橫列";

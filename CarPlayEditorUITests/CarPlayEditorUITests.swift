@@ -2,6 +2,77 @@ import XCTest
 
 @MainActor
 final class CarPlayEditorUITests: XCTestCase {
+    func testMainMenuAndCompactActionsPreview() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.welape.yuanyin")
+        app.launchEnvironment["PRIMUSE_CARPLAY_UI_TESTS"] = "1"
+        app.launchEnvironment["PRIMUSE_CARPLAY_RESET"] = "1"
+        app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        XCTAssertTrue(app.buttons["carplay.addTab"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["carplay.previewMode"].exists)
+        XCTAssertFalse(app.segmentedControls.buttons["主菜单"].exists)
+        XCTAssertFalse(app.segmentedControls.buttons["正在播放"].exists)
+        XCTAssertTrue(app.segmentedControls["carplay.presets"].isHittable)
+        XCTAssertLessThan(app.segmentedControls["carplay.presets"].frame.maxY, app.otherElements["carplay.canvas"].firstMatch.frame.minY)
+        XCTAssertFalse(app.buttons["carplay.previousStyle"].exists)
+        XCTAssertFalse(app.buttons["carplay.nextStyle"].exists)
+        XCTAssertFalse(app.buttons["分栏式"].exists)
+        app.buttons["carplay.previewTab.tab.home"].tap()
+        app.buttons["carplay.addModule"].tap()
+        app.buttons["carplay.add.siri"].tap()
+        app.buttons["完成"].firstMatch.tap()
+        app.buttons["carplay.back"].tap()
+        app.buttons["carplay.tabVisibility.tab.radio"].tap()
+        app.buttons["carplay.addTab"].tap()
+        app.buttons["歌曲"].firstMatch.tap()
+        let songRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'carplay.menuRow.' AND label CONTAINS '歌曲'")).firstMatch
+        if !songRow.exists { app.swipeUp() }
+        let songButtons = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'carplay.editTab.' AND label == %@", "歌曲"))
+        let songID = String(songButtons.firstMatch.identifier.dropFirst("carplay.editTab.".count))
+        app.buttons["carplay.renameTab." + songID].tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        let field = alert.textFields.firstMatch
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2) + "全部音乐")
+        alert.buttons["保存"].tap()
+        attach(app, "CarPlay-main-menu-device")
+        XCTAssertTrue(app.buttons["carplay.previewSearch"].exists)
+        app.buttons["carplay.previewSiri"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["carplay.previewAssistantRow"].firstMatch.waitForExistence(timeout: 3))
+        attach(app, "CarPlay-siri-entry-device")
+        app.terminate()
+        app.launchEnvironment["PRIMUSE_CARPLAY_RESET"] = nil
+        app.launch()
+        XCTAssertTrue(app.buttons["全部音乐"].firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["carplay.previewTab.tab.radio"].exists)
+        app.buttons["carplay.previewTab.tab.playlists"].tap()
+        app.segmentedControls["carplay.presets"].buttons["胶囊式"].tap()
+        XCTAssertTrue(app.buttons["carplay.previewTab.tab.playlists"].isHittable)
+        XCTAssertTrue(app.buttons["carplay.previewSearch"].isHittable)
+        XCTAssertTrue(app.buttons["carplay.previewSiri"].isHittable)
+        attach(app, "CarPlay-capsules-menu-device")
+        let expand = app.buttons["carplay.expand"]
+        let canvas = app.otherElements["carplay.canvas"].firstMatch
+        XCTAssertLessThan(abs(expand.frame.midY - canvas.frame.minY), 24)
+        expand.tap()
+        XCTAssertTrue(app.buttons["carplay.closePreview"].waitForExistence(timeout: 3))
+        assertHidden(expand)
+        attach(app, "CarPlay-fullscreen-preview-device")
+        let visibleHome = app.buttons.matching(identifier: "carplay.previewTab.tab.home").allElementsBoundByIndex.filter(\.isHittable)
+        XCTAssertEqual(visibleHome.count, 1)
+        visibleHome.first?.tap()
+        app.buttons["carplay.closePreview"].tap()
+        XCTAssertTrue(app.buttons["carplay.addModule"].waitForExistence(timeout: 3))
+        app.buttons["carplay.actions"].tap()
+        app.buttons["carplay.playbackSettings"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["carplay.playbackOptions"].firstMatch.waitForExistence(timeout: 3))
+        assertHidden(app.buttons["carplay.previewSiri"])
+        attach(app, "CarPlay-playback-settings-device")
+        app.buttons["完成"].firstMatch.tap()
+    }
+
     func testEditingDraggingPresetComparisonAndSavedLayout() {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.welape.yuanyin")
@@ -9,6 +80,8 @@ final class CarPlayEditorUITests: XCTestCase {
         app.launchEnvironment["PRIMUSE_CARPLAY_RESET"] = "1"
         app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
+        XCTAssertTrue(app.buttons["carplay.previewTab.tab.home"].waitForExistence(timeout: 15))
+        app.buttons["carplay.previewTab.tab.home"].tap()
         let shortcut = app.buttons["carplay.module.legacy.shortcuts"]
         XCTAssertTrue(shortcut.waitForExistence(timeout: 15))
         attach(app, "CarPlay-editor-device")
@@ -46,7 +119,7 @@ final class CarPlayEditorUITests: XCTestCase {
         wall.tap()
         attach(app, "CarPlay-style-library-device")
         wall.tap()
-        XCTAssertTrue(app.buttons["carplay.style.wall"].exists)
+        XCTAssertTrue(app.segmentedControls["carplay.presets"].buttons["卡墙式"].exists)
         app.buttons["carplay.addModule"].tap()
         XCTAssertTrue(app.buttons["carplay.add.custom"].waitForExistence(timeout: 3))
         app.buttons["carplay.add.custom"].tap()
@@ -67,7 +140,7 @@ final class CarPlayEditorUITests: XCTestCase {
         app.buttons["完成"].firstMatch.tap()
         attach(app, "CarPlay-custom-content-device")
         app.buttons["完成"].firstMatch.tap()
-        app.scrollViews["carplay.presets"].swipeLeft()
+        app.buttons["carplay.actions"].tap()
         app.buttons["存为预设"].tap()
         let alert = app.alerts.firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 3))
@@ -81,6 +154,11 @@ final class CarPlayEditorUITests: XCTestCase {
         app.buttons["carplay.styles"].tap()
         app.swipeUp()
         XCTAssertTrue(app.staticTexts["通勤布局"].waitForExistence(timeout: 3))
+    }
+
+    private func assertHidden(_ element: XCUIElement) {
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !element.isHittable }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 3), .completed)
     }
 
     private func attach(_ app: XCUIApplication, _ name: String) {

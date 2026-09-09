@@ -5,6 +5,7 @@ import SwiftUI
 struct CarPlayContentPicker: View {
     let catalog: CarPlayEditorCatalog
     let add: (CarPlayLayoutItem) -> Bool
+    let allowedKinds: [CarPlayLayoutItem.Kind]
     @Environment(\.dismiss) private var dismiss
     @State private var kind: CarPlayLayoutItem.Kind
     @State private var query = ""
@@ -14,9 +15,10 @@ struct CarPlayContentPicker: View {
     @State private var folders = CarPlayFolderLibrary.shared
     @State private var owner = UUID()
 
-    init(catalog: CarPlayEditorCatalog, initialKind: CarPlayLayoutItem.Kind = .playlist, add: @escaping (CarPlayLayoutItem) -> Bool) {
+    init(catalog: CarPlayEditorCatalog, initialKind: CarPlayLayoutItem.Kind = .playlist, allowedKinds: [CarPlayLayoutItem.Kind] = CarPlayLayoutItem.Kind.allCases, add: @escaping (CarPlayLayoutItem) -> Bool) {
         self.catalog = catalog
         self.add = add
+        self.allowedKinds = allowedKinds
         _kind = State(initialValue: initialKind)
     }
 
@@ -35,7 +37,7 @@ struct CarPlayContentPicker: View {
             }.font(.system(size: 14)).padding(11).background(CarPlayEditorTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             ScrollView(.horizontal) {
                 HStack(spacing: 7) {
-                    ForEach(CarPlayLayoutItem.Kind.allCases) { option in
+                    ForEach(allowedKinds) { option in
                         Button { kind = option } label: {
                             Label(LocalizedStringKey(title(option)), systemImage: symbol(option)).font(.system(size: 12, weight: .medium))
                                 .padding(.horizontal, 11).padding(.vertical, 8)

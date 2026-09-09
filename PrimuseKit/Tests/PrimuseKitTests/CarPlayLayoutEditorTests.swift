@@ -3,6 +3,60 @@ import Testing
 @testable import PrimuseKit
 
 struct CarPlayLayoutEditorTests {
+    @Test func retiredSplitLayoutKeepsContentAndUsesSupportedPresentation() throws {
+        let data = Data(#"{"visualStyle":"split","browseStyle":"list","customBlocks":[{"id":"favorite","kind":"custom","style":"list","items":[{"id":"p","kind":"playlist","targetID":"commute","title":"Commute"}]}]}"#.utf8)
+        let configuration = try JSONDecoder().decode(CarPlayLayoutConfiguration.self, from: data)
+        #expect(configuration.visualStyle == .list)
+        #expect(configuration.blocks.first?.items.first?.targetID == "commute")
+        #expect(CarPlayVisualStyle.allCases.map(\.rawValue) == ["list", "wall", "capsules"])
+        #expect(configuration.tabs == CarPlayMainTab.defaults)
+    }
+
+    @Test func menuOrderVisibilityAndCollectionsSurviveSavingAndStyleChanges() throws {
+        var configuration = CarPlayLayoutConfiguration()
+        let folder = LibraryFolderNodeID(sourceID: "nas", kind: .folder, normalizedRelativePath: "Lossless")
+        configuration.tabs = [
+            .init(id: "music", kind: .collection, title: "Commute", content: .init(kind: .playlist, targetID: "playlist-25", title: "Playlist")),
+            .init(id: "folders", kind: .collection, content: .init(kind: .folder, targetID: HomeFolderPinStorage.encode([folder]), title: "Lossless")),
+            .init(id: "home", kind: .home, isVisible: false),
+            .init(id: "radio", kind: .radio)
+        ]
+        let mutation0 = configuration.moveTab("radio", before: "music")
+        #expect(mutation0)
+        #expect(configuration.visibleTabs(maximumCount: 4).map(\.id) == ["radio", "music", "folders"])
+        #expect(configuration.visibleTabs(maximumCount: 2).map(\.id) == ["radio", "music"])
+        let expected = configuration.tabs
+        for style in CarPlayVisualStyle.allCases { configuration.applyVisualStyle(style); #expect(configuration.tabs == expected) }
+        configuration.apply(.focus)
+        #expect(configuration.tabs == expected)
+        let restored = try JSONDecoder().decode(CarPlayLayoutConfiguration.self, from: JSONEncoder().encode(configuration))
+        #expect(restored.tabs == expected)
+        #expect(restored.tabs[2].content?.folderID == folder)
+    }
+
+    @Test func menuCapacityCannotHideLastTabOrEnableTooManyTabs() {
+        var configuration = CarPlayLayoutConfiguration()
+        let mutation1 = configuration.setTabVisible("tab.radio", visible: false, maximumCount: 4)
+        #expect(mutation1)
+        let mutation2 = configuration.setTabVisible("tab.radio", visible: true, maximumCount: 3)
+        #expect(!mutation2)
+        let mutation3 = configuration.setTabVisible("tab.playlists", visible: false, maximumCount: 4)
+        #expect(mutation3)
+        let mutation4 = configuration.setTabVisible("tab.library", visible: false, maximumCount: 4)
+        #expect(mutation4)
+        let before = configuration
+        let mutation5 = configuration.setTabVisible("tab.home", visible: false, maximumCount: 4)
+        #expect(!mutation5)
+        let mutation6 = configuration.moveTab("tab.home", before: "deleted")
+        #expect(!mutation6)
+        #expect(configuration == before)
+        configuration.tabs = []
+        #expect(configuration.visibleTabs(maximumCount: 4).map(\.kind) == [.home])
+        let invalid = CarPlayMainTab(id: "bad", kind: .collection, content: .init(kind: .folder, targetID: "bad", title: "Missing"))
+        configuration.tabs = [invalid, .init(id: "valid", kind: .songs), .init(id: "valid", kind: .radio)]
+        #expect(configuration.visibleTabs(maximumCount: 4).map(\.kind) == [.songs])
+    }
+
     @Test func visualPresetsPreserveContentsVisibilityAndOrder() throws {
         var configuration = CarPlayLayoutConfiguration()
         var block = CarPlayLayoutBlock(id: "favorite", kind: .custom)

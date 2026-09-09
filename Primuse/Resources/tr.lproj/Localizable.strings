@@ -3712,3 +3712,8 @@
 "library_review_comment_hint" = "Opens the comment editor.";
 "library_review_comment_title" = "Comment";
 "library_review_star_format" = "%d Stars";
+
+"carplay_main_menu" = "Ana menü";
+"carplay_menu_name" = "Menü adı";
+"carplay_siri_button" = "Üst düğme";
+"carplay_siri_row" = "Liste satırı";

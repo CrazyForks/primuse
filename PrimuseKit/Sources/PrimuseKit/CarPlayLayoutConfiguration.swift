@@ -13,7 +13,7 @@ public enum CarPlayBrowseStyle: String, Codable, CaseIterable, Identifiable, Sen
 }
 
 public enum CarPlayVisualStyle: String, Codable, CaseIterable, Identifiable, Sendable {
-    case list, wall, capsules, split
+    case list, wall, capsules
     public var id: String { rawValue }
     public var titleKey: String { "carplay_visual_" + rawValue }
     public var subtitleKey: String { "carplay_visual_" + rawValue + "_detail" }
@@ -25,10 +25,81 @@ public enum CarPlayHomeSection: String, Codable, CaseIterable, Identifiable, Sen
     public var titleKey: String { "carplay_section_" + rawValue }
 }
 
+public struct CarPlayMainTab: Codable, Equatable, Identifiable, Sendable {
+    public enum Kind: String, Codable, CaseIterable, Sendable {
+        case home, library, radio, playlists, songs, albums, artists, folders, search, collection
+
+        public var titleKey: String {
+            switch self {
+            case .home: "carplay_home_title"
+            case .library: "library_title"
+            case .radio: "radio_title"
+            case .playlists, .songs, .albums, .artists: "carplay_" + rawValue + "_title"
+            case .folders: "library_browse_folder"
+            case .search: "search_title"
+            case .collection: "carplay_content_sources"
+            }
+        }
+
+        public var symbol: String {
+            switch self {
+            case .home: "house"
+            case .library: "square.stack"
+            case .radio: "radio"
+            case .playlists, .collection: "music.note.list"
+            case .songs: "music.note"
+            case .albums: "square.stack"
+            case .artists: "music.mic"
+            case .folders: "folder"
+            case .search: "magnifyingglass"
+            }
+        }
+    }
+
+    public var id: String
+    public var kind: Kind
+    public var title: String
+    public var isVisible: Bool
+    public var content: CarPlayLayoutItem?
+
+    public init(id: String = UUID().uuidString, kind: Kind, title: String = "", isVisible: Bool = true, content: CarPlayLayoutItem? = nil) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.isVisible = isVisible
+        self.content = content
+    }
+
+    public var symbol: String {
+        guard kind == .collection else { return kind.symbol }
+        switch content?.kind {
+        case .folder: return "folder"
+        case .album: return "square.stack"
+        default: return "music.note.list"
+        }
+    }
+
+    public var isValid: Bool {
+        guard !id.isEmpty else { return false }
+        guard kind == .collection else { return true }
+        guard let content, !content.targetID.isEmpty else { return false }
+        return content.kind == .playlist || content.kind == .album || (content.kind == .folder && content.folderID != nil)
+    }
+
+    public static var defaults: [Self] {
+        [Kind.home, .library, .radio, .playlists].map { Self(id: "tab." + $0.rawValue, kind: $0) }
+    }
+}
+
+public enum CarPlaySiriPresentation: String, Codable, Sendable {
+    case button, row
+}
+
 public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     public static let storageKey = "primuse.carplay.layout.v1"
     public static let maximumShortcutCount = 12
     public static let maximumBlockCount = 12
+    public static let maximumSavedTabCount = 12
 
     public var browseStyle: CarPlayBrowseStyle = .list
     public var sectionOrder: [CarPlayHomeSection] = CarPlayHomeSection.allCases
@@ -41,6 +112,8 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     public var pinnedFolders = "[]"
     public var customBlocks: [CarPlayLayoutBlock]?
     public var visualStyle: CarPlayVisualStyle = .list
+    public var customTabs: [CarPlayMainTab]?
+    public var siriPresentation: CarPlaySiriPresentation = .button
 
     public init() {}
 
@@ -54,6 +127,44 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     }
 
     public var showsSiri: Bool { blocks.first { $0.kind == .siri }?.isVisible ?? false }
+
+    public var tabs: [CarPlayMainTab] {
+        get {
+            var seen = Set<String>()
+            let valid = (customTabs ?? CarPlayMainTab.defaults).filter { $0.isValid && seen.insert($0.id).inserted }
+            return Array(valid.prefix(Self.maximumSavedTabCount))
+        }
+        set { customTabs = newValue }
+    }
+
+    public func visibleTabs(maximumCount: Int) -> [CarPlayMainTab] {
+        let visible = tabs.filter(\.isVisible)
+        return Array((visible.isEmpty ? [CarPlayMainTab.defaults[0]] : visible).prefix(max(1, maximumCount)))
+    }
+
+    @discardableResult
+    public mutating func setTabVisible(_ id: String, visible: Bool, maximumCount: Int) -> Bool {
+        var updated = tabs
+        guard let index = updated.firstIndex(where: { $0.id == id }) else { return false }
+        guard updated[index].isVisible != visible else { return true }
+        let count = updated.filter(\.isVisible).count
+        guard visible ? count < maximumCount : count > 1 else { return false }
+        updated[index].isVisible = visible
+        tabs = updated
+        return true
+    }
+
+    @discardableResult
+    public mutating func moveTab(_ id: String, before destination: String?) -> Bool {
+        var updated = tabs
+        guard id != destination, let index = updated.firstIndex(where: { $0.id == id }),
+              destination == nil || updated.contains(where: { $0.id == destination }) else { return false }
+        let tab = updated.remove(at: index)
+        let target = destination.flatMap { id in updated.firstIndex { $0.id == id } } ?? updated.count
+        updated.insert(tab, at: target)
+        tabs = updated
+        return true
+    }
 
     public var visibleSections: [CarPlayHomeSection] {
         Self.unique(sectionOrder + CarPlayHomeSection.allCases).filter { !hiddenSections.contains($0) }
@@ -113,7 +224,11 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
         let playlists = pinnedPlaylistIDs
         let folders = pinnedFolders
         let collections = blocks.filter { $0.kind == .custom || $0.usesCustomContent }
+        let tabs = customTabs
+        let siri = siriPresentation
         self = Self()
+        customTabs = tabs
+        siriPresentation = siri
         pinnedPlaylistIDs = playlists
         pinnedFolders = folders
         switch preset {
@@ -140,7 +255,7 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
 
     public mutating func applyVisualStyle(_ style: CarPlayVisualStyle) {
         visualStyle = style
-        browseStyle = style == .list || style == .split ? .list : (style == .capsules ? .capsules : .covers)
+        browseStyle = style == .list ? .list : (style == .capsules ? .capsules : .covers)
         blocks = blocks.map { block in
             var result = block
             result.style = browseStyle
@@ -154,6 +269,8 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
         var presentation = self
         presentation.pinnedPlaylistIDs = []
         presentation.pinnedFolders = "[]"
+        presentation.customTabs = nil
+        presentation.siriPresentation = .button
         return CarPlayLayoutPreset.allCases.first { preset in
             var candidate = Self()
             candidate.apply(preset)
@@ -175,7 +292,7 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case browseStyle, sectionOrder, hiddenSections, playsCollectionsDirectly
         case opensNowPlayingOnConnect, opensNowPlayingAfterSelection, minimalNowPlaying
-        case pinnedPlaylistIDs, pinnedFolders, customBlocks, visualStyle
+        case pinnedPlaylistIDs, pinnedFolders, customBlocks, visualStyle, customTabs, siriPresentation
     }
 
     public init(from decoder: Decoder) throws {
@@ -183,6 +300,14 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         browseStyle = (try? values.decode(CarPlayBrowseStyle.self, forKey: .browseStyle)) ?? browseStyle
         visualStyle = (try? values.decode(CarPlayVisualStyle.self, forKey: .visualStyle)) ?? (browseStyle == .list ? .list : .wall)
+        if (try? values.decode(String.self, forKey: .visualStyle)) == "split" {
+            visualStyle = .list
+            browseStyle = .list
+        }
+        siriPresentation = (try? values.decode(CarPlaySiriPresentation.self, forKey: .siriPresentation)) ?? .button
+        if let records = try? values.decode([TabRecord].self, forKey: .customTabs) {
+            customTabs = records.compactMap(\.value)
+        }
         if let order = try? values.decode([String].self, forKey: .sectionOrder) {
             sectionOrder = Self.unique(order.compactMap(CarPlayHomeSection.init(rawValue:)) + CarPlayHomeSection.allCases)
         }
@@ -203,6 +328,11 @@ public struct CarPlayLayoutConfiguration: Codable, Equatable, Sendable {
     private struct BlockRecord: Decodable {
         let value: CarPlayLayoutBlock?
         init(from decoder: Decoder) throws { value = try? CarPlayLayoutBlock(from: decoder) }
+    }
+
+    private struct TabRecord: Decodable {
+        let value: CarPlayMainTab?
+        init(from decoder: Decoder) throws { value = try? CarPlayMainTab(from: decoder) }
     }
 
     private static func unique<T: Hashable>(_ values: [T]) -> [T] {

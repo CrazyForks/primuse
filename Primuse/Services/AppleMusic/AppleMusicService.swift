@@ -96,6 +96,10 @@ final class AppleMusicService {
     /// queue.entries 的 PrimuseKit.Song 投影, 给 NowPlayingView 的队列视图用。
     /// 投影在 polling 时做一次, 避免每个观察方各自计算。
     private(set) var queueSongs: [PrimuseKit.Song] = []
+    private(set) var nowPlayingQueueEntryID: UUID?
+    @ObservationIgnored private var managedQueueEntryIDs: [String: UUID] = [:]
+    @ObservationIgnored private var lastObservedEntryID: String?
+    @ObservationIgnored private var recoveredWithSingleItem = false
     /// repeat / shuffle 状态投影 ── 映射成 PrimuseKit.RepeatMode 让 NowPlayingView
     /// 的循环按钮 / 随机按钮可以直接读 + 写。
     private(set) var repeatModeMirror: PrimuseKit.RepeatMode = .off
@@ -292,12 +296,21 @@ final class AppleMusicService {
     private func startPreparedQueue(
         songs: [MusicKit.Song],
         startingAt starting: MusicKit.Song,
+        startingIndex: Int? = nil,
+        queueEntryIDs: [UUID]? = nil,
         commandGeneration: UInt64,
         requestID: UUID
     ) async throws {
+        let index = startingIndex ?? songs.firstIndex(where: { $0.id == starting.id }) ?? 0
+        let entries = songs.map { MusicPlayer.Queue.Entry($0) }
+        managedQueueEntryIDs = queueEntryIDs.map {
+            Dictionary(uniqueKeysWithValues: zip(entries.map(\.id), $0))
+        } ?? [:]
+        nowPlayingQueueEntryID = managedQueueEntryIDs[entries[index].id]
+        lastObservedEntryID = entries[index].id
         ApplicationMusicPlayer.shared.queue = ApplicationMusicPlayer.Queue(
-            for: songs,
-            startingAt: starting
+            entries,
+            startingAt: entries[index]
         )
         do {
             // Apple documents this as the step that resolves and buffers the
@@ -332,6 +345,8 @@ final class AppleMusicService {
     private func startPreparedQueueWithSingleItemFallback(
         songs: [MusicKit.Song],
         startingAt starting: MusicKit.Song,
+        startingIndex: Int? = nil,
+        queueEntryIDs: [UUID]? = nil,
         commandGeneration: UInt64,
         requestID: UUID
     ) async throws {
@@ -339,6 +354,8 @@ final class AppleMusicService {
             try await startPreparedQueue(
                 songs: songs,
                 startingAt: starting,
+                startingIndex: startingIndex,
+                queueEntryIDs: queueEntryIDs,
                 commandGeneration: commandGeneration,
                 requestID: requestID
             )
@@ -373,10 +390,12 @@ final class AppleMusicService {
                     + "(domain=\(nsError.domain), code=\(nsError.code)); retrying selected item only"
             )
             ApplicationMusicPlayer.shared.stop()
+            recoveredWithSingleItem = true
             do {
                 try await startPreparedQueue(
                     songs: [starting],
                     startingAt: starting,
+                    queueEntryIDs: queueEntryIDs.map { [$0[startingIndex ?? 0]] },
                     commandGeneration: commandGeneration,
                     requestID: requestID
                 )
@@ -428,6 +447,7 @@ final class AppleMusicService {
      func playUserLibrary(
         songs: [MusicKit.Song],
         startAt index: Int,
+        queueEntryIDs: [UUID]? = nil,
         source: AppleMusicPlaybackSource,
         expectedDuration: TimeInterval,
         requestID: UUID,
@@ -482,6 +502,8 @@ final class AppleMusicService {
              try await startPreparedQueueWithSingleItemFallback(
                 songs: songs,
                 startingAt: starting,
+                startingIndex: safeIndex,
+                queueEntryIDs: queueEntryIDs,
                 commandGeneration: commandGeneration,
                 requestID: requestID
              )
@@ -721,8 +743,6 @@ final class AppleMusicService {
         }
     }
 
-    /// 下一首 — 当前实现一首一首播 (queue 只塞一首歌), 所以 skip 实际等同 stop。
-    /// 后续可以扩展成顺播多首。
     func stopAppleMusic() {
         playbackCommandGeneration &+= 1
         catalogPlaybackTask?.cancel()
@@ -740,6 +760,10 @@ final class AppleMusicService {
         ApplicationMusicPlayer.shared.stop()
         nowPlayingSong = nil
         nowPlayingRawSongID = nil
+        nowPlayingQueueEntryID = nil
+        managedQueueEntryIDs = [:]
+        lastObservedEntryID = nil
+        recoveredWithSingleItem = false
         isAppleMusicPlaying = false
         currentPlaybackTime = 0
         currentDuration = 0
@@ -777,6 +801,15 @@ final class AppleMusicService {
          let status = player.state.playbackStatus
          let playbackTime = player.playbackTime
          let nowPlaying = status == .playing
+         if let entry = player.queue.currentEntry, entry.id != lastObservedEntryID {
+             lastObservedEntryID = entry.id
+             hasObservedActivePlayback = false
+             lastObservedPlaybackTime = nil
+             furthestObservedPlaybackTime = 0
+             nearEndStallSampleCount = 0
+         }
+         let entryID = player.queue.currentEntry.flatMap { managedQueueEntryIDs[$0.id] }
+         if nowPlayingQueueEntryID != entryID { nowPlayingQueueEntryID = entryID }
 
          // Refresh duration before evaluating the end state. MusicKit can
          // publish the first useful duration and the terminal status in
@@ -827,7 +860,12 @@ final class AppleMusicService {
              playbackTime: playbackTime,
              furthestObservedTime: furthestObservedPlaybackTime
          )
-         let endedAfterPlaying = AppleMusicPlaybackEndPolicy.shouldAdvance(
+         let nativePosition = player.queue.currentEntry.flatMap { current in
+             player.queue.entries.firstIndex(where: { $0.id == current.id })
+         }
+         let hasNativeContinuation = nativePosition.map { $0 + 1 < player.queue.entries.count } == true
+             || player.state.repeatMode == .all || player.state.repeatMode == .one
+         let endedAfterPlaying = !hasNativeContinuation && AppleMusicPlaybackEndPolicy.shouldAdvance(
              hasObservedActivePlayback: hasObservedActivePlayback,
              isStopped: status == .stopped,
              isPaused: status == .paused,
@@ -942,6 +980,10 @@ final class AppleMusicService {
          resetPlaybackEndObservation()
          nowPlayingSong = nil
          nowPlayingRawSongID = nil
+         nowPlayingQueueEntryID = nil
+         managedQueueEntryIDs = [:]
+         lastObservedEntryID = nil
+         recoveredWithSingleItem = false
          isAppleMusicPlaying = false
          currentPlaybackTime = 0
          currentDuration = 0
@@ -1008,9 +1050,44 @@ final class AppleMusicService {
          resetPublishedPlaybackState()
      }
 
-     /// Mixed-source queues are advanced by Primuse, not MusicKit. Reset the
-     /// system player's modes so its one-item DRM queue ends exactly once;
-     /// Primuse's own repeat and shuffle state remains untouched.
+     /// Preserve the active native entry while applying edits to Primuse's queue.
+     func updateManagedQueue(
+         songs: [MusicKit.Song],
+         entryIDs: [UUID],
+         currentEntryID: UUID,
+         repeatMode: PrimuseKit.RepeatMode,
+         requestID: UUID
+     ) {
+         guard isPlaybackRequestActive(requestID), playbackPhase(for: requestID) == .started,
+               !recoveredWithSingleItem,
+               songs.count == entryIDs.count,
+               entryIDs.contains(currentEntryID),
+               let current = ApplicationMusicPlayer.shared.queue.currentEntry,
+               managedQueueEntryIDs[current.id] == currentEntryID else { return }
+         let player = ApplicationMusicPlayer.shared
+         let existing = Dictionary(uniqueKeysWithValues: player.queue.entries.compactMap { entry in
+             managedQueueEntryIDs[entry.id].map { ($0, entry) }
+         })
+         let entries = zip(songs, entryIDs).map { song, id in
+             existing[id] ?? MusicPlayer.Queue.Entry(song)
+         }
+         managedQueueEntryIDs = Dictionary(uniqueKeysWithValues: zip(entries.map(\.id), entryIDs))
+         if player.queue.entries.map(\.id) != entries.map(\.id) {
+             player.queue.entries = .init(entries)
+         }
+         setAppleMusicRepeat(repeatMode)
+         player.state.shuffleMode = .off
+     }
+
+     func retainCurrentManagedQueueEntry() {
+         guard let current = ApplicationMusicPlayer.shared.queue.currentEntry,
+               managedQueueEntryIDs[current.id] != nil else { return }
+         ApplicationMusicPlayer.shared.queue.entries = [current]
+         prepareForPrimuseManagedQueue()
+     }
+
+     /// Primuse supplies the already ordered segment; MusicKit must not
+     /// independently shuffle it or repeat across an unavailable boundary.
      func prepareForPrimuseManagedQueue() {
          ApplicationMusicPlayer.shared.state.repeatMode = MusicKit.MusicPlayer.RepeatMode.none
          ApplicationMusicPlayer.shared.state.shuffleMode = .off
