@@ -23,3 +23,5 @@
 "no_pinned_folders" = "Wähle unter „Alle anzeigen“ deine Verzeichnisse.";
 "folder_ranking_scope" = "Verzeichnis-Ranglisten enthalten Titel mit einem aktuellen Verzeichnis.";
 "folder_as_playlist" = "Als Wiedergabeliste verwenden";
+"expand_top_20" = "Show Top 20";
+"collapse_ranking" = "Show Less";

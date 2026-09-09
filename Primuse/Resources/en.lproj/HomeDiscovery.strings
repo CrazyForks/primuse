@@ -23,3 +23,5 @@
 "no_pinned_folders" = "Choose your favorite directories in See All.";
 "folder_ranking_scope" = "Directory rankings include songs with a current directory.";
 "folder_as_playlist" = "Use as Playlist";
+"expand_top_20" = "Show Top 20";
+"collapse_ranking" = "Show Less";

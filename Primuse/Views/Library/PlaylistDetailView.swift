@@ -228,6 +228,12 @@ struct PlaylistDetailView: View {
                 }
                 .padding(.horizontal)
 
+                LibraryReviewSection(
+                    subject: .playlist(playlist.id),
+                    compact: true
+                )
+                .padding(.horizontal)
+
                 if supportsAlwaysDownload {
                     alwaysDownloadControl
                         .padding(.horizontal)
@@ -555,6 +561,8 @@ struct PlaylistDetailView: View {
                 )
 
                 VStack(alignment: .leading, spacing: PMSpace.l) {
+                    LibraryReviewSection(subject: .playlist(playlist.id))
+
                     if supportsAlwaysDownload {
                         alwaysDownloadControl
                     }

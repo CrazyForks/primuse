@@ -3,6 +3,125 @@ import SwiftUI
 import PrimuseKit
 import UIKit
 
+struct TVLibraryReviewControl: View {
+    @Environment(TVStore.self) private var store
+    @AppStorage(LibraryReviewPreferences.enabledKey) private var isEnabled = false
+
+    let subject: LibraryReviewSubject
+    @State private var showsCommentEditor = false
+
+    private var review: LibraryReview? {
+        store.library.libraryReview(for: subject)
+    }
+
+    var body: some View {
+        if isEnabled {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    ForEach(1...5, id: \.self) { value in
+                        Button {
+                            store.library.updateLibraryReview(
+                                for: subject,
+                                rating: value == review?.rating ? nil : value,
+                                comment: review?.comment ?? ""
+                            )
+                        } label: {
+                            Image(systemName: value <= (review?.rating ?? 0) ? "star.fill" : "star")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(value <= (review?.rating ?? 0) ? TVColor.warn : TVColor.textMuted)
+                                .frame(width: 54, height: 54)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel(
+                            Text(
+                                String(
+                                    format: String(localized: "library_review_star_format"),
+                                    value
+                                )
+                            )
+                        )
+                    }
+
+                    Button {
+                        showsCommentEditor = true
+                    } label: {
+                        Image(systemName: review?.comment.isEmpty == false ? "text.bubble.fill" : "text.bubble")
+                            .font(.system(size: 22, weight: .semibold))
+                            .frame(width: 54, height: 54)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel(
+                        Text(
+                            review?.comment.isEmpty == false
+                                ? "library_review_edit_comment"
+                                : "library_review_add_comment"
+                        )
+                    )
+                }
+
+                if let comment = review?.comment, !comment.isEmpty {
+                    Text(verbatim: comment)
+                        .font(.system(size: 18))
+                        .foregroundStyle(TVColor.textMuted)
+                        .lineLimit(2)
+                        .frame(maxWidth: 560, alignment: .leading)
+                }
+            }
+            .fullScreenCover(isPresented: $showsCommentEditor) {
+                TVLibraryReviewCommentEditor(subject: subject)
+                    .environment(store)
+            }
+        }
+    }
+}
+
+private struct TVLibraryReviewCommentEditor: View {
+    @Environment(TVStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    let subject: LibraryReviewSubject
+    @State private var draft = ""
+
+    private var currentReview: LibraryReview? {
+        store.library.libraryReview(for: subject)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("library_review_comment_title", text: $draft)
+                        .frame(minHeight: 90)
+                        .onChange(of: draft) { _, value in
+                            if value.count > LibraryReviewPreferences.maximumCommentLength {
+                                draft = String(value.prefix(LibraryReviewPreferences.maximumCommentLength))
+                            }
+                        }
+                } footer: {
+                    Text(verbatim: "\(draft.count)/\(LibraryReviewPreferences.maximumCommentLength)")
+                }
+            }
+            .navigationTitle("library_review_comment_title")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("save") {
+                        store.library.updateLibraryReview(
+                            for: subject,
+                            rating: currentReview?.rating,
+                            comment: draft
+                        )
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear { draft = currentReview?.comment ?? "" }
+        }
+    }
+}
+
 // MARK: - 横向区块(Apple Music tvOS shelf 风)
 
 struct TVRow<Content: View>: View {

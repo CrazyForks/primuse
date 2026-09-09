@@ -5,6 +5,70 @@ import UIKit
 @testable import Primuse
 
 @MainActor
+final class LibraryReviewTests: XCTestCase {
+    func testReviewNormalizationPersistenceAndDeletionTombstone() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimuseReviewTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let subject = LibraryReviewSubject.album("album-1")
+        let library = MusicLibrary(storageDirectory: directory)
+        library.updateLibraryReview(
+            for: subject,
+            rating: 8,
+            comment: "  值得反复听  ",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        XCTAssertNil(library.libraryReview(for: subject)?.rating)
+        XCTAssertEqual(library.libraryReview(for: subject)?.comment, "值得反复听")
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("Review snapshot should persist")
+        }
+
+        let restored = MusicLibrary(storageDirectory: directory)
+        XCTAssertEqual(restored.libraryReview(for: subject)?.comment, "值得反复听")
+        restored.updateLibraryReview(
+            for: subject,
+            rating: nil,
+            comment: "",
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+        XCTAssertNil(restored.libraryReview(for: subject))
+        XCTAssertEqual(restored.allLibraryReviews.count, 1)
+        XCTAssertTrue(restored.allLibraryReviews[0].isDeleted)
+    }
+
+    func testNewerReviewWinsSnapshotReconciliationIncludingDeletion() {
+        let subject = LibraryReviewSubject.song("song-1")
+        let active = LibraryReview(
+            subject: subject,
+            rating: 5,
+            comment: "旧评论",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            deletedAt: nil
+        )
+        let deleted = LibraryReview(
+            subject: subject,
+            rating: nil,
+            comment: "",
+            updatedAt: Date(timeIntervalSince1970: 200),
+            deletedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(
+            LibraryReviewReconciliationPolicy.winner(local: active, remote: deleted),
+            deleted
+        )
+        XCTAssertEqual(
+            LibraryReviewReconciliationPolicy.winner(local: deleted, remote: active),
+            deleted
+        )
+    }
+}
+
+@MainActor
 final class MusicLibraryLikedMutationTests: XCTestCase {
     func testBatchLikedMembershipEmitsOnlyActualChangesAndRollbackDoesNotReenter() async throws {
         let storageDirectory = FileManager.default.temporaryDirectory

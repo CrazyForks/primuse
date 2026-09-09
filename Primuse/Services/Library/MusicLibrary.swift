@@ -2632,6 +2632,65 @@ enum LibraryMaintenanceDisposition: Sendable {
     case deferred
 }
 
+enum LibraryReviewKind: String, Codable, CaseIterable, Sendable {
+    case song
+    case album
+    case playlist
+    case genre
+}
+
+struct LibraryReviewSubject: Codable, Hashable, Sendable {
+    let kind: LibraryReviewKind
+    let entityID: String
+
+    var storageKey: String { "\(kind.rawValue):\(entityID)" }
+
+    static func song(_ id: String) -> Self { Self(kind: .song, entityID: id) }
+    static func album(_ id: String) -> Self { Self(kind: .album, entityID: id) }
+    static func playlist(_ id: String) -> Self { Self(kind: .playlist, entityID: id) }
+    static func genre(_ id: String) -> Self { Self(kind: .genre, entityID: id) }
+}
+
+struct LibraryReview: Codable, Hashable, Identifiable, Sendable {
+    let subject: LibraryReviewSubject
+    let rating: Int?
+    let comment: String
+    let updatedAt: Date
+    let deletedAt: Date?
+
+    var id: String { subject.storageKey }
+    var isDeleted: Bool { deletedAt != nil }
+}
+
+enum LibraryReviewPreferences {
+    static let enabledKey = "primuse.library.ratingsAndComments.enabled"
+    static let maximumCommentLength = 2_000
+
+    static func normalizedRating(_ rating: Int?) -> Int? {
+        rating.flatMap { (1...5).contains($0) ? $0 : nil }
+    }
+
+    static func normalizedComment(_ comment: String) -> String {
+        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(maximumCommentLength))
+    }
+}
+
+enum LibraryReviewReconciliationPolicy {
+    static func winner(local: LibraryReview, remote: LibraryReview) -> LibraryReview {
+        guard local.updatedAt == remote.updatedAt else {
+            return local.updatedAt > remote.updatedAt ? local : remote
+        }
+        let localKey = stableTieBreakKey(local)
+        let remoteKey = stableTieBreakKey(remote)
+        return localKey >= remoteKey ? local : remote
+    }
+
+    private static func stableTieBreakKey(_ review: LibraryReview) -> String {
+        "\(review.deletedAt == nil ? 0 : 1):\(review.rating ?? 0):\(review.comment)"
+    }
+}
+
 @MainActor
 @Observable
 final class MusicLibrary {
@@ -2670,6 +2729,7 @@ final class MusicLibrary {
     /// `playlists` filters this down.
     private(set) var allPlaylists: [Playlist] = []
     private var artworkOverridesByOwner: [String: LibraryArtworkOverride] = [:]
+    private var libraryReviewsBySubject: [String: LibraryReview] = [:]
     @ObservationIgnored
     private var automaticArtistArtworkCatalogsBySource: [String: SourceArtistArtworkCatalog] = [:]
     @ObservationIgnored private var automaticArtistArtworkCatalogRevision: UInt64 = 0
@@ -2679,6 +2739,10 @@ final class MusicLibrary {
     private(set) var artworkOverrideRevision: Int = 0
     var allArtworkOverrides: [LibraryArtworkOverride] {
         artworkOverridesByOwner.values.sorted { $0.id < $1.id }
+    }
+    private(set) var libraryReviewRevision: Int = 0
+    var allLibraryReviews: [LibraryReview] {
+        libraryReviewsBySubject.values.sorted { $0.id < $1.id }
     }
     private var mirrorPlaylistSuppressions: [String: MirrorPlaylistSuppression] = [:]
     /// Live (non-deleted) playlists for normal UI use. Apple Music's library
@@ -4186,6 +4250,40 @@ final class MusicLibrary {
             songLimit: 0,
             albumLimit: limit
         ).albumResults
+    }
+
+    func libraryReview(for subject: LibraryReviewSubject) -> LibraryReview? {
+        _ = libraryReviewRevision
+        guard let review = libraryReviewsBySubject[subject.storageKey], !review.isDeleted else {
+            return nil
+        }
+        return review
+    }
+
+    func updateLibraryReview(
+        for subject: LibraryReviewSubject,
+        rating: Int?,
+        comment: String,
+        updatedAt: Date = Date()
+    ) {
+        let rating = LibraryReviewPreferences.normalizedRating(rating)
+        let comment = LibraryReviewPreferences.normalizedComment(comment)
+        let existing = libraryReview(for: subject)
+
+        guard existing?.rating != rating || existing?.comment != comment else { return }
+
+        let shouldDelete = rating == nil && comment.isEmpty
+        if shouldDelete, existing == nil { return }
+
+        libraryReviewsBySubject[subject.storageKey] = LibraryReview(
+            subject: subject,
+            rating: shouldDelete ? nil : rating,
+            comment: shouldDelete ? "" : comment,
+            updatedAt: updatedAt,
+            deletedAt: shouldDelete ? updatedAt : nil
+        )
+        libraryReviewRevision &+= 1
+        persistSnapshot(after: 0.2)
     }
 
     func songs(forAlbum albumID: String) -> [Song] {
@@ -6875,6 +6973,12 @@ final class MusicLibrary {
                 ) == .local ? local : remote
             }
         )
+        libraryReviewsBySubject = Dictionary(
+            (snapshot.libraryReviews ?? []).map { ($0.subject.storageKey, $0) },
+            uniquingKeysWith: { local, remote in
+                LibraryReviewReconciliationPolicy.winner(local: local, remote: remote)
+            }
+        )
         mirrorPlaylistSuppressions = Dictionary(
             uniqueKeysWithValues: (snapshot.mirrorPlaylistSuppressions ?? []).map { ($0.id, $0) }
         )
@@ -6883,6 +6987,7 @@ final class MusicLibrary {
         playlistSongIDs = snapshot.playlistSongIDs ?? [:]
         playlistCollectionRevision &+= 1
         artworkOverrideRevision &+= 1
+        libraryReviewRevision &+= 1
         recentPlaybackSongIDs = snapshot.recentPlaybackSongIDs ?? []
         // Old `deletedSongIDs` field stored mount-UUID-derived song.id
         // tombstones — useless after re-OAuth changes the source UUID.
@@ -7389,6 +7494,7 @@ final class MusicLibrary {
             songs: songs,
             playlists: allPlaylists,
             artworkOverrides: allArtworkOverrides.isEmpty ? nil : allArtworkOverrides,
+            libraryReviews: allLibraryReviews.isEmpty ? nil : allLibraryReviews,
             automaticArtistArtworkCatalogs: automaticArtistArtworkCatalogsBySource
                 .values
                 .sorted { $0.sourceID < $1.sourceID },
@@ -7572,6 +7678,24 @@ final class MusicLibrary {
         incoming.pendingHistoryIdentities = ((local.pendingHistoryIdentities ?? []) + (incoming.pendingHistoryIdentities ?? []))
             .filter { identities.insert($0).inserted }
         incoming.deletedSongIdentities = Array(Set(local.deletedSongIdentities ?? []).union(incoming.deletedSongIdentities ?? []))
+        var reviewsBySubject = Dictionary(
+            (incoming.libraryReviews ?? []).map { ($0.subject.storageKey, $0) },
+            uniquingKeysWith: { local, remote in
+                LibraryReviewReconciliationPolicy.winner(local: local, remote: remote)
+            }
+        )
+        for localReview in local.libraryReviews ?? [] {
+            if let incomingReview = reviewsBySubject[localReview.subject.storageKey] {
+                reviewsBySubject[localReview.subject.storageKey] =
+                    LibraryReviewReconciliationPolicy.winner(
+                        local: localReview,
+                        remote: incomingReview
+                    )
+            } else {
+                reviewsBySubject[localReview.subject.storageKey] = localReview
+            }
+        }
+        incoming.libraryReviews = reviewsBySubject.values.sorted { $0.id < $1.id }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -8231,6 +8355,7 @@ final class MusicLibrary {
         var songs: [Song]
         var playlists: [Playlist]
         var artworkOverrides: [LibraryArtworkOverride]? = nil
+        var libraryReviews: [LibraryReview]? = nil
         var automaticArtistArtworkCatalogs: [SourceArtistArtworkCatalog]? = nil
         /// Transport-only copies used by the Apple TV/LAN library snapshot.
         /// Normal local persistence always writes nil; images remain canonical

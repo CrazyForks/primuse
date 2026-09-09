@@ -28,6 +28,14 @@
 "library_add_quick_access" = "新增快捷收藏";
 "library_quick_access_count" = "快捷收藏數量";
 "library_quick_access_count_description" = "設定資料庫與首頁最多顯示的快捷收藏數量。";
+"library_review_feature_title" = "評分與評論";
+"library_review_feature_description" = "在歌曲、專輯、播放清單和曲風頁面顯示個人星級與評論。此功能預設關閉。";
+"library_review_title" = "評分與評論";
+"library_review_add_comment" = "加入評論";
+"library_review_edit_comment" = "編輯評論";
+"library_review_comment_hint" = "開啟評論編輯器。";
+"library_review_comment_title" = "評論";
+"library_review_star_format" = "%d 星";
 "library_quick_access_limit_description" = "可在「設定 > 外觀 > 資料庫顯示」中調整數量上限。";
 "library_quick_access_selected" = "已選擇";
 "library_quick_access_selected_empty" = "尚未選擇快捷收藏";

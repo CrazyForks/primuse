@@ -654,6 +654,8 @@ private struct PlayerAppearanceSettingsView: View {
 #endif
 
 private struct LibraryDisplaySettingsView: View {
+    @AppStorage(LibraryReviewPreferences.enabledKey)
+    private var ratingsAndCommentsEnabled = false
     @AppStorage(QuickAccessCoverStyle.storageKey) private var quickAccessCoverStyle = QuickAccessCoverStyle.automatic
     @AppStorage(LibrarySongBrowseModePreference.storageKey)
     private var libraryBrowseModeRawValue = LibrarySongBrowseMode.folder.rawValue
@@ -714,6 +716,13 @@ private struct LibraryDisplaySettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                Toggle("library_review_feature_title", isOn: $ratingsAndCommentsEnabled)
+                    .settingsAnchor("library.ratingsAndComments")
+            } footer: {
+                Text("library_review_feature_description")
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {

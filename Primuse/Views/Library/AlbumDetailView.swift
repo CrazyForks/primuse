@@ -213,6 +213,8 @@ struct AlbumDetailView: View {
                     action: shuffleAll
                 )
             }
+
+            LibraryReviewSection(subject: .album(album.id), compact: true)
         }
         .padding(16)
         .background(
@@ -250,6 +252,7 @@ struct AlbumDetailView: View {
 
                 VStack(alignment: .leading, spacing: PMSpace.l) {
                     albumInfoCard
+                    LibraryReviewSection(subject: .album(album.id))
                     macToolbar
 
                     if songs.isEmpty {

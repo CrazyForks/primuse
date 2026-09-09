@@ -41,6 +41,8 @@ struct TVSettingsView: View {
     private var lyricsMotionEnabled = ImmersiveLyricsMotionSettings.defaultValue
     @AppStorage(PlayerAppearancePreferences.animatedArtworkEnabledKey)
     private var animatedArtworkEnabled = PlayerAppearancePreferences.animatedArtworkEnabledByDefault
+    @AppStorage(LibraryReviewPreferences.enabledKey)
+    private var ratingsAndCommentsEnabled = false
     @State private var showsEffectPicker = tvDebugShowsEffectPicker
     @State private var showsThemePicker = tvDebugShowsThemePicker
     @State private var showsAISettings = false
@@ -120,6 +122,12 @@ struct TVSettingsView: View {
                             )
                         }
                         settingsSection(PMString("ext.tv.settings.library")) {
+                            toggleRow(
+                                "star.bubble",
+                                String(localized: "library_review_feature_title"),
+                                isOn: $ratingsAndCommentsEnabled
+                            )
+                            settingDivider
                             navRow("arrow.clockwise", String(localized: "metadata"), PMString("tv_metadata_reread")) {
                                 showsMetadata = true
                             }

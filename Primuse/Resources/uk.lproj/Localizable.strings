@@ -3704,3 +3704,11 @@
 "carplay_module_siri_detail" = "Ask Siri to choose music";
 "carplay_cover_wall" = "Cover wall";
 "carplay_module_hidden" = "Hidden";
+"library_review_feature_title" = "Ratings & Comments";
+"library_review_feature_description" = "Show personal star ratings and comments on songs, albums, playlists, and genres. This is off by default.";
+"library_review_title" = "Rating & Comment";
+"library_review_add_comment" = "Add Comment";
+"library_review_edit_comment" = "Edit Comment";
+"library_review_comment_hint" = "Opens the comment editor.";
+"library_review_comment_title" = "Comment";
+"library_review_star_format" = "%d Stars";

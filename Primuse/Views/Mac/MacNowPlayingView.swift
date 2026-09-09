@@ -595,6 +595,15 @@ struct MacNowPlayingView: View {
             }
             .frame(width: coverSize, alignment: frameAlignment)
 
+            if let song = player.currentSong {
+                LibraryReviewSection(
+                    subject: .song(song.id),
+                    compact: true,
+                    onArtwork: true
+                )
+                .frame(width: coverSize, alignment: frameAlignment)
+            }
+
             if isWindowFullScreen {
                 MacNowPlayingProgressRow(width: coverSize, accent: theme.accentColor)
             }

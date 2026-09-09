@@ -1819,6 +1819,16 @@ struct NowPlayingView: View {
             }
             .padding(.horizontal, 36).padding(.top, 18)
 
+            if let song = player.currentSong {
+                LibraryReviewSection(
+                    subject: .song(song.id),
+                    compact: true,
+                    onArtwork: true
+                )
+                .padding(.horizontal, 36)
+                .padding(.top, 8)
+            }
+
             PlaybackProgressBar(fillTint: themedControlAccent)
                 .padding(.horizontal, 36).padding(.top, 10)
 
@@ -2246,6 +2256,16 @@ struct NowPlayingView: View {
                             moreMenu
                         }
                         .padding(.horizontal, 26).padding(.top, 12)
+
+                        if let song = player.currentSong {
+                            LibraryReviewSection(
+                                subject: .song(song.id),
+                                compact: true,
+                                onArtwork: true
+                            )
+                            .padding(.horizontal, 26)
+                            .padding(.top, 8)
+                        }
                     }
 
                     // Progress — 抽成独立子 view 隔离 player.currentTime 的高频

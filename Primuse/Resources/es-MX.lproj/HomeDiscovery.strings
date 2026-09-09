@@ -23,3 +23,5 @@
 "no_pinned_folders" = "Elige tus directorios en Ver todo.";
 "folder_ranking_scope" = "La clasificación de directorios incluye canciones con un directorio actual.";
 "folder_as_playlist" = "Usar como playlist";
+"expand_top_20" = "Show Top 20";
+"collapse_ranking" = "Show Less";

@@ -5,11 +5,12 @@ struct HomeListeningRankingSection: View {
     @Environment(HomeDiscoveryModel.self) private var model
     @Environment(MusicLibrary.self) private var library
     @Environment(AudioPlayerService.self) private var player
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @AppStorage(LibraryReviewPreferences.enabledKey) private var reviewsEnabled = false
     @State private var period: HomeListeningPeriod = .week
     @State private var category: HomeListeningCategory = .songs
     @State private var ranks: [HomeListeningRank] = []
     @State private var isLoading = true
+    @State private var showsExpandedRanking = false
     @State private var preparedRequest: Request?
 
     private struct Request: Equatable {
@@ -34,17 +35,31 @@ struct HomeListeningRankingSection: View {
                 categoryPicker
                 if isLoading {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 170)
-                } else if let first = ranks.first {
-                    if dynamicTypeSize.isAccessibilitySize {
-                        VStack(spacing: 10) { highlights(first) }
-                    } else {
-                        HStack(alignment: .top, spacing: 10) { highlights(first) }
-                    }
+                } else if !ranks.isEmpty {
                     VStack(spacing: 0) {
-                        ForEach(Array(ranks.prefix(4).enumerated()), id: \.element.id) { position, rank in
+                        ForEach(Array(visibleRanks.enumerated()), id: \.element.id) { position, rank in
                             rankRow(rank, position: position)
-                            if position < min(ranks.count, 4) - 1 { Divider() }
+                            if position < visibleRanks.count - 1 { Divider() }
                         }
+                    }
+
+                    if ranks.count > 5 {
+                        Button {
+                            withAnimation(.snappy) {
+                                showsExpandedRanking.toggle()
+                            }
+                        } label: {
+                            Label(
+                                showsExpandedRanking
+                                    ? HomeDiscoveryText.string("collapse_ranking")
+                                    : HomeDiscoveryText.string("expand_top_20"),
+                                systemImage: showsExpandedRanking ? "chevron.up" : "chevron.down"
+                            )
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 42)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("home.rankingExpand")
                     }
                 } else {
                     VStack(spacing: 8) {
@@ -66,6 +81,12 @@ struct HomeListeningRankingSection: View {
         .task(id: Request(revision: model.revision, period: period, category: category, calendar: ListeningCalendar.current)) {
             await refresh()
         }
+        .onChange(of: period) { _, _ in showsExpandedRanking = false }
+        .onChange(of: category) { _, _ in showsExpandedRanking = false }
+    }
+
+    private var visibleRanks: ArraySlice<HomeListeningRank> {
+        ranks.prefix(showsExpandedRanking ? 20 : 5)
     }
 
     private var heading: some View {
@@ -110,51 +131,26 @@ struct HomeListeningRankingSection: View {
             : NSLocalizedString("stats_rank_" + category.rawValue, comment: "")
     }
 
-    @ViewBuilder
-    private func highlights(_ champion: HomeListeningRank) -> some View {
-        highlight(champion, title: "champion", icon: "trophy.fill", accent: .accentColor,
-                  detail: String(format: HomeDiscoveryText.string("play_count"), champion.playCount))
-        if let rising = ranks.filter({ ($0.positionsGained ?? 0) > 0 }).max(by: {
-            ($0.positionsGained ?? 0) < ($1.positionsGained ?? 0)
-        }) {
-            highlight(rising, title: "rising", icon: "chart.line.uptrend.xyaxis", accent: .indigo,
-                      detail: String(format: HomeDiscoveryText.string("positions_gained"), rising.positionsGained ?? 0))
-        } else if let longest = ranks.max(by: { $0.listenedSeconds < $1.listenedSeconds }) {
-            highlight(longest, title: "longest", icon: "headphones", accent: .indigo,
-                      detail: Duration.seconds(longest.listenedSeconds).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated)))
-        }
-    }
-
-    private func highlight(_ rank: HomeListeningRank, title: String, icon: String, accent: Color, detail: String) -> some View {
-        Button { play(rank) } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(HomeDiscoveryText.string(title), systemImage: icon)
-                    .font(.caption.weight(.semibold)).foregroundStyle(accent).lineLimit(2)
-                Text(rankTitle(rank)).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
-            .padding(12)
-            .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16))
-            .contentShape(RoundedRectangle(cornerRadius: 16))
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("play")
-        .disabled(!canPlay(rank))
-    }
-
     private func rankRow(_ rank: HomeListeningRank, position: Int) -> some View {
         Group {
             if let folderID = rank.folderID {
                 NavigationLink { HomeFolderBrowser(nodeID: folderID) } label: { rankLabel(rank, position: position) }
             } else if category == .songs {
-                Button {
-                    HomeDiscoveryPlayback.play(
-                        ids: ranks.flatMap(\.songIDs), startingAt: rank.songIDs.first,
-                        library: library, player: player
-                    )
-                } label: { rankLabel(rank, position: position) }
-                .disabled(!canPlay(rank))
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        HomeDiscoveryPlayback.play(
+                            ids: ranks.flatMap(\.songIDs), startingAt: rank.songIDs.first,
+                            library: library, player: player
+                        )
+                    } label: { rankLabel(rank, position: position) }
+                    .disabled(!canPlay(rank))
+
+                    if reviewsEnabled, let song = firstSong(in: rank) {
+                        compactRatingPicker(for: song)
+                            .padding(.leading, 80)
+                            .padding(.bottom, 6)
+                    }
+                }
             } else {
                 NavigationLink {
                     HomeRankedSongsView(title: rank.title, songIDs: rank.songIDs)
@@ -173,20 +169,46 @@ struct HomeListeningRankingSection: View {
         HStack(spacing: 10) {
             Text("\(position + 1)").font(.headline.monospacedDigit())
                 .foregroundStyle(position == 0 ? Color.accentColor : Color.secondary)
-                .frame(width: 18)
-            if let song = rank.songIDs.first.flatMap({ model.songsByID[$0] }) {
+                .frame(width: 24)
+            if let song = firstSong(in: rank) {
                 CachedArtworkView(
-                    coverRef: song.coverArtFileName, songID: song.id, size: 40, cornerRadius: 7,
+                    coverRef: song.coverArtFileName, songID: song.id, size: 46, cornerRadius: 8,
                     sourceID: song.sourceID, filePath: song.filePath, fileFormat: song.fileFormat
                 )
                 .accessibilityHidden(true)
             }
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 8) {
-                    Text(rankTitle(rank)).font(.subheadline.weight(.medium)).lineLimit(1)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(rankTitle(rank)).font(.subheadline.weight(.semibold)).lineLimit(1)
                     Spacer(minLength: 0)
-                    Text(rank.playCount.formatted()).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Label(
+                        String(format: HomeDiscoveryText.string("play_count"), rank.playCount),
+                        systemImage: "headphones"
+                    )
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
                 }
+
+                HStack(spacing: 8) {
+                    if !rank.subtitle.isEmpty {
+                        Text(rank.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Text(
+                        Duration.seconds(rank.listenedSeconds).formatted(
+                            .units(allowed: [.hours, .minutes], width: .abbreviated)
+                        )
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                }
+
                 GeometryReader { geometry in
                     Capsule().fill(.primary.opacity(0.09))
                     Capsule().fill(Color.accentColor.opacity(position == 0 ? 1 : 0.55))
@@ -197,10 +219,30 @@ struct HomeListeningRankingSection: View {
             }
         }
         .foregroundStyle(.primary)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(position + 1), \(rankTitle(rank)), \(String(format: HomeDiscoveryText.string("play_count"), rank.playCount))")
+    }
+
+    private func firstSong(in rank: HomeListeningRank) -> Song? {
+        rank.songIDs.first.flatMap { model.songsByID[$0] }
+    }
+
+    private func compactRatingPicker(for song: Song) -> some View {
+        LibraryReviewRatingPicker(
+            rating: library.libraryReview(for: .song(song.id))?.rating,
+            foregroundStyle: .yellow,
+            symbolSize: 11,
+            buttonSize: 20
+        ) { rating in
+            let review = library.libraryReview(for: .song(song.id))
+            library.updateLibraryReview(
+                for: .song(song.id),
+                rating: rating == review?.rating ? nil : rating,
+                comment: review?.comment ?? ""
+            )
+        }
     }
 
     private func rankTitle(_ rank: HomeListeningRank) -> String {

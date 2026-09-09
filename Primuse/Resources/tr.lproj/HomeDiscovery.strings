@@ -23,3 +23,5 @@
 "no_pinned_folders" = "Tümünü Gör bölümünden dizinlerinizi seçin.";
 "folder_ranking_scope" = "Dizin sıralamaları, geçerli bir dizini olan şarkıları içerir.";
 "folder_as_playlist" = "Çalma listesi olarak kullan";
+"expand_top_20" = "Show Top 20";
+"collapse_ranking" = "Show Less";

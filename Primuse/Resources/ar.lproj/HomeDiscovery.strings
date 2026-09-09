@@ -23,3 +23,5 @@
 "no_pinned_folders" = "اختر الأدلة المفضلة من عرض الكل.";
 "folder_ranking_scope" = "يتضمن ترتيب الأدلة الأغاني التي لها دليل حالي.";
 "folder_as_playlist" = "استخدام كقائمة تشغيل";
+"expand_top_20" = "Show Top 20";
+"collapse_ranking" = "Show Less";

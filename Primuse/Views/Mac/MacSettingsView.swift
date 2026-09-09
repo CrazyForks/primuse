@@ -4722,6 +4722,8 @@ private struct MacSTSharePickerAnchor: NSViewRepresentable {
 // MARK: - ST-12 Theme
 
 private struct MacSTThemeView: View {
+    @AppStorage(LibraryReviewPreferences.enabledKey)
+    private var ratingsAndCommentsEnabled = false
     @AppStorage(QuickAccessCoverStyle.storageKey) private var quickAccessCoverStyle = QuickAccessCoverStyle.automatic
     @State private var preferences = MacUIPreferences.shared
     @Environment(ThemeService.self) private var themeService
@@ -5068,8 +5070,16 @@ private struct MacSTThemeView: View {
         MacSTSection(String(localized: "library_display_settings_title")) {
             MacSTGroup {
                 MacSTRow(
-                    String(localized: "library_quick_access_count"),
+                    String(localized: "library_review_feature_title"),
+                    hint: String(localized: "library_review_feature_description"),
                     divider: false
+                ) {
+                    MacSTToggle(isOn: $ratingsAndCommentsEnabled)
+                }
+                .settingsAnchor("library.ratingsAndComments")
+                MacSTRow(
+                    String(localized: "library_quick_access_count"),
+                    divider: true
                 ) {
                     MacSTSlider(
                         value: quickAccessLimitBinding,

@@ -451,6 +451,9 @@ struct TVNowPlayingView: View {
             Text(metadataLine(np))
                 .font(.system(size: 18)).foregroundStyle(TVColor.textFaint).padding(.top, 4)
 
+            TVLibraryReviewControl(subject: .song(np.songID))
+                .padding(.top, 16)
+
             if let issue = store.playbackIssue {
                 Label(issue.message, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 16, weight: .medium)).foregroundStyle(TVColor.warn)

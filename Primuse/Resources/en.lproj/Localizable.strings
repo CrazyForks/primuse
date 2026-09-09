@@ -27,6 +27,14 @@
 "library_add_quick_access" = "Add Shortcut";
 "library_quick_access_count" = "Quick Access Count";
 "library_quick_access_count_description" = "Set the maximum number of Quick Access items shown in Library and Home.";
+"library_review_feature_title" = "Ratings & Comments";
+"library_review_feature_description" = "Show personal star ratings and comments on songs, albums, playlists, and genres. This is off by default.";
+"library_review_title" = "Rating & Comment";
+"library_review_add_comment" = "Add Comment";
+"library_review_edit_comment" = "Edit Comment";
+"library_review_comment_hint" = "Opens the comment editor.";
+"library_review_comment_title" = "Comment";
+"library_review_star_format" = "%d Stars";
 "library_quick_access_limit_description" = "Adjust this limit in Settings > Appearance > Library Display.";
 "library_quick_access_selected" = "Selected";
 "library_quick_access_selected_empty" = "No shortcuts selected";

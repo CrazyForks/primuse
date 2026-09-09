@@ -2131,6 +2131,12 @@ private struct GenreDetailView: View {
                     action: shuffleAll
                 )
             }
+
+            LibraryReviewSection(
+                subject: .genre(genre.id),
+                compact: true,
+                onArtwork: true
+            )
         }
         .padding(.horizontal, 20)
         .padding(.top, topInset + 100)

@@ -130,6 +130,12 @@ struct SmartPlaylistDetailView: View {
                         }
                         .padding(.horizontal)
 
+                        LibraryReviewSection(
+                            subject: .playlist(smart.id),
+                            compact: true
+                        )
+                        .padding(.horizontal)
+
                         if smart.effectiveKind == .ai {
                             Button {
                                 showEditor = true
@@ -202,6 +208,7 @@ struct SmartPlaylistDetailView: View {
 
                         VStack(alignment: .leading, spacing: PMSpace.l) {
                             macDefinitionCard(smart)
+                            LibraryReviewSection(subject: .playlist(smart.id))
                             macToolbar(smart)
 
                             if matched.isEmpty {
