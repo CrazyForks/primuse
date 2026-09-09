@@ -57,8 +57,9 @@ final class ScanService {
         }
 
         var canResume: Bool {
-            !isScanning && (hasPendingWork
-                || (scannedCount > 0 && (totalCount == 0 || scannedCount < totalCount)))
+            // Progress counts can survive a terminal failure that already
+            // discarded its checkpoint; they do not imply resumable work.
+            !isScanning && hasPendingWork
         }
     }
 
@@ -978,6 +979,7 @@ final class ScanService {
         scanGenerations[sourceID, default: 0] += 1
         advanceSyncStateMutationEpoch(for: sourceID, discardingState: false)
         scanStates[sourceID]?.isScanning = false
+        scanStates[sourceID]?.hasPendingWork = checkpoints[sourceID] != nil
         persistCheckpoints(force: true)
         endBackgroundTask(for: sourceID)
     }
@@ -3452,6 +3454,9 @@ final class ScanService {
         } catch {
             if checkpoints[sourceID] == nil, let previous {
                 checkpoints[sourceID] = previous
+                // Cancellation may have observed the temporarily empty
+                // checkpoint while its removal was being persisted.
+                scanStates[sourceID]?.hasPendingWork = true
             }
             throw error
         }

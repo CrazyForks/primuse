@@ -5,6 +5,80 @@ import XCTest
 
 @MainActor
 final class FolderPlaylistTests: XCTestCase {
+    func testMissingChildPreservesSongsWithoutCompleteIdentityIndex() async throws {
+        let directory = SourceSyncIndexedItem(
+            stableKey: "path:/Music/Live", path: "/Music/Live", parentPath: "/Music",
+            isDirectory: true, size: 0, modifiedDate: nil, revision: nil
+        )
+        let first = song("first")
+        let nested = Song(id: "nested", title: "Nested", fileFormat: .mp3,
+                          filePath: "/Music/Live/Disc/Track.mp3", sourceID: "source")
+        let removedSibling = Song(id: "sibling", title: "Sibling", fileFormat: .mp3,
+                                 filePath: "/Music/Lively/Track.mp3", sourceID: "source")
+        for index in [[:], [directory.stableKey: directory]] {
+            let connector = FolderPlaylistTestConnector(
+                missingPaths: ["/Music/Live"],
+                listings: ["/Music": [RemoteFileItem(name: "Live", path: "/Music/Live",
+                                                   isDirectory: true, size: 0, modifiedDate: nil)]]
+            )
+            let scanner = ConnectorScanner(connector: connector, sourceID: "source")
+            var final: ConnectorScanner.ScanUpdate?
+            for try await update in await scanner.scan(
+                directories: ["/Music"], existingSongs: [first, nested, removedSibling], identityIndex: index
+            ) {
+                final = update
+            }
+            let result = try XCTUnwrap(final)
+            XCTAssertEqual(Set(result.songs.map(\.id)), [first.id, nested.id])
+            XCTAssertEqual(result.resumeState?.pendingDirectories, [])
+            XCTAssertEqual(result.resumeState?.encounteredSongIDs, [first.id, nested.id])
+        }
+    }
+
+    func testMissingRootPreservesLibraryWithoutAutomaticResume() async throws {
+        let fixture = try makeDirectoryScanFixture(missingPaths: ["/Music"])
+        let track = song("kept")
+        fixture.library.addSongs([track], affectedSourceIDs: [fixture.source.id])
+        await fixture.library.waitForPendingIndex()
+        let playlist = fixture.library.createPlaylist(name: "Saved", songIDs: [track.id])
+        XCTAssertTrue(fixture.start())
+        await fixture.scan.waitForActiveScansToComplete()
+        XCTAssertNotNil(fixture.scan.scanStates[fixture.source.id]?.failureMessage)
+        XCTAssertEqual(fixture.library.songs.map(\.id), [track.id])
+        XCTAssertEqual(fixture.library.rawSongIDs(forPlaylist: playlist.id), [track.id])
+        XCTAssertFalse(fixture.scan.scanStates[fixture.source.id]?.canResume ?? true)
+        XCTAssertFalse(fixture.scan.hasResumableScanWork)
+        for _ in 0..<2 {
+            fixture.resume()
+            await fixture.scan.waitForActiveScansToComplete()
+        }
+        let automaticListCount = await fixture.connector.listCount
+        XCTAssertEqual(automaticListCount, 1)
+        XCTAssertTrue(fixture.start())
+        await fixture.scan.waitForActiveScansToComplete()
+        let manualListCount = await fixture.connector.listCount
+        XCTAssertEqual(manualListCount, 2)
+    }
+
+    func testCancellingScanUsesCurrentCheckpointForResumeEligibility() async throws {
+        for discardCheckpoint in [false, true] {
+            let fixture = try makeDirectoryScanFixture(missingPaths: [], pausedPaths: ["/Music"])
+            fixture.library.addSongs([song("kept")], affectedSourceIDs: [fixture.source.id])
+            XCTAssertTrue(fixture.start())
+            let deadline = Date().addingTimeInterval(5)
+            while await !fixture.connector.isWaiting, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let isWaiting = await fixture.connector.isWaiting
+            XCTAssertTrue(isWaiting)
+            if discardCheckpoint { fixture.scan.removeCheckpoint(for: fixture.source.id) }
+            fixture.scan.cancelScan(for: fixture.source.id)
+            XCTAssertEqual(fixture.scan.scanStates[fixture.source.id]?.canResume, !discardCheckpoint)
+            XCTAssertEqual(fixture.scan.hasResumableScanWork, !discardCheckpoint)
+            await fixture.connector.release()
+        }
+    }
+
     func testIncrementalDirectoryDeletionPrunesNestedSongsAndSkipsConfirmedMissingPaths() async throws {
         let items = [indexed("root", parent: nil, directory: true),
                      indexed("gone", parent: "root", directory: true),
@@ -101,18 +175,66 @@ final class FolderPlaylistTests: XCTestCase {
                              isDirectory: directory, songIDs: directory ? [] : [key],
                              size: 0, modifiedDate: nil, revision: nil)
     }
+
+    private struct DirectoryScanFixture {
+        let source: MusicSource
+        let connector: FolderPlaylistTestConnector
+        let scan: ScanService
+        let library: MusicLibrary
+        let store: SourcesStore
+        let manager: SourceManager
+
+        @MainActor func start() -> Bool {
+            scan.scanSource(source, sourceManager: manager, library: library, sourceStore: store)
+        }
+
+        @MainActor func resume() {
+            scan.resumePendingScans(sourceManager: manager, library: library, sourceStore: store, scraperService: nil)
+        }
+    }
+
+    private func makeDirectoryScanFixture(
+        missingPaths: Set<String>, pausedPaths: Set<String> = []
+    ) throws -> DirectoryScanFixture {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("DirectoryScan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = MusicSource(id: "source", name: "NAS", type: .webdav, extraConfig: "[\"/Music\"]")
+        let connector = FolderPlaylistTestConnector(missingPaths: missingPaths, pausedPaths: pausedPaths)
+        let library = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
+        let store = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
+        store.add(source)
+        let scan = ScanService(
+            fileManager: FolderPlaylistTestFileManager(root: root), connectorProvider: { _ in connector },
+            diagnosticProvider: { source, _ in SourceDiagnosticReport(source: source, startedAt: Date(), checks: []) }
+        )
+        return DirectoryScanFixture(source: source, connector: connector, scan: scan,
+                                    library: library, store: store, manager: SourceManager(sourcesProvider: { [] }))
+    }
 }
 
 private actor FolderPlaylistTestConnector: MusicSourceConnector {
     let sourceID = "source"
     let missingPaths: Set<String>
+    let listings: [String: [RemoteFileItem]]
+    let pausedPaths: Set<String>
+    private(set) var listCount = 0
+    private(set) var isWaiting = false
+    private var released = false
 
-    init(missingPaths: Set<String>) { self.missingPaths = missingPaths }
+    init(missingPaths: Set<String>, listings: [String: [RemoteFileItem]] = [:], pausedPaths: Set<String> = []) {
+        self.missingPaths = missingPaths; self.listings = listings; self.pausedPaths = pausedPaths
+    }
+    func release() { released = true }
     func connect() async throws { }
     func disconnect() async { }
     func listFiles(at path: String) async throws -> [RemoteFileItem] {
+        listCount += 1
+        if pausedPaths.contains(path) {
+            isWaiting = true
+            while !released { try await Task.sleep(for: .milliseconds(10)) }
+        }
         if missingPaths.contains(path) { throw SourceError.pathNotFound(path) }
-        return []
+        return listings[path] ?? []
     }
     func localURL(for path: String) async throws -> URL { throw SourceError.fileNotFound(path) }
     func streamData(for path: String) async throws -> AsyncThrowingStream<Data, Error> {
@@ -121,4 +243,11 @@ private actor FolderPlaylistTestConnector: MusicSourceConnector {
     func scanAudioFiles(from path: String) async throws -> AsyncThrowingStream<RemoteFileItem, Error> {
         .init { $0.finish() }
     }
+}
+
+private final class FolderPlaylistTestFileManager: FileManager, @unchecked Sendable {
+    let root: URL
+    init(root: URL) { self.root = root; super.init() }
+    override func urls(for directory: FileManager.SearchPathDirectory,
+                       in domainMask: FileManager.SearchPathDomainMask) -> [URL] { [root] }
 }

@@ -1029,6 +1029,14 @@ actor ConnectorScanner {
                                     syncIndex[key] = entry
                                     encounteredSongIDs.formUnion(entry.songIDs)
                                 }
+                                // Source edits and older libraries can leave
+                                // the identity index empty or incomplete.
+                                // Those rows still need the same protection.
+                                for song in existingSongs where Self.immediateChildPath(
+                                    descendant: song.filePath, of: directory
+                                ) != nil {
+                                    encounteredSongIDs.insert(song.id)
+                                }
                                 plog("↷ Dropped stale child directory from scan checkpoint: \(directory)")
                                 continuation.yield(
                                     ScanUpdate(
