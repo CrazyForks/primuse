@@ -433,16 +433,14 @@ struct CachedArtworkView: View {
         .aspectRatio(1, contentMode: .fit)
     }
 
-    /// 当前歌如果是 Apple Music 来源, 从 songCache 拿 MusicKit.Artwork。
-    /// cache miss 时返回 nil, 走 placeholder (用户再播这首会被 catalog/library
-    /// lookup 填上 cache, 下次就有了)。
+    /// Read only prepared Artwork values; MusicKit.Song getters can perform IO.
     private var appleMusicArtwork: MusicKit.Artwork? {
         guard sourceID == AppleMusicLibraryService.systemSourceID,
               let amID = filePath else { return nil }
         if resolvedAppleMusicArtworkID == amID, let resolvedAppleMusicArtwork {
             return resolvedAppleMusicArtwork
         }
-        return AppServices.shared.appleMusicLibrary.cachedMusicKitSong(amID: amID)?.artwork
+        return AppServices.shared.appleMusicLibrary.cachedMusicKitArtwork(amID: amID)
     }
 
     private var hasResolvedArtwork: Bool {
@@ -456,7 +454,10 @@ struct CachedArtworkView: View {
     }
 
     private var appleMusicArtworkLoadIdentity: String {
-        "\(appleMusicArtworkIdentity)|highResolution:\(loadsHighResolution)"
+        let identity = appleMusicArtworkIdentity
+        guard !identity.isEmpty else { return "" }
+        let syncedAt = AppServices.shared.appleMusicLibrary.lastSyncAt?.timeIntervalSinceReferenceDate ?? 0
+        return "\(identity)|highResolution:\(loadsHighResolution)|sync:\(syncedAt)"
     }
 
     private func resolveAppleMusicArtwork(for identity: String) async {
@@ -471,7 +472,7 @@ struct CachedArtworkView: View {
             }
             return
         }
-        if let cached = AppServices.shared.appleMusicLibrary.cachedMusicKitSong(amID: identity)?.artwork {
+        if let cached = AppServices.shared.appleMusicLibrary.cachedMusicKitArtwork(amID: identity) {
             resolvedAppleMusicArtwork = cached
             resolvedAppleMusicArtworkID = identity
             onResolutionChange(true)
@@ -488,7 +489,7 @@ struct CachedArtworkView: View {
             if musicKitLoadingRequest == request { musicKitLoadingRequest = nil }
         }
         #endif
-        let resolved = await AppServices.shared.appleMusicLibrary.musicKitSong(amID: identity)?.artwork
+        let resolved = await AppServices.shared.appleMusicLibrary.musicKitArtwork(amID: identity)
         guard !Task.isCancelled, appleMusicArtworkIdentity == identity else { return }
         resolvedAppleMusicArtwork = resolved
         resolvedAppleMusicArtworkID = resolved == nil ? nil : identity

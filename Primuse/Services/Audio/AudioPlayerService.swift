@@ -963,6 +963,7 @@ final class AudioPlayerService {
     private var musicVideoStreamingLoader: MusicVideoStreamingLoader?
     #if os(iOS)
     private var isCarPlaySceneActive = false
+    private var isCarAudioRouteConnected = false
     private var carPlayConnectObserver: NSObjectProtocol?
     private var carPlayDisconnectObserver: NSObjectProtocol?
     private var carAudioRouteObserver: NSObjectProtocol?
@@ -978,7 +979,7 @@ final class AudioPlayerService {
 
     private var shouldForceAudioOnly: Bool {
         #if os(iOS)
-        return isCarPlaySceneActive || Self.isCarAudioRouteActive()
+        return isCarPlaySceneActive || isCarAudioRouteConnected
         #else
         return false
         #endif
@@ -2086,6 +2087,9 @@ final class AudioPlayerService {
         isCarPlaySceneActive = UIApplication.shared.connectedScenes.contains {
             $0 is CPTemplateApplicationScene && $0.activationState != .unattached
         }
+        // currentRoute performs synchronous IPC; lyric ticks only need the
+        // latest route snapshot, which route-change notifications keep current.
+        isCarAudioRouteConnected = Self.isCarAudioRouteActive()
         let center = NotificationCenter.default
 
         carPlayConnectObserver = center.addObserver(
@@ -2138,10 +2142,11 @@ final class AudioPlayerService {
             let routeChangeTime = Date()
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.publishLockScreenLyricsIfNeeded()
                 let reason = reasonValue.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
                 let session = AVAudioSession.sharedInstance()
                 let handlingOutputs = session.currentRoute.outputs
+                self.isCarAudioRouteConnected = handlingOutputs.contains { $0.portType == .carAudio }
+                self.publishLockScreenLyricsIfNeeded()
                 let handlingOutputTypes = handlingOutputs
                     .map { $0.portType.rawValue }
                     .joined(separator: ",")

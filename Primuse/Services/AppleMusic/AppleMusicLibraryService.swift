@@ -109,6 +109,17 @@ final class AppleMusicLibraryService {
     /// 不用每次再发 catalog lookup。冷启动后 cache 空, miss 时回退到
     /// MusicCatalogResourceRequest 拉一次。
     private var songCache: [String: MusicKit.Song] = [:]
+    private struct SongArtworkSnapshot: Sendable {
+        let artwork: MusicKit.Artwork?
+    }
+    private struct ResolvedSongLookup: Sendable {
+        let song: MusicKit.Song
+        let identity: AppleMusicTrackIdentity?
+        let artwork: SongArtworkSnapshot
+    }
+    private var songArtworkCache: [String: SongArtworkSnapshot] = [:]
+    @ObservationIgnored private var songArtworkSnapshotGeneration: UInt64 = 0
+    @ObservationIgnored private var songArtworkItemGenerations: [String: UInt64] = [:]
     /// Distinguishes a completed (possibly empty) library snapshot from a
     /// one-off cold artwork lookup that happened to insert a single item.
     private var hasCompletedLibrarySnapshot = false
@@ -433,6 +444,7 @@ final class AppleMusicLibraryService {
                     }
                     for song in songs {
                         songCache[song.id.rawValue] = song
+                        invalidateSongArtwork(amID: song.id.rawValue)
                         if useLibrary {
                             canonicalLibrarySongCache[song.id.rawValue] = song
                             canonicalLibraryTrackIdentityIndex.upsert(Self.trackIdentity(song))
@@ -512,6 +524,38 @@ final class AppleMusicLibraryService {
         songCache[amID]
     }
 
+    func cachedMusicKitArtwork(amID: String) -> MusicKit.Artwork? {
+        songArtworkCache[amID]?.artwork
+    }
+
+    func musicKitArtwork(amID: String) async -> MusicKit.Artwork? {
+        if let cached = songArtworkCache[amID] { return cached.artwork }
+        guard let song = await musicKitSong(amID: amID), !Task.isCancelled else { return nil }
+        if let cached = songArtworkCache[amID] { return cached.artwork }
+        let generation = songArtworkGeneration(amID: amID)
+        let snapshot = await Self.loadSongArtwork(song)
+        guard !Task.isCancelled else { return nil }
+        guard generation == songArtworkGeneration(amID: amID) else {
+            return await musicKitArtwork(amID: amID)
+        }
+        songArtworkCache[amID] = snapshot
+        return snapshot.artwork
+    }
+
+    private func songArtworkGeneration(amID: String) -> (UInt64, UInt64) {
+        (songArtworkSnapshotGeneration, songArtworkItemGenerations[amID, default: 0])
+    }
+
+    private func invalidateSongArtwork(amID: String) {
+        songArtworkCache.removeValue(forKey: amID)
+        songArtworkItemGenerations[amID, default: 0] &+= 1
+    }
+
+    @concurrent
+    private nonisolated static func loadSongArtwork(_ song: MusicKit.Song) async -> SongArtworkSnapshot {
+        SongArtworkSnapshot(artwork: song.artwork)
+    }
+
     func cachedMusicKitPlaylistArtwork(playlistID: String) -> MusicKit.Artwork? {
         playlistArtworkCache[playlistID]
     }
@@ -524,36 +568,57 @@ final class AppleMusicLibraryService {
         if let cached = songCache[amID] { return cached }
         guard appleMusic.authState == .authorized else { return nil }
 
-        let id = MusicItemID(rawValue: amID)
+        let useLibrary = AppleMusicItemLookupPolicy.shouldUseUserLibrary(
+            itemID: amID,
+            confirmedLocalFileIDs: subscriptionIndependentLocalFileIDs
+        )
+        let generation = songArtworkGeneration(amID: amID)
         do {
-            let resolved: MusicKit.Song?
-            if AppleMusicItemLookupPolicy.shouldUseUserLibrary(
-                itemID: amID,
-                confirmedLocalFileIDs: subscriptionIndependentLocalFileIDs
-            ) {
-                var request = MusicLibraryRequest<MusicKit.Song>()
-                request.filter(matching: \.id, equalTo: id)
-                request.limit = 1
-                resolved = try await request.response().items.first
-            } else {
-                let request = MusicCatalogResourceRequest<MusicKit.Song>(matching: \.id, equalTo: id)
-                resolved = try await request.response().items.first
+            guard let resolved = try await Self.lookupSong(amID: amID, useLibrary: useLibrary) else {
+                return nil
             }
-            if let resolved {
-                songCache[amID] = resolved
-                if AppleMusicItemLookupPolicy.shouldUseUserLibrary(
-                    itemID: amID,
-                    confirmedLocalFileIDs: subscriptionIndependentLocalFileIDs
-                ) {
-                    canonicalLibrarySongCache[amID] = resolved
-                    canonicalLibraryTrackIdentityIndex.upsert(Self.trackIdentity(resolved))
-                }
+            guard !Task.isCancelled else { return nil }
+            guard generation == songArtworkGeneration(amID: amID) else {
+                return songCache[amID]
             }
-            return resolved
+            songCache[amID] = resolved.song
+            songArtworkCache[amID] = resolved.artwork
+            if let identity = resolved.identity {
+                canonicalLibrarySongCache[amID] = resolved.song
+                canonicalLibraryTrackIdentityIndex.upsert(identity)
+            }
+            return resolved.song
+        } catch is CancellationError {
+            return nil
         } catch {
             plog("⚠️Apple Music lookup failed for \(amID): \(error.localizedDescription)")
             return nil
         }
+    }
+
+    // MusicKit responses and Song properties are lazy: accessing them can
+    // synchronously read the media database even after response() has awaited.
+    @concurrent
+    private nonisolated static func lookupSong(amID: String, useLibrary: Bool) async throws -> ResolvedSongLookup? {
+        try Task.checkCancellation()
+        let id = MusicItemID(rawValue: amID)
+        let song: MusicKit.Song?
+        if useLibrary {
+            var request = MusicLibraryRequest<MusicKit.Song>()
+            request.filter(matching: \.id, equalTo: id)
+            request.limit = 1
+            song = try await request.response().items.first
+        } else {
+            let request = MusicCatalogResourceRequest<MusicKit.Song>(matching: \.id, equalTo: id)
+            song = try await request.response().items.first
+        }
+        try Task.checkCancellation()
+        guard let song else { return nil }
+        return ResolvedSongLookup(
+            song: song,
+            identity: useLibrary ? trackIdentity(song) : nil,
+            artwork: SongArtworkSnapshot(artwork: song.artwork)
+        )
     }
 
     /// 拿当前歌在 Apple Music app 里的 URL ── 给 NowPlayingView 提供"在
@@ -864,6 +929,9 @@ final class AppleMusicLibraryService {
             let fetchedTrackIdentities = allMusicKitSongs.map(Self.trackIdentity)
             if fetchResult.syncMode == .authoritative {
                 songCache = fetchedSongCache
+                songArtworkCache.removeAll(keepingCapacity: true)
+                songArtworkSnapshotGeneration &+= 1
+                songArtworkItemGenerations.removeAll(keepingCapacity: true)
                 canonicalLibrarySongCache = fetchedSongCache
                 canonicalLibraryTrackIdentityIndex.replace(with: fetchedTrackIdentities)
             } else {
@@ -871,6 +939,7 @@ final class AppleMusicLibraryService {
                 // cloud entries already known in this process and merely add
                 // the locally available items.
                 songCache.merge(fetchedSongCache) { _, incoming in incoming }
+                for id in fetchedSongCache.keys { invalidateSongArtwork(amID: id) }
                 canonicalLibrarySongCache.merge(fetchedSongCache) { _, incoming in incoming }
                 canonicalLibraryTrackIdentityIndex.merge(fetchedTrackIdentities)
             }
@@ -1319,6 +1388,7 @@ final class AppleMusicLibraryService {
                 guard case let .song(s) = track else { return nil }
                 // 顺手填 cache (有些用户歌单里的 song 可能不在 user library 全集)
                 songCache[s.id.rawValue] = s
+                invalidateSongArtwork(amID: s.id.rawValue)
                 // Playlist relationships may expose catalog songs even when
                 // the same track exists as an `i.*` user-library item. Store
                 // the relationship with the canonical ID so the mirrored

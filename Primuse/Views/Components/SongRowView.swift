@@ -64,6 +64,7 @@ struct SongRowView: View {
     @State private var sourceCheckMessage: String?
     @State private var tagReadMessage: String?
     @State private var presentedShareSong: Song?
+    @State private var hasMountedPresentations = false
 
     /// "Metadata still pending" — cloud Phase-A songs whose `duration` (and
     /// usually cover/artist) hasn't been backfilled yet. Drives a soft dim +
@@ -85,14 +86,6 @@ struct SongRowView: View {
             } else {
                 rowContent
             }
-        }
-        .alert(
-            detailsAlertTitle,
-            isPresented: $showBareAlert
-        ) {
-            Button(String(localized: "done"), role: .cancel) {}
-        } message: {
-            Text(detailsAlertMessage)
         }
         .songRowContextMenu(isEnabled: usesContextMenu && actionRequest == nil) {
             if let selection {
@@ -170,6 +163,37 @@ struct SongRowView: View {
                 }
             }
         }
+        #if os(macOS)
+        .similarSongsPanel(isPresented: $showSimilarSongs, seed: song)
+        #endif
+        .background {
+            if hasMountedPresentations || actionRequest != nil || hasPresentationRequest {
+                presentationHost
+                    .onAppear { hasMountedPresentations = true }
+            }
+        }
+    }
+
+    private var hasPresentationRequest: Bool {
+        showScrapeOptions || showNoScraperSourceAlert || showAddToPlaylist
+            || showSongInfo || showDeleteConfirm || showBareAlert || showTagEditor
+            || showLyricsEditor || showSimilarSongs || deleteErrorMessage != nil
+            || sourceCheckMessage != nil || tagReadMessage != nil || presentedShareSong != nil
+    }
+
+    // Untouched rows avoid building every presentation host during scrolling.
+    // Once mounted, keep the host alive through dismissal and subsequent actions.
+    private var presentationHost: some View {
+        Color.clear
+        .allowsHitTesting(false)
+        .alert(
+            detailsAlertTitle,
+            isPresented: $showBareAlert
+        ) {
+            Button(String(localized: "done"), role: .cancel) {}
+        } message: {
+            Text(detailsAlertMessage)
+        }
         .sheet(isPresented: $showScrapeOptions) {
             ScrapeOptionsView(song: song) { updated in
                 CachedArtworkView.invalidateCache(for: updated.id)
@@ -211,7 +235,9 @@ struct SongRowView: View {
         .sheet(item: $presentedShareSong) { sharedSong in
             SongShareSheet(song: sharedSong)
         }
+        #if !os(macOS)
         .similarSongsPanel(isPresented: $showSimilarSongs, seed: song)
+        #endif
         .sheet(isPresented: $showSongInfo) {
             SongInfoSheet(song: song)
                 .songInfoPresentationStyle()
