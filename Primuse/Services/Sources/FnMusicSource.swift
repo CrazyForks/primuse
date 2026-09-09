@@ -1,10 +1,11 @@
 import Foundation
 import PrimuseKit
 
-/// Direct, read-only connector for the Feiniu Music app's catalogue service.
+/// Connector for the Feiniu Music catalogue and user library.
 /// The legacy `.fnos` NAS placeholder remains separate so old source records
 /// are never reinterpreted as a server-side music library.
-actor FnMusicSource: RefreshingMetadataSongConnector, ServerLyricsConnector, ServerScrobblingConnector {
+actor FnMusicSource: RefreshingMetadataSongConnector, ServerLyricsConnector, ServerScrobblingConnector,
+    ServerPlaylistConnector, ServerFavoriteConnector {
     let sourceID: String
 
     private let api: FnMusicAPI
@@ -26,7 +27,8 @@ actor FnMusicSource: RefreshingMetadataSongConnector, ServerLyricsConnector, Ser
         accessCode: String?,
         username: String,
         password: String,
-        alternateTLSValidationHostname: String? = nil
+        alternateTLSValidationHostname: String? = nil,
+        session: URLSession? = nil
     ) {
         self.sourceID = sourceID
         self.username = username
@@ -39,7 +41,8 @@ actor FnMusicSource: RefreshingMetadataSongConnector, ServerLyricsConnector, Ser
             basePath: basePath,
             connectionMode: connectionMode,
             accessCode: accessCode,
-            alternateTLSValidationHostname: alternateTLSValidationHostname
+            alternateTLSValidationHostname: alternateTLSValidationHostname,
+            session: session
         )
 
         let root = FileManager.default.primuseDirectoryURL(for: .cachesDirectory)
@@ -272,6 +275,37 @@ actor FnMusicSource: RefreshingMetadataSongConnector, ServerLyricsConnector, Ser
             try await connect()
             return try await api.trackPage(page: page, size: size)
         }
+    }
+
+    private var libraryClient: FnMusicLibraryClient {
+        FnMusicLibraryClient { [self] request in
+            try await connect()
+            do {
+                return try await api.libraryPayload(request)
+            } catch SourceError.authenticationFailed {
+                try await connect()
+                return try await api.libraryPayload(request)
+            }
+        }
+    }
+
+    func fetchServerPlaylists() async throws -> ServerPlaylistSnapshot {
+        let snapshot = try await libraryClient.playlists()
+        return ServerPlaylistSnapshot(
+            playlists: snapshot.playlists.map {
+                ServerPlaylist(id: $0.id, name: $0.name, coverArtReference: $0.coverReference,
+                               trackIDs: $0.trackIDs, reportedTrackCount: $0.trackIDs.count)
+            },
+            failedPlaylistIDs: snapshot.failedPlaylistIDs
+        )
+    }
+
+    func fetchServerFavorites() async throws -> ServerFavoriteSnapshot {
+        ServerFavoriteSnapshot(itemIDs: try await libraryClient.favorites())
+    }
+
+    func setServerFavorite(itemID: String, isFavorite: Bool) async throws -> ServerFavoriteSnapshot {
+        ServerFavoriteSnapshot(itemIDs: try await libraryClient.setFavorite(trackID: itemID, isFavorite: isFavorite))
     }
 
     // MARK: - Audio

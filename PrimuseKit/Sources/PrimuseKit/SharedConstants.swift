@@ -1504,7 +1504,7 @@ public enum ServerPlaylistIdentity {
 public enum ServerFavoriteWritebackPolicy {
     public static func supports(_ sourceType: MusicSourceType) -> Bool {
         switch sourceType {
-        case .emby, .navidrome, .subsonic, .songloft:
+        case .emby, .navidrome, .subsonic, .songloft, .fnMusic:
             return true
         default:
             return false
@@ -1520,6 +1520,8 @@ public enum ServerFavoriteWritebackPolicy {
         }
         let directory: String
         switch sourceType {
+        case .fnMusic:
+            directory = "fnmusic/tracks"
         case .emby:
             directory = "items"
         case .navidrome, .subsonic:

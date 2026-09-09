@@ -1748,11 +1748,38 @@ private struct RoutedSubsonicConnector: RoutedConnectorProxy, RefreshingMetadata
 }
 
 private struct RoutedFnMusicConnector: RoutedConnectorProxy, RefreshingMetadataSongConnector,
-    ServerScrobblingConnector, ServerLyricsConnector {
+    ServerScrobblingConnector, ServerLyricsConnector, ServerPlaylistConnector, ServerFavoriteConnector {
     let sourceID: String
     let routing: SourceConnectionRouter
     let routedSupportsSidecarWriting: Bool
     let routedPreferredDeleteBatchSize: Int
+
+    func fetchServerPlaylists() async throws -> ServerPlaylistSnapshot {
+        try await routing.withRead { connector in
+            guard let provider = connector as? any ServerPlaylistConnector else {
+                throw SourceError.connectionFailed("Server playlist connector unavailable")
+            }
+            return try await provider.fetchServerPlaylists()
+        }
+    }
+
+    func fetchServerFavorites() async throws -> ServerFavoriteSnapshot {
+        try await routing.withRead { connector in
+            guard let provider = connector as? any ServerFavoriteConnector else {
+                throw SourceError.connectionFailed("Server favorite connector unavailable")
+            }
+            return try await provider.fetchServerFavorites()
+        }
+    }
+
+    func setServerFavorite(itemID: String, isFavorite: Bool) async throws -> ServerFavoriteSnapshot {
+        try await routing.withMutation { connector in
+            guard let provider = connector as? any ServerFavoriteConnector else {
+                throw SourceError.connectionFailed("Server favorite connector unavailable")
+            }
+            return try await provider.setServerFavorite(itemID: itemID, isFavorite: isFavorite)
+        }
+    }
 
     func scanSongs(from path: String) async throws -> AsyncThrowingStream<ConnectorScannedSong, Error> {
         let routed = try await routing.withReadAndRoute { connector in

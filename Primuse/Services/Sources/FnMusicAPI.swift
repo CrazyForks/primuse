@@ -23,7 +23,8 @@ actor FnMusicAPI {
         basePath: String?,
         connectionMode: FnMusicConnectionMode,
         accessCode: String?,
-        alternateTLSValidationHostname: String? = nil
+        alternateTLSValidationHostname: String? = nil,
+        session: URLSession? = nil
     ) {
         self.sourceID = sourceID
         self.accessCode = accessCode
@@ -36,7 +37,7 @@ actor FnMusicAPI {
         configuration.timeoutIntervalForResource = 600
         configuration.httpMaximumConnectionsPerHost = 8
         configuration.httpAdditionalHeaders = ["User-Agent": "Primuse/1.0"]
-        let session = URLSession(
+        let session = session ?? URLSession(
             configuration: configuration,
             delegate: SmartSSLDelegate(
                 fnMusicRedirects: true,
@@ -171,6 +172,14 @@ actor FnMusicAPI {
         return lyrics.first?.1
     }
 
+    func libraryPayload(_ request: FnMusicLibraryRequest) async throws -> Data {
+        let payload = try await requestJSON(
+            method: request.method, path: request.path, queryItems: request.queryItems,
+            body: request.body?.mapValues { $0 as Any }
+        )
+        return try SafeJSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
+    }
+
     func reportPlayback(trackGUID: String) async throws {
         _ = try await requestJSON(
             method: "POST",
@@ -256,6 +265,7 @@ actor FnMusicAPI {
             }
             return FnMusicRangeResponse(data: data, statusCode: http.statusCode)
         case 200:
+            try validateMediaPayload(http, data: data, requestToken: requestToken)
             throw SourceError.connectionFailed(PMString("error.catalog.invalidRangeResponse"))
         default:
             throw SourceError.connectionFailed(PMString("error.fnMusic.http", String(http.statusCode)))

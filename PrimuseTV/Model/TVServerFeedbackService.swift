@@ -143,6 +143,7 @@ final class TVServerFeedbackService {
     private var pendingLikedMutations: [String: [String: LikedMutation]] = [:]
     private var confirmedLikedStates: [SongKey: ConfirmedLikedState] = [:]
     private var likedMutationTasks: [String: Task<Void, Never>] = [:]
+    private var favoriteRefreshRevisions: [String: UInt64] = [:]
 
     private var pendingNowPlaying: [String: PendingNowPlaying] = [:]
     private var nowPlayingTasks: [String: Task<Void, Never>] = [:]
@@ -185,7 +186,13 @@ final class TVServerFeedbackService {
         self.sleeper = sleeper
     }
 
+    func favoriteRefreshRevision(sourceID: String) -> UInt64? {
+        guard likedMutationTasks[sourceID] == nil else { return nil }
+        return favoriteRefreshRevisions[sourceID, default: 0]
+    }
+
     func setLiked(song: Song, previous: Bool, desired: Bool) {
+        favoriteRefreshRevisions[song.sourceID, default: 0] &+= 1
         guard previous != desired,
               let source = activeSource(for: song),
               TVServerFeedbackPolicy.supportsFavorite(source.type) else { return }
@@ -617,6 +624,15 @@ actor TVServerFeedbackHTTPClient: TVServerFeedbackClient {
         desired: Bool
     ) async throws -> Bool {
         switch source.type {
+        case .fnMusic:
+            guard let itemID = ServerFavoriteWritebackPolicy.songID(
+                fromConnectorPath: song.filePath, sourceType: source.type
+            ) else { throw TVServerFeedbackError.invalidSongReference }
+            let resolved = try await resolverRegistry.resolve(for: song, source: source, credential: credential)
+            let library = FnMusicLibraryClient { [self] request in
+                try await fnMusicLibraryPayload(request, resolved: resolved)
+            }
+            return try await library.setFavorite(trackID: itemID, isFavorite: desired).contains(itemID)
         case .subsonic, .navidrome:
             return try await setSubsonicFavorite(
                 song: song,
@@ -852,6 +868,36 @@ actor TVServerFeedbackHTTPClient: TVServerFeedbackClient {
                     ?? PMString("ext.tv.playback.failed")
             )
         }
+    }
+
+    private func fnMusicLibraryPayload(
+        _ operation: FnMusicLibraryRequest,
+        resolved: ResolvedStream
+    ) async throws -> Data {
+        let base = try Self.serviceBaseURL(from: resolved.url, marker: FnMusicAPIProtocol.apiPath)
+        guard let url = FnMusicAPIProtocol.endpointURL(
+            serverBaseURL: base, path: operation.path, queryItems: operation.queryItems
+        ) else { throw TVServerFeedbackError.invalidURL }
+        var request = Self.request(url: url, headers: resolved.headers)
+        request.httpMethod = operation.method
+        let body = try operation.body.map {
+            try SafeJSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])
+        }
+        request.httpBody = body
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        FnMusicAPIProtocol.applyAuthx(to: &request, bodyData: body)
+        let data = try await perform(request: request, redirectMode: .fnMusic)
+        guard let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let code = Self.int(envelope["code"]) else { throw TVServerFeedbackError.invalidResponse }
+        guard code == 0 || code == 200 else {
+            if [120001, 401, 403].contains(code) { throw TVServerFeedbackError.authenticationFailed }
+            throw TVServerFeedbackError.server(
+                Self.nonemptyString(envelope["msg"] ?? envelope["message"])
+                    ?? PMString("ext.tv.playback.failed")
+            )
+        }
+        let payload = envelope["data"].flatMap { $0 is NSNull ? nil : $0 } ?? [:]
+        return try SafeJSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
     }
 
     private func perform(

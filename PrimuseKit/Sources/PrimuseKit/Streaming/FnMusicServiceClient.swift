@@ -332,6 +332,20 @@ public actor FnMusicServiceClient {
         return page.total
     }
 
+    public nonisolated var library: FnMusicLibraryClient {
+        FnMusicLibraryClient { [self] request in
+            try await libraryPayload(request)
+        }
+    }
+
+    private func libraryPayload(_ request: FnMusicLibraryRequest) async throws -> Data {
+        let payload = try await authenticatedJSON(
+            method: request.method, path: request.path, queryItems: request.queryItems,
+            body: request.body?.mapValues { $0 as Any }
+        )
+        return try SafeJSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
+    }
+
     public func trackPage(page: Int, size: Int) async throws -> FnMusicCatalogPage {
         guard page > 0, size > 0, size <= 500 else {
             throw FnMusicServiceError.invalidResponse(PMString("error.catalog.invalidPagination"))

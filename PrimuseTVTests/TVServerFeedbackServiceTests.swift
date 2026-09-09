@@ -135,6 +135,50 @@ private actor TVServerFeedbackClientStub: TVServerFeedbackClient {
 
 @MainActor
 final class TVServerFeedbackServiceTests: XCTestCase {
+    func testFnMusicHTTPFavoriteWritesKeepTheResolvedRouteAndAuthentication() async throws {
+        TVFnFavoriteURLProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TVFnFavoriteURLProtocol.self]
+        let registry = StreamResolverRegistry()
+        await registry.register(TVFnFavoriteResolver(), for: [.fnMusic])
+        let client = TVServerFeedbackHTTPClient(resolverRegistry: registry, session: URLSession(configuration: configuration))
+        let source = makeSource(id: "feiniu-http", type: .fnMusic)
+        let song = makeSong(id: "song", sourceID: source.id, filePath: "/fnmusic/tracks/song.flac")
+        let credential = SourceCredential(username: "qa", password: "test")
+        let added = try await client.setFavorite(song: song, source: source, credential: credential, desired: true)
+        let removed = try await client.setFavorite(song: song, source: source, credential: credential, desired: false)
+        XCTAssertTrue(added)
+        XCTAssertFalse(removed)
+        let requests = TVFnFavoriteURLProtocol.requests()
+        XCTAssertEqual(requests.filter { $0.httpMethod == "POST" }.map { $0.url!.path }, [
+            "/prefix/music/api/v1/favorite-track/create", "/prefix/music/api/v1/favorite-track/delete",
+        ])
+        for request in requests {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "music-token=TV-token; mode=relay")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "authx"))
+            XCTAssertNotEqual(request.value(forHTTPHeaderField: "authx"), "old-stream-signature")
+        }
+    }
+
+    func testFnMusicMutationInvalidatesInFlightFavoriteRefresh() async {
+        let source = makeSource(id: "feiniu", type: .fnMusic)
+        let song = Song(id: "song", title: "Song", fileFormat: .flac,
+                        filePath: "/fnmusic/tracks/song.flac", sourceID: source.id)
+        let client = TVServerFeedbackClientStub()
+        await client.blockNextFavorite(sourceID: source.id)
+        var liked = [song.id: true]
+        let service = makeService(sources: [source.id: source], liked: { liked[$0] ?? false },
+                                  applyLiked: { liked[$0] = $1 }, client: client)
+        let revision = service.favoriteRefreshRevision(sourceID: source.id)
+        service.setLiked(song: song, previous: false, desired: true)
+        await waitUntil { await client.hasFavoriteWaiter(sourceID: source.id) }
+        XCTAssertNil(service.favoriteRefreshRevision(sourceID: source.id))
+        await client.releaseFavorite(sourceID: source.id, outcome: .value(true))
+        await service.waitForPendingWork(sourceID: source.id)
+        XCTAssertNotEqual(service.favoriteRefreshRevision(sourceID: source.id), revision)
+        XCTAssertEqual(liked[song.id], true)
+    }
+
     func testProviderBoundariesMatchSharedConnectors() {
         XCTAssertTrue(TVServerFeedbackPolicy.supportsFavorite(.subsonic))
         XCTAssertTrue(TVServerFeedbackPolicy.supportsFavorite(.navidrome))
@@ -142,7 +186,7 @@ final class TVServerFeedbackServiceTests: XCTestCase {
         XCTAssertFalse(TVServerFeedbackPolicy.supportsFavorite(.airsonic))
         XCTAssertFalse(TVServerFeedbackPolicy.supportsFavorite(.gonic))
         XCTAssertFalse(TVServerFeedbackPolicy.supportsFavorite(.jellyfin))
-        XCTAssertFalse(TVServerFeedbackPolicy.supportsFavorite(.fnMusic))
+        XCTAssertTrue(TVServerFeedbackPolicy.supportsFavorite(.fnMusic))
 
         XCTAssertTrue(TVServerFeedbackPolicy.supportsNowPlaying(.subsonic))
         XCTAssertTrue(TVServerFeedbackPolicy.supportsNowPlaying(.navidrome))
@@ -397,5 +441,56 @@ private extension Array where Element: Hashable {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
     }
+}
+
+private struct TVFnFavoriteResolver: StreamResolver {
+    func streamURL(for song: Song, source: MusicSource, credential: SourceCredential?) async throws -> URL {
+        URL(string: "https://feedback.invalid/prefix/music/api/v1/track/stream?guid=song")!
+    }
+    func resolve(for song: Song, source: MusicSource, credential: SourceCredential?) async throws -> ResolvedStream {
+        ResolvedStream(url: try await streamURL(for: song, source: source, credential: credential),
+                       headers: ["Cookie": "music-token=TV-token; mode=relay", "authx": "old-stream-signature"])
+    }
+}
+
+private final class TVFnFavoriteURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [URLRequest] = []
+    nonisolated(unsafe) private static var favorite = false
+    static func reset() { lock.withLock { recorded = []; favorite = false } }
+    static func requests() -> [URLRequest] { lock.withLock { recorded } }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let data = Self.lock.withLock {
+            Self.recorded.append(request)
+            var code = 0
+            if request.httpMethod == "POST" {
+                var body = request.httpBody ?? Data()
+                if body.isEmpty, let stream = request.httpBodyStream {
+                    stream.open()
+                    defer { stream.close() }
+                    var buffer = [UInt8](repeating: 0, count: 1024)
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&buffer, maxLength: buffer.count)
+                        if count <= 0 { break }
+                        body.append(buffer, count: count)
+                    }
+                }
+                let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: String]
+                if object == ["trackGUID": "song"] {
+                    Self.favorite = request.url?.lastPathComponent == "create"
+                } else { code = 400 }
+            }
+            return try! JSONSerialization.data(withJSONObject: [
+                "code": code, "data": ["list": Self.favorite ? [["guid": "song"]] : [], "total": Self.favorite ? 1 : 0],
+            ])
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                            headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
 #endif

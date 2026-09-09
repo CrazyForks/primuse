@@ -51,6 +51,10 @@ public actor FnMusicStreamResolver: StreamResolver {
         )
     }
 
+    init(session: URLSession) {
+        self.session = session
+    }
+
     deinit { session.invalidateAndCancel() }
 
     public func invalidateSession(sourceID: String) {
@@ -355,6 +359,13 @@ public actor FnMusicStreamResolver: StreamResolver {
             throw StreamResolveError.badServerResponse(-1)
         }
         if http.statusCode == 401 || http.statusCode == 403 {
+            throw StreamResolveError.authFailed
+        }
+        if http.statusCode == 200,
+           let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let code = (envelope["code"] as? NSNumber)?.intValue
+                ?? Int(envelope["code"] as? String ?? ""),
+           [120001, 401, 403].contains(code) {
             throw StreamResolveError.authFailed
         }
         guard http.statusCode == 206 else {

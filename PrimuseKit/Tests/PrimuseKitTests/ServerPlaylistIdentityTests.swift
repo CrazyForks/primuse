@@ -103,20 +103,24 @@ struct ServerPlaylistIdentityTests {
 
 @Suite("Server favorite writeback policy")
 struct ServerFavoriteWritebackPolicyTests {
-    @Test("Only Emby, Navidrome, Subsonic and Songloft sources can write favorites")
+    @Test("Only explicitly supported sources can write favorites")
     func supportsOnlyExplicitFavoriteSources() {
         #expect(ServerFavoriteWritebackPolicy.supports(.emby))
         #expect(ServerFavoriteWritebackPolicy.supports(.navidrome))
         #expect(ServerFavoriteWritebackPolicy.supports(.subsonic))
         #expect(ServerFavoriteWritebackPolicy.supports(.songloft))
+        #expect(ServerFavoriteWritebackPolicy.supports(.fnMusic))
 
-        for sourceType in MusicSourceType.allCases where ![.emby, .navidrome, .subsonic, .songloft].contains(sourceType) {
+        for sourceType in MusicSourceType.allCases where ![.emby, .navidrome, .subsonic, .songloft, .fnMusic].contains(sourceType) {
             #expect(!ServerFavoriteWritebackPolicy.supports(sourceType))
         }
     }
 
     @Test("Song IDs are recovered only from connector-owned song paths")
     func extractsStrictSongIDs() {
+        #expect(ServerFavoriteWritebackPolicy.songID(
+            fromConnectorPath: "/fnmusic/tracks/track.a.flac", sourceType: .fnMusic
+        ) == "track.a")
         #expect(ServerFavoriteWritebackPolicy.songID(
             fromConnectorPath: "/songs/navidrome-song.flac",
             sourceType: .navidrome
@@ -134,6 +138,9 @@ struct ServerFavoriteWritebackPolicyTests {
     @Test("Malformed, mismatched and unsupported paths are rejected before mutation")
     func rejectsUnsafeMutationIDs() {
         let rejected: [(String, MusicSourceType)] = [
+            ("/fnmusic/tracks/nested/song.flac", .fnMusic),
+            ("/fnmusic/tracks/", .fnMusic),
+            ("/songs/song.flac", .fnMusic),
             ("", .navidrome),
             ("/", .navidrome),
             ("/songs/", .navidrome),

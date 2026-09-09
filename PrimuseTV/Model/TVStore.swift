@@ -2541,6 +2541,10 @@ final class TVStore {
                 try? FileManager.default.removeItem(at: checkpointURL)
             }
             scanner.markPersistedScanComplete()
+            if source.type == .fnMusic {
+                await syncFnMusicLibrary(source: source, credential: cred, generation: generation)
+                guard isCurrentScan(source: source, generation: generation) else { return false }
+            }
             enqueueSnapshotUpload()
             return true
         } catch {
@@ -2558,6 +2562,41 @@ final class TVStore {
             }
             scanner.phase = error is CancellationError ? .idle : .failed(PMString("ext.tv.persistence.failed"))
             return false
+        }
+    }
+
+    private func syncFnMusicLibrary(source: MusicSource, credential: SourceCredential?, generation: UUID) async {
+        do {
+            let snapshot = try await scanner.fetchFnMusicPlaylists(source: source, credential: credential)
+            guard isCurrentScan(source: source, generation: generation) else { return }
+            _ = ServerPlaylistMirror.apply(
+                snapshot: ServerPlaylistSnapshot(
+                    playlists: snapshot.playlists.map {
+                        ServerPlaylist(id: $0.id, name: $0.name, coverArtReference: $0.coverReference,
+                                       trackIDs: $0.trackIDs, reportedTrackCount: $0.trackIDs.count)
+                    }, failedPlaylistIDs: snapshot.failedPlaylistIDs
+                ), source: source, library: library
+            )
+        } catch {
+            if OperationCancellationPolicy.isCancellation(error) { return }
+            plog("Server playlist sync failed for '\(source.name)': \(error.localizedDescription)")
+        }
+        guard isCurrentScan(source: source, generation: generation),
+              let revision = serverFeedback.favoriteRefreshRevision(sourceID: source.id) else { return }
+        do {
+            let itemIDs = try await scanner.fetchFnMusicFavorites(source: source, credential: credential)
+            guard isCurrentScan(source: source, generation: generation),
+                  serverFeedback.favoriteRefreshRevision(sourceID: source.id) == revision else { return }
+            let favorites = Set(itemIDs)
+            let songIDs = library.songs.filter {
+                $0.sourceID == source.id && ServerFavoriteWritebackPolicy.songID(
+                    fromConnectorPath: $0.filePath, sourceType: .fnMusic
+                ).map(favorites.contains) == true
+            }.map(\.id)
+            library.replaceLikedSongs(fromSourceID: source.id, with: songIDs)
+        } catch {
+            if OperationCancellationPolicy.isCancellation(error) { return }
+            plog("Server favorite sync failed for '\(source.name)': \(error.localizedDescription)")
         }
     }
 

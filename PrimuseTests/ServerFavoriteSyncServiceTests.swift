@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class ServerFavoriteSyncServiceTests: XCTestCase {
+    func testFnMusicFavoritesUseTrackGUIDsForRefreshAndWriteback() async {
+        let source = makeSource(type: .fnMusic)
+        let song = makeSong(sourceID: source.id, path: "/fnmusic/tracks/song-1.flac")
+        let manager = FavoriteManagerFake()
+        manager.serverItemIDs = ["song-1"]
+        let library = FavoriteLibraryFake(songs: [song])
+        let service = makeService(source: source, manager: manager, library: library)
+        await service.refresh(source: source)
+        XCTAssertTrue(library.isLiked(songID: song.id))
+        library.setLocalLiked(song.id, false)
+        service.localLikedStateDidChange(song: song, previous: true, desired: false)
+        await service.waitForPendingMutations(sourceID: source.id)
+        XCTAssertEqual(manager.setCalls.map(\.itemID), ["song-1"])
+        XCTAssertFalse(library.isLiked(songID: song.id))
+        XCTAssertTrue(library.errorMessages.isEmpty)
+    }
+
     func testNavidromeStarAndUnstarRoundTripThroughAuthoritativeSnapshots() async {
         let source = makeSource(type: .navidrome)
         let song = makeSong(sourceID: source.id, path: "/songs/song-1.flac")
@@ -228,10 +245,16 @@ final class ServerFavoriteSyncServiceTests: XCTestCase {
         await service.waitForPendingMutations(sourceID: source.id)
     }
 
-    func testSupportedSourceMatrixPreservesEmbyAndExcludesEveryOtherSource() async {
+    func testSupportedSourceMatrixUsesEachProvidersTrackIdentity() async {
         for sourceType in MusicSourceType.allCases {
             let source = makeSource(type: sourceType)
-            let path = sourceType == .emby ? "/items/item-1.mp3" : "/songs/item-1.mp3"
+            let path: String
+            switch sourceType {
+            case .emby: path = "/items/item-1.mp3"
+            case .fnMusic: path = "/fnmusic/tracks/item-1.mp3"
+            case .songloft: path = "/songloft/songs/1.mp3"
+            default: path = "/songs/item-1.mp3"
+            }
             let song = makeSong(sourceID: source.id, path: path)
             let manager = FavoriteManagerFake()
             let library = FavoriteLibraryFake(songs: [song])
@@ -241,7 +264,7 @@ final class ServerFavoriteSyncServiceTests: XCTestCase {
             service.localLikedStateDidChange(song: song, previous: false, desired: true)
             await service.waitForPendingMutations(sourceID: source.id)
 
-            let shouldWrite = ServerFavoriteWritebackPolicy.supports(sourceType)
+            let shouldWrite = [MusicSourceType.emby, .subsonic, .navidrome, .fnMusic, .songloft].contains(sourceType)
             XCTAssertEqual(manager.setCalls.count, shouldWrite ? 1 : 0, "Unexpected call for \(sourceType)")
             XCTAssertTrue(library.isLiked(songID: song.id))
         }

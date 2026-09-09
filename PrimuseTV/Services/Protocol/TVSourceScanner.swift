@@ -1226,6 +1226,18 @@ final class TVSourceScanner {
         }
     }
 
+    func fetchFnMusicPlaylists(source: MusicSource, credential: SourceCredential?) async throws -> FnMusicPlaylistSnapshot {
+        try await withRoutedSource(source) { routedSource in
+            try await self.fnMusicClient(source: routedSource, credential: credential).library.playlists()
+        }
+    }
+
+    func fetchFnMusicFavorites(source: MusicSource, credential: SourceCredential?) async throws -> [String] {
+        try await withRoutedSource(source) { routedSource in
+            try await self.fnMusicClient(source: routedSource, credential: credential).library.favorites()
+        }
+    }
+
     func validateDaoLiYuConnection(
         source: MusicSource,
         credential: SourceCredential?

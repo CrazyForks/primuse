@@ -565,6 +565,7 @@ targets:
           - "Info-preview.plist"
       # 复用 iOS app 的「干净」曲库数据核心(与 tvpreview.yml 一致,直接编进 tvOS app)
       - path: Primuse/Services/Library/MusicLibrary.swift
+      - path: Primuse/Services/Library/ServerPlaylistMirror.swift
       - path: Primuse/Services/Library/LibraryDatabase.swift
       - path: Primuse/Services/Library/PlayHistoryStore.swift
       - path: Primuse/Services/Library/SmartPlaylistEngine.swift
