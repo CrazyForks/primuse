@@ -21,7 +21,7 @@ struct HomeListeningRankingSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     heading
@@ -31,48 +31,48 @@ struct HomeListeningRankingSection: View {
                 VStack(alignment: .leading, spacing: 10) { heading; periodPicker }
             }
 
-            VStack(spacing: 14) {
-                categoryPicker
-                if isLoading {
-                    ProgressView().frame(maxWidth: .infinity, minHeight: 170)
-                } else if !ranks.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(Array(visibleRanks.enumerated()), id: \.element.id) { position, rank in
-                            rankRow(rank, position: position)
-                            if position < visibleRanks.count - 1 { Divider() }
-                        }
-                    }
+            categoryPicker
 
-                    if ranks.count > 5 {
-                        Button {
-                            withAnimation(.snappy) {
-                                showsExpandedRanking.toggle()
-                            }
-                        } label: {
-                            Label(
-                                showsExpandedRanking
-                                    ? HomeDiscoveryText.string("collapse_ranking")
-                                    : HomeDiscoveryText.string("expand_top_20"),
-                                systemImage: showsExpandedRanking ? "chevron.up" : "chevron.down"
-                            )
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 42)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("home.rankingExpand")
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 170)
+                    .background(rowSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else if !ranks.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(Array(visibleRanks.enumerated()), id: \.element.id) { position, rank in
+                        rankRow(rank, position: position)
                     }
-                } else {
-                    VStack(spacing: 8) {
-                        Image(systemName: "chart.bar.xaxis").font(.title2).foregroundStyle(.secondary)
-                        Text(HomeDiscoveryText.string("empty_ranking")).font(.headline)
-                        Text(HomeDiscoveryText.string("ranking_hint"))
-                            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 150)
                 }
+
+                if ranks.count > 5 {
+                    Button {
+                        withAnimation(.snappy) {
+                            showsExpandedRanking.toggle()
+                        }
+                    } label: {
+                        Label(
+                            showsExpandedRanking
+                                ? HomeDiscoveryText.string("collapse_ranking")
+                                : HomeDiscoveryText.string("expand_top_20"),
+                            systemImage: showsExpandedRanking ? "chevron.up" : "chevron.down"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .accessibilityIdentifier("home.rankingExpand")
+                }
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "chart.bar.xaxis").font(.title2).foregroundStyle(.secondary)
+                    Text(HomeDiscoveryText.string("empty_ranking")).font(.headline)
+                    Text(HomeDiscoveryText.string("ranking_hint"))
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 150)
+                .background(rowSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-            .padding(16)
-            .background(cardSurface, in: RoundedRectangle(cornerRadius: 22))
 
             Text(HomeDiscoveryText.string(category == .folders ? "folder_ranking_scope" : "ranking_scope"))
                 .font(.caption2).foregroundStyle(.secondary)
@@ -112,8 +112,8 @@ struct HomeListeningRankingSection: View {
                 ForEach(HomeListeningCategory.allCases, id: \.self) { item in
                     Button { category = item } label: {
                         Text(categoryTitle(item))
-                            .font(.subheadline.weight(category == item ? .semibold : .regular))
-                            .padding(.horizontal, 14).frame(minHeight: 40)
+                            .font(.caption.weight(category == item ? .semibold : .regular))
+                            .padding(.horizontal, 12).frame(minHeight: 30)
                             .foregroundStyle(category == item ? Color.accentColor : Color.secondary)
                             .background(category == item ? Color.accentColor.opacity(0.12) : .clear, in: Capsule())
                             .overlay(Capsule().strokeBorder(category == item ? Color.accentColor.opacity(0.4) : Color.secondary.opacity(0.25)))
@@ -146,9 +146,12 @@ struct HomeListeningRankingSection: View {
                     .disabled(!canPlay(rank))
 
                     if reviewsEnabled, let song = firstSong(in: rank) {
-                        compactRatingPicker(for: song)
-                            .padding(.leading, 80)
-                            .padding(.bottom, 6)
+                        HStack {
+                            Spacer(minLength: 70)
+                            compactRatingPicker(for: song)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 7)
                     }
                 }
             } else {
@@ -159,6 +162,7 @@ struct HomeListeningRankingSection: View {
             }
         }
         .buttonStyle(.plain)
+        .background(rowSurface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .contextMenu {
             Button("play", systemImage: "play.fill") { play(rank) }
                 .disabled(!canPlay(rank))
@@ -166,47 +170,27 @@ struct HomeListeningRankingSection: View {
     }
 
     private func rankLabel(_ rank: HomeListeningRank, position: Int) -> some View {
-        HStack(spacing: 10) {
-            Text("\(position + 1)").font(.headline.monospacedDigit())
+        HStack(spacing: 11) {
+            Text("\(position + 1)").font(.subheadline.bold().monospacedDigit())
                 .foregroundStyle(position == 0 ? Color.accentColor : Color.secondary)
-                .frame(width: 24)
+                .frame(width: 18)
             if let song = firstSong(in: rank) {
                 CachedArtworkView(
-                    coverRef: song.coverArtFileName, songID: song.id, size: 46, cornerRadius: 8,
+                    coverRef: song.coverArtFileName, songID: song.id, size: 40, cornerRadius: 7,
                     sourceID: song.sourceID, filePath: song.filePath, fileFormat: song.fileFormat
                 )
                 .accessibilityHidden(true)
             }
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(rankTitle(rank)).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Label(
-                        String(format: HomeDiscoveryText.string("play_count"), rank.playCount),
-                        systemImage: "headphones"
-                    )
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .labelStyle(.titleAndIcon)
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(rankTitle(rank))
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
 
-                HStack(spacing: 8) {
-                    if !rank.subtitle.isEmpty {
-                        Text(rank.subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    Text(
-                        Duration.seconds(rank.listenedSeconds).formatted(
-                            .units(allowed: [.hours, .minutes], width: .abbreviated)
-                        )
-                    )
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                if !rank.subtitle.isEmpty {
+                    Text(rank.subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 GeometryReader { geometry in
@@ -217,9 +201,26 @@ struct HomeListeningRankingSection: View {
                 .frame(height: 3)
                 .accessibilityHidden(true)
             }
+
+            Spacer(minLength: 4)
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(verbatim: "\(rank.playCount)")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+
+                Text(
+                    Duration.seconds(rank.listenedSeconds).formatted(
+                        .units(allowed: [.hours, .minutes], width: .abbreviated)
+                    )
+                )
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .foregroundStyle(.primary)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(position + 1), \(rankTitle(rank)), \(String(format: HomeDiscoveryText.string("play_count"), rank.playCount))")
@@ -233,8 +234,8 @@ struct HomeListeningRankingSection: View {
         LibraryReviewRatingPicker(
             rating: library.libraryReview(for: .song(song.id))?.rating,
             foregroundStyle: .yellow,
-            symbolSize: 11,
-            buttonSize: 20
+            symbolSize: 10,
+            buttonSize: 18
         ) { rating in
             let review = library.libraryReview(for: .song(song.id))
             library.updateLibraryReview(
@@ -261,7 +262,7 @@ struct HomeListeningRankingSection: View {
         !rank.songIDs.compactMap { library.unobservedVisibleSong(id: $0) }.filteredPlayable().isEmpty
     }
 
-    private var cardSurface: Color {
+    private var rowSurface: Color {
         #if os(iOS)
         Color(uiColor: .secondarySystemBackground)
         #else

@@ -72,7 +72,7 @@ struct CarPlayEditorCanvas: View {
 
     private var sidebar: some View {
         VStack(spacing: 17) {
-            Text("9:41").font(.system(size: 11, weight: .semibold))
+            Text(verbatim: "9:41").font(.system(size: 11, weight: .semibold))
             Image(systemName: "wifi").font(.system(size: 11))
             Image(systemName: "music.note").font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(CarPlayEditorTheme.background)

@@ -15,7 +15,7 @@ struct RemoteMediaHTTPError: Error, LocalizedError, Sendable {
     }
 
     var errorDescription: String? {
-        SourceError.connectionFailed("\(service) HTTP \(statusCode)").errorDescription
+        String(format: String(localized: "error_connection_failed %@"), "\(service) HTTP \(statusCode)")
     }
 
     static func retryDelay(from response: HTTPURLResponse, now: Date = Date()) -> TimeInterval? {
