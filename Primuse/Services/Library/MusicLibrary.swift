@@ -8059,7 +8059,14 @@ final class MusicLibrary {
     /// computeAlbumsAndArtists 也要用。
     nonisolated static func hashID(_ input: String) -> String {
         let hash = SHA256.hash(data: Data(input.utf8))
-        return hash.prefix(16).map { String(format: "%02x", $0) }.joined()
+        let digits = Array("0123456789abcdef".utf8)
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(32)
+        for byte in hash.prefix(16) {
+            bytes.append(digits[Int(byte >> 4)])
+            bytes.append(digits[Int(byte & 0x0f)])
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// 给单首歌就近填好 albumID / artistID, 不依赖整库 rebuildIndex。这样

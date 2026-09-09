@@ -105,11 +105,19 @@ final class ScanService {
     /// prevents another legacy source from starting during a scene transition.
     @ObservationIgnored private var folderTopologyRebuildTask: Task<Void, Never>?
     private var folderTopologyRebuildGeneration = 0
+    @ObservationIgnored private let connectorProvider: ((MusicSource) -> any MusicSourceConnector)?
+    @ObservationIgnored private let diagnosticProvider: ((MusicSource, [String]) async -> SourceDiagnosticReport)?
     /// Invalidates folder indexes when a committed provider scan changes the
     /// ID/name/parent topology without adding or removing any songs.
     private(set) var folderHierarchyRevision = 0
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        connectorProvider: ((MusicSource) -> any MusicSourceConnector)? = nil,
+        diagnosticProvider: ((MusicSource, [String]) async -> SourceDiagnosticReport)? = nil
+    ) {
+        self.connectorProvider = connectorProvider
+        self.diagnosticProvider = diagnosticProvider
         let appSupport = fileManager.primuseDirectoryURL(for: .applicationSupportDirectory)
         let directory = appSupport.appendingPathComponent("Primuse", isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -491,7 +499,12 @@ final class ScanService {
             let usesDedicatedSynologyScan = source.type == .synology
                 && source.connectionConfiguration == nil
             if !usesDedicatedSynologyScan {
-                let preflight = await sourceManager.diagnose(source: source, directories: normalizedDirs)
+                let preflight: SourceDiagnosticReport
+                if let diagnosticProvider {
+                    preflight = await diagnosticProvider(source, normalizedDirs)
+                } else {
+                    preflight = await sourceManager.diagnose(source: source, directories: normalizedDirs)
+                }
                 guard isCurrentScan(source.id, generation: generation),
                       sourceCanContinue(source.id, sourceStore: sourceStore) else {
                     if isCurrentScan(source.id, generation: generation) {
@@ -1327,7 +1340,7 @@ final class ScanService {
         snapshotExecutionContext: BaiduSnapshotExecutionContext,
         checkpoint: ScanCheckpoint?
     ) async {
-        let connector = sourceManager.connector(for: source)
+        let connector = connectorProvider?(source) ?? sourceManager.connector(for: source)
         let scanner = ConnectorScanner(connector: connector, sourceID: source.id)
         let requiresAtomicCatalogCommit = source.type.isServerLibrary || source.type == .upnp
         // Pass songs from the live library (for this source) as the
@@ -1854,7 +1867,7 @@ final class ScanService {
                 let timeSinceFlush = Date().timeIntervalSince(lastFlushAt)
                 let shouldFlushIncrementally = pendingDelta >= Self.flushBatchSize
                     || (pendingDelta > 0 && timeSinceFlush >= Self.flushInterval)
-                if shouldFlushIncrementally {
+                if shouldFlushIncrementally, !requiresAtomicCatalogCommit {
                     // 中间 flush ── lastSongs 是当前累积的部分扫描结果, 还没
                     // 扫到的歌会被 addSongs 临时移除, 下次 flush 又补回。
                     // 这种"伪移除"不该触发缓存清理, 否则扫描中用户的本地
@@ -2856,6 +2869,11 @@ final class ScanService {
             }.value
             catalogSongs = prepared.0
             commitsCatalogSnapshot = prepared.1
+        } else if source?.type == .fnMusic {
+            let existingSongs = library.songs.filter { $0.sourceID == sourceID }
+            commitsCatalogSnapshot = await Task.detached(priority: .utility) {
+                SourceCatalogSnapshotPolicy.hasChanges(existing: existingSongs, candidate: songs)
+            }.value
         } else {
             commitsCatalogSnapshot = true
         }

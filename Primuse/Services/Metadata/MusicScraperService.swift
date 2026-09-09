@@ -751,7 +751,8 @@ final class MusicScraperService {
     }
 
     func enqueueBackgroundEnrichment(for songs: [Song], in library: MusicLibrary) {
-        let candidates = songs.filter(shouldBackgroundEnrich)
+        let settings = ScraperSettings.load()
+        let candidates = songs.filter { shouldBackgroundEnrich($0, settings: settings) }
         guard !candidates.isEmpty else { return }
 
         for song in candidates where pendingEnrichmentSongIDSet.insert(song.id).inserted {
@@ -1845,8 +1846,7 @@ final class MusicScraperService {
         return nil
     }
 
-    private func shouldBackgroundEnrich(_ song: Song) -> Bool {
-        let settings = ScraperSettings.load()
+    private func shouldBackgroundEnrich(_ song: Song, settings: ScraperSettings) -> Bool {
         if settings.onlyFillMissingFields == false {
             return true
         }

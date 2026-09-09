@@ -1366,19 +1366,23 @@ actor ConnectorScanner {
             || MediaMetadataTextRepair.isSuspicious(existing.title) {
             refreshed.title = incoming.title
         }
-        if existing.artistName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-            || MediaMetadataTextRepair.isSuspicious(existing.artistName) {
+        if (existing.artistName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+            || MediaMetadataTextRepair.isSuspicious(existing.artistName)),
+           existing.artistName != incoming.artistName
+            || existing.sourceArtistNames != incoming.sourceArtistNames {
             refreshed.artistName = incoming.artistName
             refreshed.sourceArtistNames = incoming.sourceArtistNames
             refreshed.artistID = incoming.artistID
         }
-        if existing.albumTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-            || MediaMetadataTextRepair.isSuspicious(existing.albumTitle) {
+        if (existing.albumTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+            || MediaMetadataTextRepair.isSuspicious(existing.albumTitle)),
+           existing.albumTitle != incoming.albumTitle {
             refreshed.albumTitle = incoming.albumTitle
             refreshed.albumID = incoming.albumID
         }
-        if existing.albumArtistName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-            || MediaMetadataTextRepair.isSuspicious(existing.albumArtistName) {
+        if (existing.albumArtistName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+            || MediaMetadataTextRepair.isSuspicious(existing.albumArtistName)),
+           existing.albumArtistName != incoming.albumArtistName {
             refreshed.albumArtistName = incoming.albumArtistName
             refreshed.albumID = incoming.albumID
         }
