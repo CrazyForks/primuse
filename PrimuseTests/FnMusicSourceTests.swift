@@ -69,6 +69,77 @@ final class FnMusicSourceTests: XCTestCase {
         XCTAssertEqual(fixture.library.spotlightIndexRevision, spotlightRevision)
     }
 
+    func testDeferredForegroundResumeWaitsForBackoffAndStartsOnlyOnce() async throws {
+        let resumeAfter = Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970) + 1)
+        let fixture = try makeScanFixture(count: 1, failAfterPage: false, resumeAfter: resumeAfter)
+        defer { fixture.scan.cancelAllActiveScans() }
+        fixture.resume()
+        fixture.resume()
+        try await Task.sleep(for: .milliseconds(100))
+        let initialCount = await fixture.connector.scanCount
+        XCTAssertEqual(initialCount, 0)
+        let deadline = resumeAfter.addingTimeInterval(5)
+        while fixture.library.songs.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(fixture.library.songs.count, 1)
+        let finalCount = await fixture.connector.scanCount
+        XCTAssertEqual(finalCount, 1)
+    }
+
+    func testSceneTransitionCancelsDeferredForegroundResume() async throws {
+        let resumeAfter = Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970) + 1)
+        let fixture = try makeScanFixture(count: 1, failAfterPage: false, resumeAfter: resumeAfter)
+        fixture.resume()
+        fixture.scan.cancelAllActiveScans()
+        try await Task.sleep(for: .seconds(max(0, resumeAfter.timeIntervalSinceNow) + 1.3))
+        let scanCount = await fixture.connector.scanCount
+        XCTAssertEqual(scanCount, 0)
+        XCTAssertTrue(fixture.scan.scanStates[fixture.source.id]?.canResume == true)
+        XCTAssertTrue(fixture.library.songs.isEmpty)
+    }
+
+    func testExplicitScanBypassesAutomaticResumeBackoff() async throws {
+        let fixture = try makeScanFixture(
+            count: 1, failAfterPage: false, resumeAfter: Date().addingTimeInterval(300)
+        )
+        defer { fixture.scan.cancelAllActiveScans() }
+        XCTAssertTrue(fixture.start())
+        let deadline = Date().addingTimeInterval(5)
+        while fixture.library.songs.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(fixture.library.songs.count, 1)
+    }
+
+    func testDeferredResumeKeepsManagedLocalImportIndependentOfNetwork() throws {
+        let key = "local_import_source_id"
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(previous, forKey: key) }
+        let sourceID = UUID().uuidString
+        UserDefaults.standard.set(sourceID, forKey: key)
+        let source = MusicSource(
+            id: sourceID, name: "Local fixture", type: .local,
+            basePath: LocalImportService.musicDirectory.path
+        )
+        let now = Date(timeIntervalSince1970: 10_000)
+        let resumeAfter = now.addingTimeInterval(300)
+        let fixture = try makeScanFixture(
+            count: 0, failAfterPage: false, source: source, resumeAfter: resumeAfter
+        )
+        XCTAssertTrue(LocalImportService.isManagedSource(source))
+        XCTAssertEqual(fixture.scan.nextAutomaticResumeDate(at: now, sourceStore: fixture.store), resumeAfter)
+        XCTAssertNil(fixture.scan.nextAutomaticResumeDate(
+            at: now, sourceStore: fixture.store, networkSourcesOnly: true
+        ))
+        let network = try makeScanFixture(count: 0, failAfterPage: false, resumeAfter: resumeAfter)
+        XCTAssertEqual(network.scan.nextAutomaticResumeDate(
+            at: now, sourceStore: network.store, networkSourcesOnly: true
+        ), resumeAfter)
+        network.store.updateLocal(network.source.id) { $0.isEnabled = false }
+        XCTAssertNil(network.scan.nextAutomaticResumeDate(at: now, sourceStore: network.store))
+    }
+
     private struct ScanFixture {
         let source: MusicSource
         let connector: FnMusicScanFixtureConnector
@@ -80,16 +151,40 @@ final class FnMusicSourceTests: XCTestCase {
         @MainActor func start() -> Bool {
             scan.scanSource(source, sourceManager: manager, library: library, sourceStore: store)
         }
+
+        @MainActor func resume() {
+            scan.resumePendingScans(
+                sourceManager: manager, library: library, sourceStore: store, scraperService: nil
+            )
+        }
     }
 
-    private func makeScanFixture(count: Int, failAfterPage: Bool) throws -> ScanFixture {
+    private func makeScanFixture(
+        count: Int,
+        failAfterPage: Bool,
+        source: MusicSource? = nil,
+        resumeAfter: Date? = nil
+    ) throws -> ScanFixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("FnMusicScan-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let source = MusicSource(id: UUID().uuidString, name: "Scan fixture", type: .fnMusic)
+        let source = source ?? MusicSource(id: UUID().uuidString, name: "Scan fixture", type: .fnMusic)
         let connector = FnMusicScanFixtureConnector(sourceID: source.id, count: count, failAfterPage: failAfterPage)
         let library = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
         let store = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
         store.add(source)
+        if let resumeAfter {
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent("Primuse"), withIntermediateDirectories: true
+            )
+            var checkpoint = ScanCheckpointPreparationPolicy.preparingCheckpoint(
+                existing: nil, directories: ["/"], mode: .automatic,
+                scopeFingerprint: ScanService.scopeFingerprint(for: source, directories: ["/"])
+            )
+            checkpoint.automaticResumeAfter = resumeAfter
+            try ScanCheckpointFileStore.writeSnapshot(
+                [source.id: checkpoint], to: root.appendingPathComponent("Primuse/scan-checkpoints.json")
+            )
+        }
         let scan = ScanService(fileManager: FnMusicScanFileManager(root: root), connectorProvider: { _ in connector },
                                diagnosticProvider: { source, _ in
             SourceDiagnosticReport(source: source, startedAt: Date(), checks: [])
@@ -170,6 +265,7 @@ private actor FnMusicScanFixtureConnector: RefreshingMetadataSongConnector {
     let count: Int
     let failAfterPage: Bool
     private(set) var isWaiting = false
+    private(set) var scanCount = 0
     private var released = false
 
     init(sourceID: String, count: Int, failAfterPage: Bool) {
@@ -185,7 +281,8 @@ private actor FnMusicScanFixtureConnector: RefreshingMetadataSongConnector {
         .init { $0.finish() }
     }
     func scanSongs(from path: String) async throws -> AsyncThrowingStream<ConnectorScannedSong, Error> {
-        AsyncThrowingStream { continuation in
+        scanCount += 1
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     for index in 0..<count {

@@ -1446,7 +1446,9 @@ final class MusicScraperService {
         guard UIApplication.shared.applicationState != .active else { return }
         guard backgroundTaskID == .invalid else { return }
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "primuse.metadata-scrape") { [weak self] in
-            Task { @MainActor [weak self] in
+            // Runs on the main thread; end the assertion synchronously so the
+            // checkpoint is preserved inside the expiration grace period.
+            MainActor.assumeIsolated {
                 self?.cancelPreservingCheckpoint()
             }
         }

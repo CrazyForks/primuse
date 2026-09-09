@@ -105,6 +105,10 @@ final class ScanService {
     /// prevents another legacy source from starting during a scene transition.
     @ObservationIgnored private var folderTopologyRebuildTask: Task<Void, Never>?
     private var folderTopologyRebuildGeneration = 0
+    /// Re-runs the foreground resume once every checkpoint skipped for its
+    /// automatic-resume backoff becomes eligible again. Cancelled together with
+    /// the active scans when the scene leaves the foreground.
+    @ObservationIgnored private var deferredForegroundResumeTask: Task<Void, Never>?
     @ObservationIgnored private let connectorProvider: ((MusicSource) -> any MusicSourceConnector)?
     @ObservationIgnored private let diagnosticProvider: ((MusicSource, [String]) async -> SourceDiagnosticReport)?
     /// Invalidates folder indexes when a committed provider scan changes the
@@ -626,6 +630,35 @@ final class ScanService {
         }
     }
 
+    /// Earliest moment at which a resumable checkpoint that is currently
+    /// backing off after an automatic resume failure becomes eligible again.
+    /// Nil when no resumable source is backing off. Baidu Pan is excluded
+    /// because its snapshot walk only ever resumes in the foreground.
+    func nextAutomaticResumeDate(
+        at now: Date = Date(),
+        sourceStore: SourcesStore?,
+        networkSourcesOnly: Bool = false
+    ) -> Date? {
+        let backingOff = scanStates.compactMap { sourceID, state -> ScanCheckpoint? in
+            guard state.canResume, activeTasks[sourceID] == nil,
+                  let checkpoint = checkpoints[sourceID] else { return nil }
+            if let sourceStore {
+                guard let source = sourceStore.source(id: sourceID),
+                      source.isEnabled, !source.isDeleted,
+                      source.type != .baiduPan, source.type != .appleMusicLibrary else { return nil }
+                if networkSourcesOnly {
+                    #if os(iOS)
+                    guard !LocalImportService.isManagedSource(source) else { return nil }
+                    #else
+                    guard source.type != .local else { return nil }
+                    #endif
+                }
+            }
+            return checkpoint
+        }
+        return ScanCheckpoint.earliestAutomaticResumeDate(in: backingOff, after: now)
+    }
+
     /// 扫描期间向 library 批量提交的阈值。改大可以显著降低 main actor 上
     /// rebuildIndex / persistSnapshot 的频率, 避免 1w+ 首库 scale 时出现
     /// "扫描期间 UI 卡顿"。1w 首库下从原本的每 10 首提交一次 (1000 次
@@ -649,6 +682,8 @@ final class ScanService {
         sourceStore: SourcesStore,
         scraperService: MusicScraperService?
     ) {
+        deferredForegroundResumeTask?.cancel()
+        deferredForegroundResumeTask = nil
         let now = Date()
         for (sourceID, state) in Array(scanStates) where state.canResume {
             guard activeTasks[sourceID] == nil else { continue }
@@ -690,6 +725,28 @@ final class ScanService {
             scanSource(
                 source,
                 snapshotExecutionContext: context,
+                sourceManager: sourceManager,
+                library: library,
+                sourceStore: sourceStore,
+                scraperService: scraperService
+            )
+        }
+        // A checkpoint that is still backing off keeps its durable delay, but
+        // the foreground must not strand it: nothing else re-enters this path
+        // while the app stays active, so revisit it once the delay elapses.
+        guard context == .foregroundResume,
+              let resumeDate = nextAutomaticResumeDate(at: now, sourceStore: sourceStore) else { return }
+        let delay = max(1, resumeDate.timeIntervalSince(now) + 1)
+        deferredForegroundResumeTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.deferredForegroundResumeTask = nil
+            self.resumePendingScans(
+                context: .foregroundResume,
                 sourceManager: sourceManager,
                 library: library,
                 sourceStore: sourceStore,
@@ -851,8 +908,14 @@ final class ScanService {
             #endif
         }
         let periodicDate = sourceStore.flatMap { nextPeriodicSyncDate(sourceStore: $0) }
+        // A resumable checkpoint inside its failure backoff is not immediate
+        // work, but cancelling the request would drop its only later wake.
+        let deferredScanDate = nextAutomaticResumeDate(at: now, sourceStore: sourceStore)
+        let deferredNetworkScanDate = nextAutomaticResumeDate(
+            at: now, sourceStore: sourceStore, networkSourcesOnly: true
+        )
         guard hasScanWork || backfillPending || scrapePending
-                || localImportPending || periodicDate != nil else {
+                || localImportPending || periodicDate != nil || deferredScanDate != nil else {
             // A request submitted by an older build (or before the last item
             // completed) otherwise survives indefinitely and can wake a clean
             // library only to discover that there is no work left.
@@ -868,14 +931,14 @@ final class ScanService {
         // when it is the only reason for this background request.
         request.requiresNetworkConnectivity = hasNetworkScanWork
             || (backfillPending && backfillRequiresNetworkConnectivity)
-            || scrapePending || periodicDate != nil
+            || scrapePending || periodicDate != nil || deferredNetworkScanDate != nil
         request.requiresExternalPower = false
         let immediateWork = hasScanWork || backfillPending || scrapePending
             || localImportPending
         let earliestUsefulWake = Date(timeIntervalSinceNow: 60)
         request.earliestBeginDate = immediateWork
             ? earliestUsefulWake
-            : periodicDate.map { max($0, earliestUsefulWake) }
+            : [periodicDate, deferredScanDate].compactMap { $0 }.map { max($0, earliestUsefulWake) }.min()
         do {
             BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.backgroundTaskIdentifier)
             try BGTaskScheduler.shared.submit(request)
@@ -909,6 +972,8 @@ final class ScanService {
     /// Cancel every in-flight scan. Used by the BGProcessingTask expiration
     /// handler so iOS doesn't kill us mid-write.
     func cancelAllActiveScans() {
+        deferredForegroundResumeTask?.cancel()
+        deferredForegroundResumeTask = nil
         for sourceID in Array(activeTasks.keys) {
             cancelScan(for: sourceID)
         }
@@ -3409,7 +3474,10 @@ final class ScanService {
         #if os(iOS)
         endBackgroundTask(for: sourceID)
         backgroundTaskIDs[sourceID] = UIApplication.shared.beginBackgroundTask(withName: "scan-\(sourceID)") { [weak self] in
-            Task { @MainActor in
+            // UIKit invokes the handler on the main thread. Ending the assertion
+            // synchronously keeps the release inside the expiration grace period
+            // even when the main actor queue is backed up by other work.
+            MainActor.assumeIsolated {
                 self?.cancelScan(for: sourceID)
             }
         }

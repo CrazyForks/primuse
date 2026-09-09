@@ -1448,7 +1448,9 @@ final class MetadataBackfillService {
         let assertionGeneration = UUID()
         backgroundAssertionGeneration = assertionGeneration
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "primuse.backfill") { [weak self] in
-            Task { @MainActor [weak self] in
+            // Runs on the main thread; release the assertion before the
+            // expiration grace period ends instead of after a main-actor hop.
+            MainActor.assumeIsolated {
                 guard let self, self.backgroundAssertionGeneration == assertionGeneration,
                       !self.hasContinuedProcessingTime, self.systemProcessingSessions.isEmpty,
                       UIApplication.shared.applicationState != .active else { return }

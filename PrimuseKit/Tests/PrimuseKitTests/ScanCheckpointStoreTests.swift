@@ -137,6 +137,26 @@ struct ScanCheckpointPreparationTests {
         #expect(cleared.canAutomaticallyResume(at: start))
     }
 
+    @Test("Backing-off checkpoints report the earliest moment they become eligible again")
+    func earliestAutomaticResumeDate() {
+        let start = Date(timeIntervalSince1970: 10_000)
+        let ready = makeCheckpoint(
+            phase: .initial,
+            intent: .automatic,
+            directories: ["/Music"],
+            pendingDirectories: ["/Music"]
+        )
+        let first = ready.recordingAutomaticResumeFailure(at: start)
+        let second = first.recordingAutomaticResumeFailure(at: start)
+
+        #expect(ScanCheckpoint.earliestAutomaticResumeDate(in: [ready], after: start) == nil)
+        #expect(ScanCheckpoint.earliestAutomaticResumeDate(in: [second, first, ready], after: start)
+            == start.addingTimeInterval(300))
+        #expect(ScanCheckpoint.earliestAutomaticResumeDate(in: [second, first], after: start.addingTimeInterval(300))
+            == start.addingTimeInterval(600))
+        #expect(ScanCheckpoint.earliestAutomaticResumeDate(in: [second, first], after: start.addingTimeInterval(600)) == nil)
+    }
+
     @Test("A cloud account switch never resumes the previous scope")
     func scopeMismatchRestartsCheckpoint() {
         let previous = makeCheckpoint(

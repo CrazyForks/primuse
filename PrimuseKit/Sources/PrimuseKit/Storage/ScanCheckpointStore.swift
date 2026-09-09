@@ -135,6 +135,21 @@ public struct ScanCheckpoint: Codable, Equatable, Sendable {
         return updated
     }
 
+    /// Earliest moment strictly after `date` at which one of `checkpoints`
+    /// leaves its automatic-resume backoff. Nil when none of them is backing
+    /// off, so lifecycle code can distinguish "resume now" from "wake later".
+    public static func earliestAutomaticResumeDate<S: Sequence>(
+        in checkpoints: S,
+        after date: Date = Date()
+    ) -> Date? where S.Element == ScanCheckpoint {
+        var earliest: Date?
+        for checkpoint in checkpoints {
+            guard let resumeAfter = checkpoint.automaticResumeAfter, resumeAfter > date else { continue }
+            earliest = earliest.map { min($0, resumeAfter) } ?? resumeAfter
+        }
+        return earliest
+    }
+
     public func promotedToFullScan(at date: Date = Date()) -> Self {
         guard phase == .initial, intent != .fullScan else { return self }
         var promoted = self
