@@ -956,8 +956,13 @@ struct DuplicateSongsView: View {
 
     private var recoverableBytes: Int64 {
         let writableSourceIDs = deletableSourceIDsSnapshot
+        // WebDAV rows only leave the library; their bytes stay on the share.
+        let fileDeletingSourceIDs = Set(sourcesStore.sources.lazy
+            .filter { SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: $0.type) }
+            .map(\.id))
         return groups
             .flatMap { removableSongs(in: $0, deletableSourceIDs: writableSourceIDs) }
+            .filter { fileDeletingSourceIDs.contains($0.sourceID) }
             .reduce(Int64(0)) { $0 + max(Int64(0), $1.fileSize) }
     }
 

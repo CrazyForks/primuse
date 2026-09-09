@@ -554,6 +554,13 @@ public enum SourceFileDeletionPolicy {
         sourceType?.supportsFileDeletion == true
     }
 
+    /// Duplicate cleanup keeps the files of a WebDAV share untouched and only
+    /// removes the redundant library copies; every other writable source still
+    /// deletes the redundant file itself.
+    public static func duplicateCleanupRemovesSourceFile(for sourceType: MusicSourceType) -> Bool {
+        sourceType.supportsFileDeletion && sourceType != .webdav
+    }
+
     public static func shouldRemoveLibraryRecord(
         after audioStatus: SourceAudioDeletionStatus,
         sidecarWarningCount: Int = 0

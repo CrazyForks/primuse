@@ -52,11 +52,19 @@ final class DuplicateCleanupService {
         let deletableSourceIDs = Set(sourcesStore.sources.lazy
             .filter { $0.type.supportsFileDeletion }
             .map(\.id))
+        // WebDAV copies leave the share untouched: the redundant rows are
+        // removed from the library (and tombstoned against rescans) without
+        // sending a DELETE to the server.
+        let sourceFileDeletionSourceIDs = Set(sourcesStore.sources.lazy
+            .filter { SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: $0.type) }
+            .map(\.id))
         let songs = requestedSongs.filter { deletableSourceIDs.contains($0.sourceID) }
         if songs.count != requestedSongs.count {
             plog("⚠️ Duplicate cleanup ignored \(requestedSongs.count - songs.count) read-only song(s)")
         }
         guard !songs.isEmpty else { return nil }
+        let sourceDeletionSongs = songs.filter { sourceFileDeletionSourceIDs.contains($0.sourceID) }
+        let libraryOnlySongs = songs.filter { !sourceFileDeletionSourceIDs.contains($0.sourceID) }
         progress = Progress(done: 0, total: songs.count)
 
         let task = Task { @MainActor in
@@ -80,7 +88,7 @@ final class DuplicateCleanupService {
             let sidecarDeletionSongIDs = await Task.detached(priority: .utility) {
                 let retainedSongs = librarySnapshot.filter { !deletingIDs.contains($0.id) }
                 return SourceManager.sidecarDeletionSongIDs(
-                    deleting: songs,
+                    deleting: sourceDeletionSongs,
                     retaining: retainedSongs
                 )
             }.value
@@ -88,14 +96,17 @@ final class DuplicateCleanupService {
             // 只有源端文件确实被删 (或本就不存在) 的歌才能从库里移除并写
             // tombstone; 删除失败、文件仍在 NAS/云盘上的歌必须保留, 否则它们
             // 会被 tombstone 永久挡掉重扫, 而用户没有恢复入口。
-            var removableSongs: [Song] = []
+            // WebDAV 例外: 用户明确要求只清理资料库里的重复条目、不动服务器
+            // 文件, 因此这些歌直接移除并写 tombstone, 重扫不会再次加回。
+            var removableSongs: [Song] = libraryOnlySongs
             var failedSongs: [Song] = []
             var failureCount = 0
             var lastProgressPublishAt = Date.distantPast
             let outcomes = await self.sourceManager.deleteSourceFiles(
-                for: songs,
+                for: sourceDeletionSongs,
                 deleteSidecarsForSongIDs: sidecarDeletionSongIDs
-            ) { done in
+            ) { sourceDone in
+                let done = sourceDone + libraryOnlySongs.count
                 // A local folder can delete hundreds of tiny files per second.
                 // Publishing every counter value made the entire duplicate
                 // Form recompute at that rate, so cap UI updates while keeping
@@ -140,7 +151,7 @@ final class DuplicateCleanupService {
             self.lastFailedTitles = failedSongs.map(\.title)
             self.completionRevision &+= 1
 
-            if outcomes.count < songs.count {
+            if outcomes.count < sourceDeletionSongs.count {
                 self.progress = nil
             } else if self.progress?.done != songs.count {
                 self.progress = Progress(done: songs.count, total: songs.count)
