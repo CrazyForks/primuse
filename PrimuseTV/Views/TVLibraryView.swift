@@ -241,11 +241,14 @@ struct TVLibraryView: View {
                 .tvFont(.caption, weight: .semibold)
                 .foregroundStyle(TVColor.text)
 
+                let recommendationSongs = displayedRecommendationSongs
+                let recommendationQueueSongIDs = recommendationSongs.map(\.id)
                 LazyVStack(spacing: 10) {
-                    ForEach(displayedRecommendationSongs) { song in
+                    ForEach(recommendationSongs) { song in
                         TVSongRow(
                             song: song,
                             reason: aiRecommendation.reason(for: song.id),
+                            queueSongIDs: recommendationQueueSongIDs,
                             action: openPlayer
                         )
                     }
@@ -263,10 +266,11 @@ struct TVLibraryView: View {
                 }
             }
         case .songs:
+            let librarySongIDs = store.songIDs
             LazyVStack(spacing: 10) {
-                ForEach(store.songIDs, id: \.self) { songID in
+                ForEach(librarySongIDs, id: \.self) { songID in
                     if let song = store.song(songID) {
-                        TVSongRow(song: song, action: openPlayer)
+                        TVSongRow(song: song, queueSongIDs: librarySongIDs, action: openPlayer)
                     }
                 }
             }
@@ -553,8 +557,10 @@ struct TVSongRow: View {
         let album = store.albumOf(song)
         TVFocusButton(radius: TVRadius.card, scale: 1.02, lift: 0,
                       action: {
+                          // 列表内点歌保持该列表为队列,并沿用当前随机开关;
+                          // 没给列表时按可见曲库顺序续播。
                           if let queueSongIDs {
-                              guard store.playResolvedQueue(songIDs: queueSongIDs, shuffled: false, startingAt: song.id) else { return }
+                              guard store.play(song, in: queueSongIDs) else { return }
                           } else { store.play(song) }
                           action()
                       }) { focused in

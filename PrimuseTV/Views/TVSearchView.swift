@@ -10,7 +10,15 @@ private enum TVSemanticSearchFeedback: Equatable {
     case failed
 }
 
-/// tvOS 搜索 — 左列查询框 + 建议(常驻),右列实时结果(含歌词级匹配)。对应 TVSearchArtboard。
+/// 当前焦点所在的区域。结果列表刷新时据此判断是否需要接管焦点,
+/// 避免在用户停留在输入框或建议列时被结果抢走焦点。
+private enum TVSearchFocusZone: Equatable {
+    case field
+    case results
+    case suggestions
+}
+
+/// tvOS 搜索 — 左列查询框 + 实时结果(含歌词级匹配),右列常驻建议。对应 TVSearchArtboard。
 struct TVSearchView: View {
     @Environment(TVStore.self) private var store
     @Environment(MusicIntelligenceService.self) private var intelligence
@@ -25,18 +33,56 @@ struct TVSearchView: View {
     @State private var isSearching = false
     @State private var isSemanticSearching = false
     @State private var semanticFeedback: TVSemanticSearchFeedback = .idle
+    @State private var focusZone: TVSearchFocusZone = .field
+    @State private var lastFocusedResultID: String?
     @FocusState private var inputActive: Bool
+    @FocusState private var focusedResultID: String?
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+
+    // MARK: 结果切片(视觉顺序:艺术家 → 专辑 → 歌曲 → AI 补充)
+
+    private var artistResults: [TVArtist] { results?.artists ?? [] }
+    private var albumResults: [TVAlbum] { results?.albums ?? [] }
+    private var primarySongResults: [TVStore.TVSearchHit] {
+        (results?.songs ?? []).filter { $0.relatedConcept == nil }
+    }
+    private var intelligentSongResults: [TVStore.TVSearchHit] {
+        (results?.songs ?? []).filter { $0.relatedConcept != nil }
+    }
+
+    /// 结果行的稳定焦点标识,顺序与视觉顺序一致;结果替换后用它做焦点对齐。
+    private var resultFocusIDs: [String] {
+        artistResults.map(Self.artistFocusID)
+            + albumResults.map(Self.albumFocusID)
+            + primarySongResults.map(Self.songFocusID)
+            + intelligentSongResults.map(Self.songFocusID)
+    }
+
+    private var hasResults: Bool { !resultFocusIDs.isEmpty }
+
+    private var showsNoMatch: Bool {
+        !trimmed.isEmpty && !isSearching && !hasResults
+    }
+
+    private static func artistFocusID(_ artist: TVArtist) -> String { "artist:" + artist.id }
+    private static func albumFocusID(_ album: TVAlbum) -> String { "album:" + album.id }
+    private static func songFocusID(_ hit: TVStore.TVSearchHit) -> String { "song:" + hit.id }
 
     var body: some View {
         ZStack {
             TVAmbientBackdrop(tint: store.albums.first?.tint ?? TVColor.brand,
                               tint2: store.albums.first?.tint2 ?? .black, strength: 0.4)
             HStack(alignment: .top, spacing: 60) {
-                // 两列各撑满高度,右列结果区从左列任意行往右都可达(焦点区 frame 不再只占顶部)。
-                leftColumn.frame(maxHeight: .infinity, alignment: .topLeading).focusSection()
-                rightColumn.frame(maxHeight: .infinity, alignment: .topLeading).focusSection()
+                // 左列 = 输入框 + 主结果;右列 = 建议。两列各自成焦点区:
+                // 左列内上下移动只在「输入框 ↔ 结果」之间走,右移才跨到建议列。
+                resultsColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .focusSection()
+                suggestionsColumn
+                    .frame(width: 460)
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+                    .focusSection()
             }
             .tvPage()
         }
@@ -47,7 +93,19 @@ struct TVSearchView: View {
             guard let request = focusRequest, request.target == .searchField else { return }
             await Task.yield()
             guard !Task.isCancelled, focusRequest == request else { return }
+            focusZone = .field
             inputActive = true
+        }
+        .onChange(of: resultFocusIDs) { _, ids in
+            reconcileResultFocus(ids)
+        }
+        .onChange(of: focusedResultID) { _, value in
+            guard let value else { return }
+            focusZone = .results
+            lastFocusedResultID = value
+        }
+        .onChange(of: inputActive) { _, active in
+            if active { focusZone = .field }
         }
         .fullScreenCover(item: $selectedArtist, onDismiss: finishArtistDismissal) { artist in
             TVArtistDetailView(
@@ -66,44 +124,166 @@ struct TVSearchView: View {
         }
     }
 
-    // MARK: 左列 — 搜索框(单层玻璃盒) + 建议(常驻)
+    // MARK: 左列 — 搜索框(单层玻璃盒) + 实时结果
 
-    private var leftColumn: some View {
+    private var resultsColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             TVEyebrow(text: PMString("ext.tv.search.eyebrow")).padding(.bottom, 16)
+            searchField.padding(.bottom, 16)
+            Text(PMString("ext.tv.search.hint"))
+                .tvFont(.caption).foregroundStyle(TVColor.textGhost).padding(.bottom, 22)
+            resultsHeader.padding(.bottom, 12)
+            resultsBody
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
-            // 单层原生输入框:tvOS 的 TextField 自带一个圆角输入框,聚焦后唤起系统键盘。
-            // 不再叠自绘玻璃盒 + 近透明 TextField,避免「大框套小框」和异常高度。
-            HStack(spacing: 18) {
-                Image(systemName: "magnifyingglass").font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(inputActive ? TVColor.brand : TVColor.textFaint)
-                TextField(PMString("ext.tv.search.placeholder"), text: $query)
-                    .focused($inputActive)
-                    .tvFont(.input)
-                    .frame(maxWidth: .infinity)
-                if !trimmed.isEmpty {
-                    TVFocusButton(radius: 18, scale: 1.06, lift: 0, action: { query = "" }) { f in
-                        Text(PMString("ext.tv.search.clear"))
-                            .tvFont(.caption, weight: .medium).foregroundStyle(TVColor.text)
-                            .padding(.horizontal, 16).padding(.vertical, 8)
-                            .background(f ? TVColor.surfaceStrong : TVColor.surface, in: Capsule())
-                    }
+    // 单层原生输入框:tvOS 的 TextField 自带一个圆角输入框,聚焦后唤起系统键盘。
+    // 不再叠自绘玻璃盒 + 近透明 TextField,避免「大框套小框」和异常高度。
+    private var searchField: some View {
+        HStack(spacing: 18) {
+            Image(systemName: "magnifyingglass").font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(inputActive ? TVColor.brand : TVColor.textFaint)
+            TextField(PMString("ext.tv.search.placeholder"), text: $query)
+                .focused($inputActive)
+                .tvFont(.input)
+                .frame(maxWidth: .infinity)
+            if !trimmed.isEmpty {
+                TVFocusButton(radius: 18, scale: 1.06, lift: 0, action: { query = "" }) { f in
+                    Text(PMString("ext.tv.search.clear"))
+                        .tvFont(.caption, weight: .medium).foregroundStyle(TVColor.text)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(f ? TVColor.surfaceStrong : TVColor.surface, in: Capsule())
+                }
+                .onMoveCommand { direction in
+                    guard direction == .down, let first = resultFocusIDs.first else { return }
+                    // The narrow clear button may not geometrically overlap
+                    // the first artist/album card in the results below it.
+                    focusedResultID = first
                 }
             }
-            .padding(.bottom, 18)
+        }
+    }
 
-            Text(PMString("ext.tv.search.hint"))
-                .tvFont(.caption).foregroundStyle(TVColor.textGhost).padding(.bottom, 28)
+    private var resultsHeader: some View {
+        HStack {
+            TVEyebrow(text: PMString("ext.tv.search.topResult"))
+            Spacer()
+            if isSearching || isSemanticSearching {
+                ProgressView()
+                    .controlSize(.small)
+                Text(PMString("ext.tv.search.aiLoading"))
+                    .tvFont(.caption)
+                    .foregroundStyle(TVColor.textFaint)
+            } else {
+                semanticStatusLabel
+            }
+        }
+    }
 
-            // 建议常驻(随输入精化),不再只在空查询时显示。
+    @ViewBuilder
+    private var resultsBody: some View {
+        if trimmed.isEmpty {
+            // 空查询:只给提示文案(不可聚焦),焦点留在输入框 / 建议列。
+            Text(PMString("ext.tv.search.typeToSearch"))
+                .tvFont(.caption).foregroundStyle(TVColor.textFaint)
+            Spacer(minLength: 0)
+        } else {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if !artistResults.isEmpty {
+                        artistCarousel
+                    }
+                    if !albumResults.isEmpty {
+                        albumCarousel
+                    }
+                    if !primarySongResults.isEmpty {
+                        TVEyebrow(text: PMString("ext.tv.search.songs"))
+                            .padding(.top, artistResults.isEmpty && albumResults.isEmpty ? 0 : 22)
+                            .padding(.bottom, 12)
+                        songList(primarySongResults)
+                    }
+                    if !intelligentSongResults.isEmpty {
+                        TVEyebrow(text: PMString("ext.tv.search.aiSupplement"))
+                            .padding(.top, 22)
+                            .padding(.bottom, 8)
+                        songList(intelligentSongResults)
+                    }
+                    if showsNoMatch {
+                        // 无匹配:纯文本(不可聚焦),焦点保持在输入框。
+                        Text(PMString("ext.tv.search.noMatch")).tvFont(.caption)
+                            .foregroundStyle(TVColor.textGhost)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var artistCarousel: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 22) {
+                ForEach(artistResults) { artist in
+                    TVArtistCard(
+                        artist: artist,
+                        size: 140,
+                        action: { selectedArtist = artist }
+                    )
+                    .focused($focusedResultID, equals: Self.artistFocusID(artist))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 18)
+        }
+    }
+
+    private var albumCarousel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TVEyebrow(text: PMString("ext.tv.library.title.albums", albumResults.count))
+                .padding(.top, artistResults.isEmpty ? 0 : 18)
+                .padding(.bottom, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 18) {
+                    ForEach(albumResults) { album in
+                        TVAlbumCard(album: album, width: 200, action: openPlayer)
+                            .focused($focusedResultID, equals: Self.albumFocusID(album))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 20)
+            }
+        }
+    }
+
+    private func songList(_ hits: [TVStore.TVSearchHit]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(hits) { hit in
+                TVSearchSongRow(
+                    hit: hit,
+                    focusedResultID: $focusedResultID,
+                    focusID: Self.songFocusID(hit),
+                    action: openPlayer
+                )
+            }
+        }
+    }
+
+    // MARK: 右列 — 建议(常驻,随输入精化)
+
+    private var suggestionsColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TVEyebrow(text: PMString("ext.tv.search.suggestions")).padding(.bottom, 16)
             let suggestions = store.searchSuggestions(query)
             if !suggestions.isEmpty {
-                Text(PMString("ext.tv.search.suggestions")).tvFont(.caption)
-                    .foregroundStyle(TVColor.textMuted).padding(.bottom, 10)
                 VStack(spacing: 4) {
                     ForEach(suggestions, id: \.self) { s in
                         TVFocusButton(radius: 10, scale: 1.0, lift: 0,
-                                      action: { query = s }) { focused in
+                                      action: { query = s },
+                                      onFocusChanged: { focused in
+                                          if focused { focusZone = .suggestions }
+                                      }) { focused in
                             HStack {
                                 Text(s).tvFont(.body).foregroundStyle(TVColor.text)
                                 Spacer()
@@ -119,84 +299,29 @@ struct TVSearchView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: 右列 — 结果(顶部匹配 + 歌曲/歌词命中)
+    // MARK: 焦点对齐
 
-    private var rightColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                TVEyebrow(text: PMString("ext.tv.search.topResult"))
-                Spacer()
-                if isSearching || isSemanticSearching {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(PMString("ext.tv.search.aiLoading"))
-                        .tvFont(.caption)
-                        .foregroundStyle(TVColor.textFaint)
-                } else {
-                    semanticStatusLabel
-                }
+    /// 结果被替换(防抖主结果 → AI 富化结果)后保持选中项:
+    /// 同一项仍在则保持,消失则落到第一条;完全没有结果时回到输入框。
+    /// 仅在焦点本就位于结果区时接管,避免抢走输入框 / 建议列的焦点。
+    private func reconcileResultFocus(_ ids: [String]) {
+        guard focusZone == .results else { return }
+        let anchor = focusedResultID ?? lastFocusedResultID
+        if let anchor, ids.contains(anchor) {
+            if focusedResultID != anchor {
+                focusedResultID = anchor
             }
-            .padding(.bottom, 16)
-            if let artists = results?.artists, !artists.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 22) {
-                        ForEach(artists) { artist in
-                            TVArtistCard(
-                                artist: artist,
-                                size: 140,
-                                action: { selectedArtist = artist }
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 18)
-                }
-            } else {
-                Text(PMString("ext.tv.search.typeToSearch")).tvFont(.caption).foregroundStyle(TVColor.textFaint)
-            }
-
-            if let albums = results?.albums, !albums.isEmpty {
-                TVEyebrow(text: PMString("ext.tv.library.title.albums", albums.count))
-                    .padding(.top, 24)
-                    .padding(.bottom, 8)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 18) {
-                        ForEach(albums) { album in
-                            TVAlbumCard(album: album, width: 200, action: openPlayer)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 20)
-                }
-            }
-
-            TVEyebrow(text: PMString("ext.tv.search.songs")).padding(.top, 28).padding(.bottom, 16)
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach((results?.songs ?? []).filter { $0.relatedConcept == nil }) { hit in
-                        TVSearchSongRow(hit: hit, action: openPlayer)
-                    }
-                    let intelligentResults = (results?.songs ?? []).filter { $0.relatedConcept != nil }
-                    if !intelligentResults.isEmpty {
-                        TVEyebrow(text: PMString("ext.tv.search.aiSupplement"))
-                            .padding(.top, 22)
-                            .padding(.bottom, 8)
-                        ForEach(intelligentResults) { hit in
-                            TVSearchSongRow(hit: hit, action: openPlayer)
-                        }
-                    }
-                    if !trimmed.isEmpty,
-                       results?.songs.isEmpty != false,
-                       results?.albums.isEmpty != false,
-                       results?.artists.isEmpty != false,
-                       !isSearching {
-                        Text(PMString("ext.tv.search.noMatch")).tvFont(.caption)
-                            .foregroundStyle(TVColor.textGhost).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
+            return
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        if let first = ids.first {
+            lastFocusedResultID = first
+            focusedResultID = first
+        } else {
+            lastFocusedResultID = nil
+            focusedResultID = nil
+            focusZone = .field
+            inputActive = true
+        }
     }
 
     @MainActor
@@ -329,6 +454,8 @@ struct TVSearchView: View {
 private struct TVSearchSongRow: View {
     @Environment(TVStore.self) private var store
     let hit: TVStore.TVSearchHit
+    @FocusState.Binding var focusedResultID: String?
+    let focusID: String
     var action: () -> Void = {}
 
     var body: some View {
@@ -378,6 +505,7 @@ private struct TVSearchSongRow: View {
             .padding(14).frame(maxWidth: .infinity)
             .background(focused ? TVColor.surfaceStrong : TVColor.surfaceSubtle)
         }
+        .focused($focusedResultID, equals: focusID)
     }
 }
 #endif

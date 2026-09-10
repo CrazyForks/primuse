@@ -1415,4 +1415,155 @@ final class TVRemoteSeekFocusTests: XCTestCase {
         XCTAssertEqual(store.currentTime, 0)
     }
 }
+
+/// 可重放的伪随机源(splitmix64),让洗牌相关断言不依赖系统随机。
+private struct TVSeededRandomNumberGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+final class TVPlaybackQueuePolicyTests: XCTestCase {
+    func testShuffledSelectionPlaysSelectedSongFirstAndKeepsEveryOtherIndexOnce() {
+        var generator = TVSeededRandomNumberGenerator(seed: 0xC0FFEE)
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: 8,
+            selectedIndex: 5,
+            shuffled: true,
+            using: &generator
+        )
+
+        XCTAssertEqual(plan.queueIndex, 0)
+        XCTAssertEqual(plan.canonicalIndices.first, 5)
+        XCTAssertEqual(plan.canonicalIndices.count, 8)
+        XCTAssertEqual(Set(plan.canonicalIndices), Set(0..<8))
+        XCTAssertEqual(plan.canonicalIndices.dropFirst().filter { $0 == 5 }.count, 0)
+    }
+
+    func testUnshuffledSelectionKeepsIdentityOrderAndStopsOnSelectedIndex() {
+        var generator = TVSeededRandomNumberGenerator(seed: 7)
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: 6,
+            selectedIndex: 4,
+            shuffled: false,
+            using: &generator
+        )
+
+        XCTAssertEqual(plan.canonicalIndices, Array(0..<6))
+        XCTAssertEqual(plan.queueIndex, 4)
+    }
+
+    func testUnshuffledWithoutSelectionStartsAtFirstEntry() {
+        var generator = TVSeededRandomNumberGenerator(seed: 11)
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: 3,
+            selectedIndex: nil,
+            shuffled: false,
+            using: &generator
+        )
+
+        XCTAssertEqual(plan.canonicalIndices, [0, 1, 2])
+        XCTAssertEqual(plan.queueIndex, 0)
+    }
+
+    func testShuffledWithoutSelectionKeepsPermutationAndStartsAtQueueHead() {
+        var generator = TVSeededRandomNumberGenerator(seed: 42)
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: 12,
+            selectedIndex: nil,
+            shuffled: true,
+            using: &generator
+        )
+
+        XCTAssertEqual(plan.queueIndex, 0)
+        XCTAssertEqual(plan.canonicalIndices.count, 12)
+        XCTAssertEqual(plan.canonicalIndices.sorted(), Array(0..<12))
+    }
+
+    func testEmptyListProducesEmptyPlan() {
+        var generator = TVSeededRandomNumberGenerator(seed: 1)
+        let shuffledPlan = TVPlaybackQueuePolicy.plan(
+            count: 0,
+            selectedIndex: 0,
+            shuffled: true,
+            using: &generator
+        )
+        let orderedPlan = TVPlaybackQueuePolicy.plan(
+            count: 0,
+            selectedIndex: nil,
+            shuffled: false,
+            using: &generator
+        )
+
+        XCTAssertEqual(shuffledPlan, TVPlaybackQueuePolicy.Plan.empty)
+        XCTAssertEqual(orderedPlan, TVPlaybackQueuePolicy.Plan.empty)
+        XCTAssertTrue(shuffledPlan.canonicalIndices.isEmpty)
+        XCTAssertEqual(shuffledPlan.queueIndex, 0)
+    }
+
+    func testOutOfRangeSelectionFallsBackToUnselectedBehaviour() {
+        var generator = TVSeededRandomNumberGenerator(seed: 5)
+        let orderedPlan = TVPlaybackQueuePolicy.plan(
+            count: 4,
+            selectedIndex: 9,
+            shuffled: false,
+            using: &generator
+        )
+        let shuffledPlan = TVPlaybackQueuePolicy.plan(
+            count: 4,
+            selectedIndex: -1,
+            shuffled: true,
+            using: &generator
+        )
+
+        XCTAssertEqual(orderedPlan.canonicalIndices, Array(0..<4))
+        XCTAssertEqual(orderedPlan.queueIndex, 0)
+        XCTAssertEqual(shuffledPlan.queueIndex, 0)
+        XCTAssertEqual(shuffledPlan.canonicalIndices.sorted(), Array(0..<4))
+    }
+
+    func testSingleEntryListKeepsSelectedSongPlayable() {
+        var generator = TVSeededRandomNumberGenerator(seed: 3)
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: 1,
+            selectedIndex: 0,
+            shuffled: true,
+            using: &generator
+        )
+
+        XCTAssertEqual(plan.canonicalIndices, [0])
+        XCTAssertEqual(plan.queueIndex, 0)
+    }
+
+    func testSameSeedReproducesTheSameShuffledPlan() {
+        var first = TVSeededRandomNumberGenerator(seed: 2_024)
+        var second = TVSeededRandomNumberGenerator(seed: 2_024)
+        let planA = TVPlaybackQueuePolicy.plan(
+            count: 20,
+            selectedIndex: 13,
+            shuffled: true,
+            using: &first
+        )
+        let planB = TVPlaybackQueuePolicy.plan(
+            count: 20,
+            selectedIndex: 13,
+            shuffled: true,
+            using: &second
+        )
+
+        XCTAssertEqual(planA, planB)
+        XCTAssertEqual(planA.canonicalIndices.first, 13)
+        // 洗牌必须真的改变顺序,否则「随机」只是原序。
+        XCTAssertNotEqual(planA.canonicalIndices.dropFirst().map { $0 }, Array(0..<20).filter { $0 != 13 })
+    }
+}
+
 #endif

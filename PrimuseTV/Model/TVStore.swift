@@ -58,6 +58,58 @@ enum TVTrackNavigationAvailabilityPolicy {
     }
 }
 
+/// 点选单曲进入播放时的队列排布(纯函数,便于单测):
+/// - 未开随机:保持列表原顺序,停在被点选的位置;
+/// - 已开随机:被点选的那首排到队首,其余打乱跟随,避免它前面的歌被当成已播过;
+/// - 未指定点选曲且开随机:整表打乱后从头播。
+enum TVPlaybackQueuePolicy {
+    struct Plan: Equatable, Sendable {
+        var canonicalIndices: [Int]
+        var queueIndex: Int
+
+        static let empty = Plan(canonicalIndices: [], queueIndex: 0)
+    }
+
+    nonisolated static func plan(
+        count: Int,
+        selectedIndex: Int?,
+        shuffled: Bool
+    ) -> Plan {
+        var generator = SystemRandomNumberGenerator()
+        return plan(
+            count: count,
+            selectedIndex: selectedIndex,
+            shuffled: shuffled,
+            using: &generator
+        )
+    }
+
+    nonisolated static func plan<G: RandomNumberGenerator>(
+        count: Int,
+        selectedIndex: Int?,
+        shuffled: Bool,
+        using generator: inout G
+    ) -> Plan {
+        guard count > 0 else { return .empty }
+        let indices = Array(0..<count)
+        let selected = selectedIndex.flatMap { indices.indices.contains($0) ? $0 : nil }
+        guard shuffled else {
+            return Plan(canonicalIndices: indices, queueIndex: selected ?? 0)
+        }
+        guard let selected else {
+            return Plan(
+                canonicalIndices: indices.shuffled(using: &generator),
+                queueIndex: 0
+            )
+        }
+        return Plan(
+            canonicalIndices: [selected]
+                + indices.filter { $0 != selected }.shuffled(using: &generator),
+            queueIndex: 0
+        )
+    }
+}
+
 enum TVSourceLocalLibraryCapability: Equatable, Sendable {
     /// Apple TV can authenticate, enumerate the source, and build its own catalogue.
     case directScan
@@ -2906,11 +2958,20 @@ final class TVStore {
         }
     }
 
-    /// 选中一首歌播放:以其所属专辑为队列,从该曲开始。
+    /// 通用单曲入口(整库列表 / 搜索结果 / 首页歌曲卡片 / 推荐行):
+    /// 队列取当前可见曲库顺序,从该曲开始续播,而不是切换到该曲所属专辑。
     func play(_ song: TVSong) {
         guard !hasPendingSnapshotRecovery else { return }
         setQueueAround(song)
         startPlaying(song)
+    }
+
+    /// 明确列表内的单曲点击(艺人 / 专辑 / 文件夹 / 歌单 / 接收列表):
+    /// 队列就是该列表本身与它的顺序,从点选曲开始,并沿用当前随机开关
+    /// (点选一首歌不应该把随机播放悄悄关掉)。
+    @discardableResult
+    func play(_ song: TVSong, in songIDs: [String]) -> Bool {
+        playResolvedQueue(songIDs: songIDs, shuffled: shuffleEnabled, startingAt: song.id)
     }
 
     /// Siri 等系统入口已经解析出确定的歌曲顺序时直接采用该队列，避免再按
@@ -2920,11 +2981,16 @@ final class TVStore {
         guard !hasPendingSnapshotRecovery else { return false }
         let resolved = songIDs.filter { song($0) != nil }
         guard !resolved.isEmpty else { return false }
+        // 按 id 定位首个匹配项(与既有行为一致);随机时由 plan 把选中曲目放在队首。
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: resolved.count,
+            selectedIndex: songID.flatMap { resolved.firstIndex(of: $0) },
+            shuffled: shuffled
+        )
         canonicalQueue = resolved
-        queueCanonicalIndices = Array(resolved.indices)
-        if shuffled { queueCanonicalIndices.shuffle() }
-        queue = queueCanonicalIndices.map { resolved[$0] }
-        queueIndex = songID.flatMap { queue.firstIndex(of: $0) } ?? 0
+        queueCanonicalIndices = plan.canonicalIndices
+        queue = plan.canonicalIndices.map { resolved[$0] }
+        queueIndex = plan.queueIndex
         guard let first = song(queue[queueIndex]) else { return false }
         shuffleEnabled = shuffled
         startPlaying(first)
@@ -2950,7 +3016,8 @@ final class TVStore {
     }
 
     /// 全部播放 / 随机播放整个可见曲库(库多为散曲、没有真正专辑,所以播放范围用整库)。
-    func playAll(shuffle: Bool) {
+    @discardableResult
+    func playAll(shuffle: Bool) -> Bool {
         playResolvedQueue(songIDs: library.visibleSongs.map(\.id), shuffled: shuffle)
     }
 
@@ -3073,17 +3140,20 @@ final class TVStore {
         startPlaying(s)
     }
 
-    /// 单曲入口保留专辑范围；没有多曲专辑时使用当前可见歌曲顺序。
+    /// 通用单曲入口的队列范围:当前可见曲库顺序(专辑范围只留给显式的专辑播放),
+    /// 曲库里找不到这首(例如刚接收、尚未可见)时退化为单曲队列,避免队列与实际播放不一致。
     private func setQueueAround(_ song: TVSong) {
-        let albumSongs = songs(forAlbum: song.albumID)
-        canonicalQueue = albumSongs.count > 1 ? albumSongs.map(\.id) : cachedSongIDs
-        guard let selected = canonicalQueue.firstIndex(of: song.id) else { return }
-        queueCanonicalIndices = Array(canonicalQueue.indices)
-        if shuffleEnabled {
-            queueCanonicalIndices = [selected] + queueCanonicalIndices.filter { $0 != selected }.shuffled()
-        }
-        queue = queueCanonicalIndices.map { canonicalQueue[$0] }
-        queueIndex = shuffleEnabled ? 0 : selected
+        let selected = cachedSongIDs.firstIndex(of: song.id)
+        let scope = selected == nil ? [song.id] : cachedSongIDs
+        let plan = TVPlaybackQueuePolicy.plan(
+            count: scope.count,
+            selectedIndex: selected,
+            shuffled: shuffleEnabled
+        )
+        canonicalQueue = scope
+        queueCanonicalIndices = plan.canonicalIndices
+        queue = plan.canonicalIndices.map { scope[$0] }
+        queueIndex = plan.queueIndex
     }
 
     /// 设置展示元数据 + 触发真实解析播放。

@@ -335,19 +335,14 @@ struct TVHomeView: View {
         let didStart: Bool
         switch heroContent {
         case .album:
-            guard let heroAlbum else { return }
-            if shuffle {
-                didStart = store.playResolvedQueue(
-                    songIDs: candidateAlbumSongs.map(\.id),
-                    shuffled: true
-                )
-            } else {
-                store.play(album: heroAlbum)
-                didStart = !candidateAlbumSongs.isEmpty
-            }
+            guard heroAlbum != nil else { return }
+            // 两个按钮走同一份已解析的专辑曲目,didStart 用真实的播放结果。
+            didStart = store.playResolvedQueue(
+                songIDs: candidateAlbumSongs.map(\.id),
+                shuffled: shuffle || store.shuffleEnabled
+            )
         case .song:
-            store.playAll(shuffle: shuffle)
-            didStart = !store.songs.isEmpty
+            didStart = store.playAll(shuffle: shuffle)
         case .empty:
             didStart = false
         }

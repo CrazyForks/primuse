@@ -270,7 +270,8 @@ private struct TVReceivedMusicView: View {
                     ForEach(songs) { song in
                         TVFocusButton(scale: 1.01, lift: 0, action: {
                             if store.currentSongID == song.id { store.togglePlayPause() }
-                            else { _ = store.playResolvedQueue(songIDs: [song.id] + songs.filter { $0.id != song.id }.map(\.id), shuffled: false) }
+                            // 接收列表保持自身顺序作为队列,从点选曲开始,并沿用当前随机开关。
+                            else { _ = store.playResolvedQueue(songIDs: songs.map(\.id), shuffled: store.shuffleEnabled, startingAt: song.id) }
                         }) { focused in
                             HStack(spacing: 22) {
                                 Image(systemName: store.currentSongID == song.id && store.isPlaying ? "pause.circle.fill" : "play.circle.fill")

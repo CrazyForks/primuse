@@ -58,14 +58,62 @@ struct ImmersiveEffectEntryPolicyTests {
         ))
     }
 
-    @Test("Explicit TV entry opens the picker while idle entry stays passive")
-    func tvLaunchIntent() {
-        #expect(ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
-            isUserInitiated: true
+    @Test("Explicit TV entry keeps the saved immersive effect instead of re-asking")
+    func tvLaunchKeepsSavedImmersiveEffect() {
+        #expect(!ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
+            isUserInitiated: true,
+            savedEffectIsNative: false
+        ))
+    }
+
+    @Test("Explicit TV entry preserves the saved native selection")
+    func tvLaunchKeepsNativeSelection() {
+        #expect(!ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
+            isUserInitiated: true,
+            savedEffectIsNative: true
+        ))
+    }
+
+    @Test("Idle TV entry never opens the picker")
+    func idleLaunchStaysPassive() {
+        #expect(!ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
+            isUserInitiated: false,
+            savedEffectIsNative: true
         ))
         #expect(!ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
-            isUserInitiated: false
+            isUserInitiated: false,
+            savedEffectIsNative: false
         ))
+    }
+
+    @Test("Explicit entry with a saved effect drives a direct immersive presentation")
+    func explicitEntryStartsPresentationDirectly() {
+        let presentsPicker = ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
+            isUserInitiated: true,
+            savedEffectIsNative: false
+        )
+        let presentation = ImmersiveEffectEntryPolicy.initialPresentation(
+            isNativeEffect: false,
+            presentsEffectPicker: presentsPicker
+        )
+        #expect(!presentation.dismissesPlayer)
+        #expect(!presentation.showsEffectPicker)
+        #expect(presentation.startsPresentationWork)
+    }
+
+    @Test("Explicit native entry returns to the saved player without a picker")
+    func explicitNativeEntryKeepsPlayer() {
+        let presentsPicker = ImmersiveEffectEntryPolicy.tvLaunchPresentsEffectPicker(
+            isUserInitiated: true,
+            savedEffectIsNative: true
+        )
+        let presentation = ImmersiveEffectEntryPolicy.initialPresentation(
+            isNativeEffect: true,
+            presentsEffectPicker: presentsPicker
+        )
+        #expect(presentation.dismissesPlayer)
+        #expect(!presentation.showsEffectPicker)
+        #expect(!presentation.startsPresentationWork)
     }
 
     @Test("A requested picker remains visible for native and immersive effects")

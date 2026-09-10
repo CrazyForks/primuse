@@ -4477,9 +4477,11 @@ public struct ImmersiveEffectInitialPresentation: Equatable, Sendable {
     }
 }
 
-/// Keeps effect switching discoverable without turning passive presentation
-/// into an extra prompt. Explicit controls may reveal the picker; automatic
-/// presentation continues directly with the saved effect.
+/// Keeps effect switching discoverable without turning entry into an extra
+/// prompt. A saved immersive effect is honoured immediately — explicit and
+/// automatic entry both continue directly with it, and the picker stays
+/// reachable through the long press or the options screen. Native mode also
+/// remains selected without forcing another choice.
 public enum ImmersiveEffectEntryPolicy {
     public static func showsMacQuickAccess(
         hasCurrentSong: Bool,
@@ -4488,8 +4490,16 @@ public enum ImmersiveEffectEntryPolicy {
         hasCurrentSong && !isLiveRadio
     }
 
-    public static func tvLaunchPresentsEffectPicker(isUserInitiated: Bool) -> Bool {
-        isUserInitiated
+    /// - Parameters:
+    ///   - isUserInitiated: `true` for an explicit launch, `false` for the idle
+    ///     auto-presentation.
+    ///   - savedEffectIsNative: `true` when the persisted full-screen effect is
+    ///     the native player, which has nothing to render immersively.
+    public static func tvLaunchPresentsEffectPicker(
+        isUserInitiated: Bool,
+        savedEffectIsNative: Bool
+    ) -> Bool {
+        false
     }
 
     public static func initialPresentation(
