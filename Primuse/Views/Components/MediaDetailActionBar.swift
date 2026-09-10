@@ -103,8 +103,18 @@ struct LibraryReviewSection: View {
     let subject: LibraryReviewSubject
     var compact = false
     var onArtwork = false
+    var foregroundColor: Color? = nil
+    var topSpacing: CGFloat = 0
 
     @State private var showsCommentEditor = false
+
+    private var usesCompactControls: Bool {
+        #if os(iOS)
+        compact
+        #else
+        false
+        #endif
+    }
 
     private var review: LibraryReview? {
         library.libraryReview(for: subject)
@@ -122,7 +132,8 @@ struct LibraryReviewSection: View {
                 HStack(spacing: compact ? 5 : 8) {
                     LibraryReviewRatingPicker(
                         rating: review?.rating,
-                        foregroundStyle: onArtwork ? .white : .yellow
+                        foregroundStyle: foregroundColor ?? (onArtwork ? .white : .yellow),
+                        buttonSize: usesCompactControls ? 36 : 30
                     ) { rating in
                         library.updateLibraryReview(
                             for: subject,
@@ -133,35 +144,17 @@ struct LibraryReviewSection: View {
 
                     Spacer(minLength: 8)
 
-                    Button {
-                        showsCommentEditor = true
-                    } label: {
-                        if compact {
-                            Image(
-                                systemName: review?.comment.isEmpty == false
-                                    ? "text.bubble.fill"
-                                    : "text.bubble"
-                            )
-                        } else {
-                            Label(
-                                review?.comment.isEmpty == false
-                                    ? "library_review_edit_comment"
-                                    : "library_review_add_comment",
-                                systemImage: review?.comment.isEmpty == false
-                                    ? "text.bubble.fill"
-                                    : "text.bubble"
-                            )
-                        }
+                    if usesCompactControls {
+                        commentButton.buttonStyle(.plain)
+                    } else {
+                        commentButton.buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
-                    .foregroundStyle(onArtwork ? Color.white : Color.accentColor)
-                    .accessibilityHint(Text("library_review_comment_hint"))
                 }
 
                 if let comment = review?.comment, !comment.isEmpty {
                     Text(verbatim: comment)
                         .font(compact ? .caption : .subheadline)
-                        .foregroundStyle(onArtwork ? Color.white.opacity(0.78) : Color.secondary)
+                        .foregroundStyle(foregroundColor?.opacity(0.78) ?? (onArtwork ? Color.white.opacity(0.78) : Color.secondary))
                         .lineLimit(compact ? 2 : 4)
                         .fixedSize(horizontal: false, vertical: true)
                         .contentShape(Rectangle())
@@ -169,16 +162,42 @@ struct LibraryReviewSection: View {
                         .accessibilityAddTraits(.isButton)
                 }
             }
-            .padding(compact ? 10 : 14)
+            .padding(.horizontal, usesCompactControls ? 12 : (compact ? 10 : 14))
+            .padding(.vertical, usesCompactControls ? 8 : (compact ? 10 : 14))
             .background(reviewBackground, in: RoundedRectangle(cornerRadius: compact ? 12 : 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: compact ? 12 : 16, style: .continuous)
-                    .strokeBorder(onArtwork ? Color.white.opacity(0.14) : Color.primary.opacity(0.06), lineWidth: 0.5)
+                    .strokeBorder(onArtwork ? (foregroundColor ?? Color.white).opacity(0.14) : Color.primary.opacity(0.06), lineWidth: 0.5)
             }
+            .padding(.top, topSpacing)
             .sheet(isPresented: $showsCommentEditor) {
                 LibraryReviewCommentEditor(subject: subject)
             }
         }
+    }
+
+    private var commentButton: some View {
+        Button {
+            showsCommentEditor = true
+        } label: {
+            if compact {
+                Image(systemName: review?.comment.isEmpty == false ? "text.bubble.fill" : "text.bubble")
+                    .font(usesCompactControls ? .system(size: 17, weight: .medium) : nil)
+                    .frame(width: usesCompactControls ? 36 : nil, height: usesCompactControls ? 36 : nil)
+                    .contentShape(Rectangle())
+            } else {
+                Label(
+                    review?.comment.isEmpty == false
+                        ? "library_review_edit_comment"
+                        : "library_review_add_comment",
+                    systemImage: review?.comment.isEmpty == false ? "text.bubble.fill" : "text.bubble"
+                )
+            }
+        }
+        .foregroundStyle(foregroundColor ?? (onArtwork ? Color.white : Color.accentColor))
+        .accessibilityLabel(Text(review?.comment.isEmpty == false
+            ? "library_review_edit_comment" : "library_review_add_comment"))
+        .accessibilityHint(Text("library_review_comment_hint"))
     }
 
     private var reviewBackground: AnyShapeStyle {

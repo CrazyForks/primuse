@@ -877,21 +877,6 @@ struct NowPlayingView: View {
         }
     }
 
-    @ViewBuilder
-    private func lyricsFullScreenButton(font: Font, trailing: CGFloat = 0) -> some View {
-        Button { presentImmersiveLyrics() } label: {
-            nowPlayingActionIcon(
-                symbol: "viewfinder.rectangular",
-                tint: appearance.primary
-            )
-        }
-        .frame(width: 44, height: 44)
-        .buttonStyle(.plain)
-        .disabled(player.currentSong == nil)
-        .padding(.trailing, trailing)
-        .accessibilityLabel(Text("full_screen_player"))
-    }
-
     private func nowPlayingActionIcon(
         symbol: String,
         tint: Color,
@@ -1597,36 +1582,7 @@ struct NowPlayingView: View {
                     .frame(width: artworkColumnWidth, height: contentHeight)
 
                 VStack(spacing: 0) {
-                    HStack(spacing: 6) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 5) {
-                                Text(player.currentSong?.title ?? "")
-                                    .font(.headline.weight(.bold))
-                                    .lineLimit(1)
-                                    .foregroundStyle(appearance.primary)
-                                if let song = player.currentSong,
-                                   song.audioQuality != .standard {
-                                    AudioQualityBadge(quality: song.audioQuality)
-                                }
-                            }
-                            nowPlayingMetadataLinks(font: .subheadline)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        musicVideoToggleButton(font: .body, trailing: 0)
-                        lyricsFullScreenButton(font: .body, trailing: 0)
-                        Button { toggleLikedCurrent() } label: {
-                            nowPlayingActionIcon(
-                                symbol: isCurrentLiked ? "heart.fill" : "heart",
-                                tint: isCurrentLiked ? .red : appearance.secondary,
-                                isSelected: isCurrentLiked
-                            )
-                        }
-                        .frame(width: 40, height: 40)
-                        .disabled(player.currentSong == nil)
-                        .accessibilityLabel(Text(isCurrentLiked ? "a11y_unlike" : "a11y_like"))
-                        moreMenu
-                    }
+                    nowPlayingSongHeader(titleFont: .headline, metadataFont: .subheadline, showsQuality: true)
 
                     PlaybackProgressBar(fillTint: themedControlAccent)
                         .padding(.top, 4)
@@ -1781,53 +1737,22 @@ struct NowPlayingView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            Spacer()
-
-            artworkOrMusicVideo(size: artSize, cornerRadius: 16)
-            .scaleEffect(artworkAppearsPlaying ? 1.0 : 0.92)
-            .shadow(color: .black.opacity(0.35), radius: 28, y: 12)
-            .animation(.spring(response: 0.5, dampingFraction: 0.7), value: artworkAppearsPlaying)
-
-            Spacer()
-
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(player.currentSong?.title ?? "")
-                            .font(.title2).fontWeight(.bold).lineLimit(1)
-                            .foregroundStyle(appearance.primary)
-                        if let song = player.currentSong, song.audioQuality != .standard {
-                            AudioQualityBadge(quality: song.audioQuality)
-                        }
-                    }
-                    nowPlayingMetadataLinks(font: .title3)
-                }
-                Spacer()
-                musicVideoToggleButton(font: .title2, trailing: 6)
-                lyricsFullScreenButton(font: .title2, trailing: 2)
-                Button { toggleLikedCurrent() } label: {
-                    nowPlayingActionIcon(
-                        symbol: isCurrentLiked ? "heart.fill" : "heart",
-                        tint: isCurrentLiked ? .red : appearance.secondary,
-                        isSelected: isCurrentLiked
-                    )
-                }
-                .frame(width: 44, height: 44)
-                .disabled(player.currentSong == nil)
-                .accessibilityLabel(Text(isCurrentLiked ? "a11y_unlike" : "a11y_like"))
-                moreMenu
+            GeometryReader { artworkGeometry in
+                let ratio: CGFloat = player.isMusicVideoPlaybackActive ? 16.0 / 9.0 : 1
+                let fittedWidth = min(artSize, max(1, artworkGeometry.size.height - 24) * ratio)
+                artworkOrMusicVideo(size: fittedWidth, cornerRadius: 16)
+                    .scaleEffect(artworkAppearsPlaying ? 1.0 : 0.92)
+                    .shadow(color: .black.opacity(0.35), radius: 28, y: 12)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.7), value: artworkAppearsPlaying)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.horizontal, 36).padding(.top, 18)
 
-            if let song = player.currentSong {
-                LibraryReviewSection(
-                    subject: .song(song.id),
-                    compact: true,
-                    onArtwork: true
-                )
+            nowPlayingSongHeader(titleFont: .title2, metadataFont: .title3, showsQuality: true)
                 .padding(.horizontal, 36)
-                .padding(.top, 8)
-            }
+                .padding(.top, 18)
+
+            nowPlayingReviewSection
+                .padding(.horizontal, 36)
 
             PlaybackProgressBar(fillTint: themedControlAccent)
                 .padding(.horizontal, 36).padding(.top, 10)
@@ -1976,8 +1901,6 @@ struct NowPlayingView: View {
                     .accessibilityLabel(Text("a11y_close_lyrics"))
 
                     Spacer()
-
-                    lyricsFullScreenButton(font: .title3)
 
                     Button { toggleLikedCurrent() } label: {
                         nowPlayingActionIcon(
@@ -2168,7 +2091,6 @@ struct NowPlayingView: View {
                             Spacer()
 
                             musicVideoToggleButton(font: .title3, trailing: 4)
-                            lyricsFullScreenButton(font: .title3)
 
                             Button { toggleLikedCurrent() } label: {
                                 nowPlayingActionIcon(
@@ -2203,69 +2125,35 @@ struct NowPlayingView: View {
                                 .transition(lyricsPanelTransition)
                         }
                     } else {
-                        // PLAYER MODE
-                        Spacer()
-
-                        // Artwork
-                        artworkOrMusicVideo(size: mediaWidth, cornerRadius: 12)
-                        .scaleEffect(
-                            player.isMusicVideoPlaybackActive
-                                ? 1.0
-                                : (artworkAppearsPlaying ? 1.0 : 0.9)
-                        )
-                        .shadow(color: .black.opacity(0.3), radius: 20, y: 8)
-                        .animation(.spring(response: 0.5, dampingFraction: 0.7), value: artworkAppearsPlaying)
-                        .onTapGesture {
-                            // 视频画面本身不再充当「打开歌词」的隐藏入口，避免用户
-                            // 想点 MV 时意外切走；封面模式仍保留原交互。
-                            guard !player.isMusicVideoPlaybackActive else { return }
-                            setStandardLyricsVisible(true)
+                        GeometryReader { artworkGeometry in
+                            // Text and controls retain their height; artwork uses the remaining space.
+                            let ratio: CGFloat = player.isMusicVideoPlaybackActive ? 16.0 / 9.0 : 1
+                            let fittedWidth = min(mediaWidth, max(1, artworkGeometry.size.height - 24) * ratio)
+                            artworkOrMusicVideo(size: fittedWidth, cornerRadius: 12)
+                                .scaleEffect(
+                                    player.isMusicVideoPlaybackActive
+                                        ? 1.0
+                                        : (artworkAppearsPlaying ? 1.0 : 0.9)
+                                )
+                                .shadow(color: .black.opacity(0.3), radius: 20, y: 8)
+                                .animation(.spring(response: 0.5, dampingFraction: 0.7), value: artworkAppearsPlaying)
+                                .onTapGesture {
+                                    guard !player.isMusicVideoPlaybackActive else { return }
+                                    setStandardLyricsVisible(true)
+                                }
+                                .transition(playerArtworkTransition)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        .transition(playerArtworkTransition)
-
-                        Spacer()
                     }
 
                     // Song info (player mode only — in lyrics mode it's in the top bar)
                     if !showLyrics {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(player.currentSong?.title ?? "")
-                                    .font(.title3).fontWeight(.bold).lineLimit(1)
-                                    .foregroundStyle(appearance.primary)
-                                nowPlayingMetadataLinks(font: .body)
-                            }
-                            Spacer()
-
-                            musicVideoToggleButton(font: .title2, trailing: 6)
-                            lyricsFullScreenButton(font: .title2, trailing: 2)
-
-                            // Like button
-                            Button { toggleLikedCurrent() } label: {
-                                nowPlayingActionIcon(
-                                    symbol: isCurrentLiked ? "heart.fill" : "heart",
-                                    tint: isCurrentLiked ? .red : appearance.secondary,
-                                    isSelected: isCurrentLiked
-                                )
-                            }
-                            .frame(width: 44, height: 44)
-                            .disabled(player.currentSong == nil)
-                            .accessibilityLabel(Text(isCurrentLiked ? "a11y_unlike" : "a11y_like"))
-
-                            // More menu
-                            moreMenu
-                        }
-                        .padding(.horizontal, 26).padding(.top, 12)
-
-                        if let song = player.currentSong {
-                            LibraryReviewSection(
-                                subject: .song(song.id),
-                                compact: true,
-                                onArtwork: true
-                            )
+                        nowPlayingSongHeader(titleFont: .title3, metadataFont: .body)
                             .padding(.horizontal, 26)
-                            .padding(.top, 8)
-                        }
+                            .padding(.top, 12)
+
+                        nowPlayingReviewSection
+                            .padding(.horizontal, 26)
                     }
 
                     // Progress — 抽成独立子 view 隔离 player.currentTime 的高频
@@ -2731,6 +2619,7 @@ struct NowPlayingView: View {
             } ?? false,
             appleMusicCatalogURL: appleMusicCatalogURL,
             showsLyricsPreferences: showLyrics,
+            showsFullScreenAction: !isLyricsImmersive && !isFullscreenPlayerPresented,
             albumID: currentAlbum?.id,
             artistID: currentArtist?.id,
             canOpenAlbum: canOpenCurrentAlbum,
@@ -2753,6 +2642,7 @@ struct NowPlayingView: View {
                 set: { playbackSettings.playbackRate = $0 }
             ),
             immersiveChrome: immersiveChrome,
+            onEnterFullScreen: { presentImmersiveLyrics() },
             onAddToPlaylist: { showAddToPlaylist = true },
             onScrape: { openScrapeForCurrentSong() },
             onReloadLyricsFromSource: { reloadLyricsFromSource() },
@@ -2910,52 +2800,91 @@ struct NowPlayingView: View {
         #endif
     }
 
-    /// Artist and album are independent buttons, matching the interaction users
-    /// expect from Apple Music/Spotify-style now-playing screens.
+    private func nowPlayingSongHeader(titleFont: Font, metadataFont: Font, showsQuality: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(player.currentSong?.title ?? "")
+                    .font(titleFont.weight(.bold))
+                    .foregroundStyle(appearance.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+
+                if showsQuality, let song = player.currentSong, song.audioQuality != .standard {
+                    AudioQualityBadge(quality: song.audioQuality)
+                        .fixedSize()
+                }
+
+                HStack(spacing: 4) {
+                    musicVideoToggleButton(font: .title3, trailing: 0)
+                    Button { toggleLikedCurrent() } label: {
+                        nowPlayingActionIcon(
+                            symbol: isCurrentLiked ? "heart.fill" : "heart",
+                            tint: isCurrentLiked ? .red : appearance.secondary,
+                            isSelected: isCurrentLiked
+                        )
+                    }
+                    .frame(width: 44, height: 44)
+                    .buttonStyle(.plain)
+                    .disabled(player.currentSong == nil)
+                    .accessibilityLabel(Text(isCurrentLiked ? "a11y_unlike" : "a11y_like"))
+                    moreMenu
+                }
+                .fixedSize()
+            }
+            nowPlayingMetadataLinks(font: metadataFont)
+        }
+    }
+
+    @ViewBuilder
+    private var nowPlayingReviewSection: some View {
+        if let song = player.currentSong {
+            LibraryReviewSection(
+                subject: .song(song.id),
+                compact: true,
+                onArtwork: true,
+                foregroundColor: appearance.primary,
+                // Balance against the invisible upper half of the 44pt scrub target.
+                topSpacing: 28
+            )
+        }
+    }
+
     @ViewBuilder
     private func nowPlayingMetadataLinks(font: Font) -> some View {
         let artistName = currentArtistDisplayName
-        HStack(spacing: 6) {
-            if currentArtists.count == 1,
-               let artist = currentArtist,
-               onOpenArtist != nil {
-                Button { onOpenArtist?(artist) } label: {
-                    Text(artistName).lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("go_to_artist"))
-            } else if currentArtists.count > 1, onOpenArtist != nil {
-                Menu {
+        let albumTitle = player.currentSong?.albumTitle ?? ""
+        let metadata = [artistName, albumTitle].filter { !$0.isEmpty }.joined(separator: " · ")
+        let label = Text(verbatim: metadata)
+            .font(font)
+            .foregroundStyle(appearance.secondary)
+            .multilineTextAlignment(.leading)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        if (onOpenArtist != nil && !currentArtists.isEmpty) || canOpenCurrentAlbum {
+            Menu {
+                if onOpenArtist != nil {
                     ForEach(currentArtists) { artist in
-                        Button(artist.name) { onOpenArtist?(artist) }
+                        Button { onOpenArtist?(artist) } label: {
+                            Label(artist.name, systemImage: "music.mic")
+                        }
                     }
-                } label: {
-                    Text(artistName).lineLimit(1)
                 }
-                .accessibilityLabel(Text("go_to_artist"))
-            } else if !artistName.isEmpty {
-                Text(artistName).lineLimit(1)
-            }
-
-            if !artistName.isEmpty,
-               player.currentSong?.albumTitle?.isEmpty == false {
-                Text("·")
-            }
-
-            if let album = currentAlbum, canOpenCurrentAlbum {
-                Button {
-                    presentAlbum(album, prefersMatchedArtworkSource: true)
-                } label: {
-                    Text(album.title).lineLimit(1)
+                if let album = currentAlbum, canOpenCurrentAlbum {
+                    Button { presentAlbum(album, prefersMatchedArtworkSource: !showLyrics) } label: {
+                        Label(album.title, systemImage: "square.stack")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("go_to_album"))
-            } else if let albumTitle = player.currentSong?.albumTitle, !albumTitle.isEmpty {
-                Text(albumTitle).lineLimit(1)
+            } label: {
+                label
             }
+            .buttonStyle(.plain)
+        } else {
+            label
         }
-        .font(font)
-        .foregroundStyle(appearance.secondary)
     }
 
     // MARK: - Helpers
@@ -4824,6 +4753,7 @@ private struct NowPlayingMoreMenuSnapshot: Equatable {
     let canDeleteSourceFile: Bool
     let appleMusicCatalogURL: URL?
     let showsLyricsPreferences: Bool
+    let showsFullScreenAction: Bool
     let albumID: String?
     let artistID: String?
     let canOpenAlbum: Bool
@@ -4849,6 +4779,7 @@ private struct NowPlayingMoreMenu: View, @MainActor Equatable {
     private var lyricsMotionEnabled = ImmersiveLyricsMotionSettings.defaultValue
     let immersiveChrome: Bool
 
+    let onEnterFullScreen: () -> Void
     let onAddToPlaylist: () -> Void
     let onScrape: () -> Void
     let onReloadLyricsFromSource: () -> Void
@@ -4879,6 +4810,15 @@ private struct NowPlayingMoreMenu: View, @MainActor Equatable {
 
     var body: some View {
         Menu {
+            if snapshot.showsFullScreenAction {
+                Section {
+                    Button(action: onEnterFullScreen) {
+                        Label(String(localized: "full_screen_player"), systemImage: "viewfinder.rectangular")
+                    }
+                    .disabled(!snapshot.hasSong)
+                }
+            }
+
             Section {
                 Button(action: onAddToPlaylist) {
                     Label(String(localized: "add_to_playlist"), systemImage: "text.badge.plus")
