@@ -86,6 +86,36 @@ private final class LibraryArrayReference<Element: Sendable>: @unchecked Sendabl
     }
 }
 
+@MainActor
+@Observable
+final class LibrarySourceSongListState {
+    @ObservationIgnored private var reference: LibraryArrayReference<Song>
+    @ObservationIgnored private(set) var replacedSongIDs: Set<String> = []
+    private(set) var version = SongListSnapshotVersion(collectionRevision: 0, replacementToken: UUID())
+    private(set) var sortInvalidationRevision: UInt64 = 0
+
+    var songs: [Song] {
+        _ = version
+        return reference.value
+    }
+
+    init(songs: [Song]) {
+        reference = LibraryArrayReference(songs)
+    }
+
+    func publish(_ songs: [Song], replacedIDs: Set<String>?, invalidatesSort: Bool = false) {
+        let previous = reference
+        reference = LibraryArrayReference(songs)
+        LibraryArrayReclaimer.release(previous)
+        replacedSongIDs = replacedIDs ?? []
+        version = SongListSnapshotVersion(
+            collectionRevision: version.collectionRevision &+ (replacedIDs == nil ? 1 : 0),
+            replacementToken: UUID()
+        )
+        if invalidatesSort { sortInvalidationRevision &+= 1 }
+    }
+}
+
 /// Releasing a 10K+ value-type array can recursively release tens of thousands
 /// of strings and nested values. ARC normally performs that work on whichever
 /// thread swaps the final reference; for observable library publications that
@@ -2924,6 +2954,7 @@ final class MusicLibrary {
     @ObservationIgnored private var visibleSongIDsByGenreID: [String: [String]] = [:]
     @ObservationIgnored private var visibleAlbumIDsByGenreID: [String: [String]] = [:]
     @ObservationIgnored private var visibleSongsBySourceID: [String: [Song]] = [:]
+    @ObservationIgnored private var sourceSongListStates: [String: LibrarySourceSongListState] = [:]
     /// Source cards are re-rendered frequently while scanning/backfilling.
     /// Keep the source grouping beside the other visible caches so those
     /// renders don't filter a 10K+ song array once per card per frame.
@@ -3045,6 +3076,9 @@ final class MusicLibrary {
         visibleSongIDsByGenreID = prepared.songIDsByGenreID
         visibleAlbumIDsByGenreID = prepared.albumIDsByGenreID
         visibleSongsBySourceID = prepared.songsBySourceID
+        for (sourceID, state) in sourceSongListStates {
+            state.publish(prepared.songsBySourceID[sourceID] ?? [], replacedIDs: nil)
+        }
         visiblePlayableSongsBySourceID = prepared.playableBySourceID
         visibleSongCountBySourceID = prepared.countBySourceID
         songCountBySourceID = prepared.allCountBySourceID
@@ -3538,6 +3572,7 @@ final class MusicLibrary {
                 visibleSongByID[songID] = nextVisibleSongs[visibleIndex]
             }
         }
+        patchSourceAssetReferences(songIDs: appliedIDs)
         plog("📚 updateLyricsText: requested=\(lyricsTextBySongID.count) applied=\(appliedIDs.count) librarySongs=\(songs.count)")
         invalidateSearchCaches()
         persistSongChanges(
@@ -3573,6 +3608,7 @@ final class MusicLibrary {
             visibleSongs = nextVisibleSongs
         }
         visibleSongByID[songID] = updatedSong
+        patchSourceAssetReferences(songIDs: [songID])
         promotePreferredArtworkSongIfNeeded(updatedSong)
         lastReplacedSong = updatedSong
         lastReplacedSongIDs = [songID]
@@ -3601,6 +3637,7 @@ final class MusicLibrary {
             visibleSongs = nextVisibleSongs
         }
         visibleSongByID[songID] = updatedSong
+        patchSourceAssetReferences(songIDs: [songID])
         lastReplacedSong = updatedSong
         lastReplacedSongIDs = [songID]
         songReplacementToken = UUID()
@@ -4225,8 +4262,42 @@ final class MusicLibrary {
     /// Cached source slice for song-list routes. Avoids re-filtering the full
     /// visible library every time a macOS source detail view is invalidated.
     func visibleSongs(forSourceID sourceID: String) -> [Song] {
-        _ = visibleSongsReference
-        return visibleSongsBySourceID[sourceID] ?? []
+        sourceSongListState(for: sourceID).songs
+    }
+
+    func sourceSongListState(for sourceID: String) -> LibrarySourceSongListState {
+        if let state = sourceSongListStates[sourceID] { return state }
+        let state = LibrarySourceSongListState(songs: visibleSongsBySourceID[sourceID] ?? [])
+        sourceSongListStates[sourceID] = state
+        return state
+    }
+
+    private func publishSourceSongReplacements(
+        sourceID: String,
+        songs: [Song],
+        playableSongs: [Song],
+        replacedIDs: Set<String>,
+        invalidatesSort: Bool
+    ) {
+        visibleSongsBySourceID[sourceID] = songs
+        visiblePlayableSongsBySourceID[sourceID] = playableSongs
+        sourceSongListStates[sourceID]?.publish(songs, replacedIDs: replacedIDs, invalidatesSort: invalidatesSort)
+    }
+
+    private func patchSourceAssetReferences(songIDs: [String]) {
+        let updates = Dictionary(uniqueKeysWithValues: songIDs.compactMap { id in
+            visibleSongIndexByID[id].flatMap { _ in visibleSongByID[id].map { (id, $0) } }
+        })
+        for sourceID in Set(updates.values.map(\.sourceID)) {
+            guard var sourceSongs = visibleSongsBySourceID[sourceID] else { continue }
+            for index in sourceSongs.indices {
+                if let song = updates[sourceSongs[index].id] { sourceSongs[index] = song }
+            }
+            publishSourceSongReplacements(
+                sourceID: sourceID, songs: sourceSongs, playableSongs: sourceSongs.filteredPlayable(),
+                replacedIDs: Set(songIDs.filter { updates[$0]?.sourceID == sourceID }), invalidatesSort: false
+            )
+        }
     }
 
     func visibleSongCount(forSourceID sourceID: String) -> Int {
@@ -6429,8 +6500,11 @@ final class MusicLibrary {
             visibleSongByID[update.song.id] = update.song
         }
         for (sourceID, update) in prepared.sourceUpdates {
-            visibleSongsBySourceID[sourceID] = update.songs
-            visiblePlayableSongsBySourceID[sourceID] = update.playableSongs
+            publishSourceSongReplacements(
+                sourceID: sourceID, songs: update.songs, playableSongs: update.playableSongs,
+                replacedIDs: prepared.appliedIDs.filter { visibleSongByID[$0]?.sourceID == sourceID },
+                invalidatesSort: prepared.songListSnapshotChanged
+            )
         }
 
         lastReplacedSong = prepared.lastApplied
@@ -6532,8 +6606,14 @@ final class MusicLibrary {
                     sourceSongs[index] = replacement
                 }
             }
-            visibleSongsBySourceID[sourceID] = sourceSongs
-            visiblePlayableSongsBySourceID[sourceID] = sourceSongs.filteredPlayable()
+            publishSourceSongReplacements(
+                sourceID: sourceID, songs: sourceSongs, playableSongs: sourceSongs.filteredPlayable(),
+                replacedIDs: appliedIDs.filter { updatesByID[$0]?.sourceID == sourceID },
+                invalidatesSort: appliedIDs.contains { id in
+                    guard let index = idToIndex[id] else { return false }
+                    return originalSongs[index].isPlayable != nextSongs[index].isPlayable
+                }
+            )
         }
         return true
     }

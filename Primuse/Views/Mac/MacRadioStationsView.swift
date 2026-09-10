@@ -155,7 +155,7 @@ struct MacRadioStationsView: View {
         if stations.isEmpty {
             emptyState
         } else {
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: PMSpace.m16) {
                     ForEach(Array(stations.enumerated()), id: \.element.id) { index, station in
                         MacRadioStationCard(

@@ -139,6 +139,61 @@ final class MusicLibraryLikedMutationTests: XCTestCase {
 
 @MainActor
 final class MusicLibraryMetadataReplacementTests: XCTestCase {
+    func testSourceListsKeepUnrelatedCachesAndTrackAssetsMigrationAndVisibility() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PrimuseSourceSnapshotTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = MusicLibrary(storageDirectory: directory)
+        let first = makeSong(id: "first", path: "/first.mp3")
+        var second = makeSong(id: "second", path: "/second.mp3")
+        second.sourceID = "source-2"
+        library.addSongs([first, second], affectedSourceIDs: [first.sourceID, second.sourceID])
+        for _ in 0..<200 where library.visibleSongs.count != 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(library.visibleSongs.count, 2)
+        let firstState = library.sourceSongListState(for: first.sourceID)
+        let secondState = library.sourceSongListState(for: second.sourceID)
+        let firstVersion = firstState.version
+        let secondVersion = secondState.version
+        let store = SongListSnapshotStore()
+        let cached = await store.snapshot(scopeKey: first.sourceID, version: firstVersion, order: .duration, songs: firstState.songs)
+
+        second.bitRate = 320
+        await library.replaceSongsPreparedOffMain([second], maintenance: .deferred)
+        XCTAssertEqual(firstState.version, firstVersion)
+        XCTAssertNotEqual(secondState.version, secondVersion)
+        XCTAssertEqual(secondState.replacedSongIDs, [second.id])
+        let reused = await store.snapshot(scopeKey: first.sourceID, version: firstState.version, order: .duration, songs: firstState.songs)
+        XCTAssertTrue(try XCTUnwrap(cached) === XCTUnwrap(reused))
+
+        let secondMetadataVersion = secondState.version
+        library.updateAssetReferences(songID: first.id, coverRef: "first-cover.jpg", lyricsRef: "first.lrc")
+        library.updateMusicVideoReference(songID: first.id, mvPath: "/first.mp4")
+        library.updateLyricsText([first.id: "Updated lyrics"])
+        XCTAssertNotEqual(firstState.version, firstVersion)
+        XCTAssertEqual(secondState.version, secondMetadataVersion)
+        let refreshed = try XCTUnwrap(firstState.songs.first)
+        XCTAssertEqual(refreshed.coverArtFileName, "first-cover.jpg")
+        XCTAssertEqual(refreshed.lyricsFileName, "first.lrc")
+        XCTAssertEqual(refreshed.mvPath, "/first.mp4")
+        XCTAssertEqual(refreshed.lyricsText, "Updated lyrics")
+
+        var moved = refreshed
+        moved.sourceID = second.sourceID
+        await library.replaceSongsPreparedOffMain([moved], maintenance: .deferred)
+        XCTAssertTrue(firstState.songs.isEmpty)
+        XCTAssertEqual(Set(secondState.songs.map(\.id)), [first.id, second.id])
+        library.updateDisabledSourceIDs([second.sourceID])
+        XCTAssertTrue(secondState.songs.isEmpty)
+        library.updateDisabledSourceIDs([])
+        XCTAssertTrue(secondState === library.sourceSongListState(for: second.sourceID))
+        XCTAssertEqual(secondState.songs.count, 2)
+        guard case .success = await library.persistNowAndWait() else {
+            return XCTFail("Source snapshot fixture did not finish persistence")
+        }
+    }
+
     func testDeferredMaintenancePreservesMetadataUntilEnvironmentAllowsRebuild() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PrimuseDeferredMaintenance-\(UUID().uuidString)", isDirectory: true)

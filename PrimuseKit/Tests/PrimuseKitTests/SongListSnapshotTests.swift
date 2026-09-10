@@ -4,6 +4,20 @@ import Testing
 
 @Suite("Large song-list snapshots")
 struct SongListSnapshotTests {
+    @Test("Header artwork caches missing covers and preserves its candidate across sorting")
+    func headerArtworkCandidate() {
+        var first = song(id: "first", title: "Z")
+        var second = song(id: "second", title: "A")
+        #expect(SongListSnapshotBuilder.build(songs: [first, second], order: .title).coverSongID == nil)
+        first.coverArtFileName = ""
+        second.coverArtFileName = "second.jpg"
+        #expect(SongListSnapshotBuilder.build(songs: [first, second], order: .title).coverSongID == second.id)
+        first.coverArtFileName = "first.jpg"
+        for order in [LibrarySongSortOrder.title, .titleDescending, .dateAdded] {
+            #expect(SongListSnapshotBuilder.build(songs: [first, second], order: order).coverSongID == first.id)
+        }
+    }
+
     @Test("Scroll windows cover every visible row throughout each scroll step")
     func scrollWindowCoversViewport() {
         let count = 11_558

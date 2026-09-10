@@ -190,7 +190,12 @@ struct AIRecommendationLibraryView: View {
     }
 
     private var recommendationContent: some View {
-        ScrollView {
+        #if os(macOS)
+        let showsIndicators = false
+        #else
+        let showsIndicators = true
+        #endif
+        return ScrollView(.vertical, showsIndicators: showsIndicators) {
             LazyVStack(alignment: .leading, spacing: platformSectionSpacing) {
                 hero
                 recommendationControls

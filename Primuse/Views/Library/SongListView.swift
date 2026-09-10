@@ -365,6 +365,7 @@ private final class SongListCache {
     private(set) var songCount = 0
     private(set) var playableCount = 0
     private(set) var totalDuration: TimeInterval = 0
+    private(set) var coverSongID: String?
 
     var rows: [SongListRowIdentity] { snapshot?.rows ?? [] }
     var orderedSongIDs: [String] { snapshot?.orderedSongIDs ?? [] }
@@ -377,14 +378,25 @@ private final class SongListCache {
         snapshot?.sourceCounts[sourceID, default: 0] ?? 0
     }
 
-    func publish(_ snapshot: SongListSnapshot, pruneRowModels: Bool) {
+    func publish(
+        _ snapshot: SongListSnapshot,
+        pruneRowModels: Bool,
+        resolve: (String) -> Song?
+    ) {
         if pruneRowModels {
             // This dictionary contains only rows SwiftUI has instantiated, not
             // the complete library. Explicit sorts keep it intact so visible
             // row identity and scroll state survive the order change.
             rowModelsByID = rowModelsByID.filter { snapshot.songIDs.contains($0.key) }
         }
+        // Full source publications may change metadata without per-row replacement IDs.
+        for (songID, model) in rowModelsByID {
+            if let song = resolve(songID) {
+                model.replace(with: song)
+            }
+        }
         self.snapshot = snapshot
+        coverSongID = snapshot.coverSongID
         projectionEntry = nil
         if !hasSnapshot {
             hasSnapshot = true
@@ -411,10 +423,18 @@ private final class SongListCache {
         rowOrderRevision &+= 1
     }
 
-    func patch(_ replacements: [String: Song]) {
+    func patch(_ replacements: [String: Song], resolve: (String) -> Song?) {
         guard !replacements.isEmpty else { return }
         for (songID, song) in replacements {
             rowModelsByID[songID]?.replace(with: song)
+        }
+        if let coverSongID, let replacement = replacements[coverSongID],
+           replacement.coverArtFileName?.isEmpty != false {
+            self.coverSongID = snapshot?.orderedSongIDs.first {
+                resolve($0)?.coverArtFileName?.isEmpty == false
+            }
+        } else if coverSongID == nil {
+            coverSongID = replacements.values.first { $0.coverArtFileName?.isEmpty == false }?.id
         }
     }
 
@@ -1267,7 +1287,7 @@ struct SongListView: View {
                 #endif
                 pruneSelection()
             }
-            .onChange(of: library.songReplacementToken) { _, _ in
+            .onChange(of: songListVersion.replacementToken) { _, _ in
                 let folderStructureChanged = folderReplacementChangesStructure()
                 let shouldRetryPendingSort = sortRequestActive
                 applyLibrarySongReplacements()
@@ -1292,7 +1312,7 @@ struct SongListView: View {
                     )
                 }
             }
-            .onChange(of: library.songListSnapshotInvalidationRevision) { _, _ in
+            .onChange(of: songListInvalidationRevision) { _, _ in
                 scheduleSortedRecompute(
                     delay: .milliseconds(80),
                     pruneRowModels: false,
@@ -1368,7 +1388,7 @@ struct SongListView: View {
             .onChange(of: locationRequest) { _, request in
                 handleLocationRequest(request)
             }
-            .onChange(of: library.visibleSongCollectionRevision) { _, _ in
+            .onChange(of: songListVersion.collectionRevision) { _, _ in
                 scheduleSortedRecompute(
                     delay: .milliseconds(180),
                     pruneRowModels: true
@@ -1431,6 +1451,26 @@ struct SongListView: View {
         )
     }
     #endif
+
+    private var sourceSongListState: LibrarySourceSongListState? {
+        guard case .source(let sourceID) = scope else { return nil }
+        return library.sourceSongListState(for: sourceID)
+    }
+
+    private var songListVersion: SongListSnapshotVersion {
+        sourceSongListState?.version ?? SongListSnapshotVersion(
+            collectionRevision: library.visibleSongCollectionRevision,
+            replacementToken: library.songReplacementToken
+        )
+    }
+
+    private var songListInvalidationRevision: UInt64 {
+        sourceSongListState?.sortInvalidationRevision ?? library.songListSnapshotInvalidationRevision
+    }
+
+    private var replacedSongIDs: Set<String> {
+        sourceSongListState?.replacedSongIDs ?? library.lastReplacedSongIDs
+    }
 
     private var songs: [Song] {
         switch scope {
@@ -1960,7 +2000,7 @@ struct SongListView: View {
             title: String(localized: "tab_songs"),
             subtitle: librarySubtitle,
             iconSystemName: "music.note",
-            coverSong: songs.first(where: { $0.coverArtFileName?.isEmpty == false }),
+            coverSong: listCache.coverSongID.flatMap { library.unobservedVisibleSong(id: $0) },
             onPlay: { playLibrary(shuffled: false) },
             onShuffle: { playLibrary(shuffled: true) },
             makeMoreMenu: { listMoreMenu }
@@ -3107,7 +3147,7 @@ struct SongListView: View {
             query: searchText.trimmingCharacters(in: .whitespacesAndNewlines),
             includedSongIDs: includedSongIDs,
             filterRevision: downloadedFilterRevision,
-            replacementToken: library.songReplacementToken,
+            replacementToken: songListVersion.replacementToken,
             resolve: { library.unobservedVisibleSong(id: $0) }
         )
     }
@@ -3194,7 +3234,7 @@ struct SongListView: View {
     /// More menu the user is currently operating. The next explicit sort,
     /// collection change, or appearance rebuilds the order from fresh data.
     private func applyLibrarySongReplacements() {
-        let replacedIDs = library.lastReplacedSongIDs
+        let replacedIDs = replacedSongIDs
         guard !replacedIDs.isEmpty, !listCache.isEmpty else { return }
 
         var replacements: [String: Song] = [:]
@@ -3208,7 +3248,7 @@ struct SongListView: View {
         }
 
         guard !replacements.isEmpty else { return }
-        listCache.patch(replacements)
+        listCache.patch(replacements, resolve: { library.unobservedVisibleSong(id: $0) })
     }
 
     /// A full scan can replace a Song in place while preserving the ordered
@@ -3219,7 +3259,7 @@ struct SongListView: View {
     private func folderReplacementChangesStructure() -> Bool {
         guard browseMode == .folder,
               let index = folderCache.index,
-              !library.lastReplacedSongIDs.isEmpty else {
+              !replacedSongIDs.isEmpty else {
             return false
         }
 
@@ -3228,7 +3268,7 @@ struct SongListView: View {
         where descriptorsByID[descriptor.sourceID] == nil {
             descriptorsByID[descriptor.sourceID] = descriptor
         }
-        for songID in library.lastReplacedSongIDs {
+        for songID in replacedSongIDs {
             let indexedNodeID = index.nodeID(containingSongID: songID)
             if let song = library.unobservedVisibleSong(id: songID) {
                 if song.sourceID == AppleMusicLibraryIdentity.sourceID {
@@ -3337,7 +3377,7 @@ struct SongListView: View {
             )
         }
         let sourceRevision = folderSourceRevision
-        let collectionRevision = library.visibleSongCollectionRevision
+        let collectionRevision = songListVersion.collectionRevision
         let playlistRevision = library.playlistCollectionRevision
         let virtualCollections = library.appleMusicFolderCollections(
             availableSongs: songsSnapshot
@@ -3440,7 +3480,7 @@ struct SongListView: View {
                   browseMode == .folder,
                   folderIndexGeneration == generation,
                   folderSourceRevision == sourceRevision,
-                  library.visibleSongCollectionRevision == collectionRevision,
+                  songListVersion.collectionRevision == collectionRevision,
                   library.playlistCollectionRevision == playlistRevision
             else { return }
             folderCache.publish(prepared)
@@ -3472,10 +3512,7 @@ struct SongListView: View {
         let generation = sortGeneration
         let songsSnapshot = songs
         let order = sortOrder
-        let snapshotVersion = SongListSnapshotVersion(
-            collectionRevision: library.visibleSongCollectionRevision,
-            replacementToken: library.songReplacementToken
-        )
+        let snapshotVersion = songListVersion
         let sortValues = songListSortValues
         let sortValuesVersion = self.sortValuesVersion
         let scopeKey = scope.snapshotCacheKey
@@ -3538,8 +3575,7 @@ struct SongListView: View {
             guard !Task.isCancelled,
                   sortGeneration == generation,
                   sortOrder == order,
-                  library.visibleSongCollectionRevision == snapshotVersion.collectionRevision,
-                  library.songReplacementToken == snapshotVersion.replacementToken,
+                  songListVersion == snapshotVersion,
                   self.sortValuesVersion.revision(for: order.libraryOrder)
                     == sortValuesVersion.revision(for: order.libraryOrder)
             else { return }
@@ -3632,7 +3668,9 @@ struct SongListView: View {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            listCache.publish(snapshot, pruneRowModels: pruneRowModels)
+            listCache.publish(snapshot, pruneRowModels: pruneRowModels) {
+                library.unobservedVisibleSong(id: $0)
+            }
         }
         if selection.isActive, !selection.isEmpty {
             selection.prune(to: snapshot.songIDs)

@@ -567,6 +567,7 @@ public final class SongListSnapshot: Sendable {
     public let playableCount: Int
     public let totalDuration: TimeInterval
     public let sectionIndexEntries: [SongListSectionIndexEntry]
+    public let coverSongID: String?
 
     public init(
         rows: [SongListRowIdentity],
@@ -576,7 +577,8 @@ public final class SongListSnapshot: Sendable {
         sourcePartitionsByID: [String: SourcePartition] = [:],
         playableCount: Int,
         totalDuration: TimeInterval,
-        sectionIndexEntries: [SongListSectionIndexEntry] = []
+        sectionIndexEntries: [SongListSectionIndexEntry] = [],
+        coverSongID: String? = nil
     ) {
         self.rows = rows
         self.orderedSongIDs = orderedSongIDs
@@ -586,6 +588,7 @@ public final class SongListSnapshot: Sendable {
         self.playableCount = playableCount
         self.totalDuration = totalDuration
         self.sectionIndexEntries = sectionIndexEntries
+        self.coverSongID = coverSongID
     }
 
     public func sourcePartition(forSourceID sourceID: String) -> SourcePartition? {
@@ -710,7 +713,8 @@ public enum SongListSnapshotBuilder {
                 sectionIndexEntries: sectionIndexEntries(
                     from: sectionOffsets,
                     order: order
-                )
+                ),
+                coverSongID: songs.first { $0.coverArtFileName?.isEmpty == false }?.id
             )
             SongListSnapshotPerformance.signposter.endInterval(
                 "SnapshotBuild",
