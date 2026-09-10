@@ -3,6 +3,22 @@ import Testing
 
 @Suite("Metadata backfill execution")
 struct MetadataBackfillExecutionPolicyTests {
+    @Test("Only a plain background window keeps an earlier expiration in force")
+    func backgroundExpirationClearsForAudioBackedAndForegroundModes() {
+        #expect(!MetadataBackfillExecutionPolicy.clearsBackgroundExpiration(entering: .background))
+        #expect(MetadataBackfillExecutionPolicy.clearsBackgroundExpiration(entering: .backgroundDuringPlayback))
+        #expect(MetadataBackfillExecutionPolicy.clearsBackgroundExpiration(entering: .standard))
+        #expect(MetadataBackfillExecutionPolicy.clearsBackgroundExpiration(entering: .userInitiated))
+    }
+
+    @Test("Prewarm seeds never replace a sparse file owned by playback")
+    func prewarmSeedRespectsPlaybackOwnership() {
+        #expect(AudioCachePrewarmSeedPolicy.canReplaceSparseFile(isActiveSessionPath: false, activePlaybackUses: 0, hasPlaybackLease: false))
+        #expect(!AudioCachePrewarmSeedPolicy.canReplaceSparseFile(isActiveSessionPath: true, activePlaybackUses: 0, hasPlaybackLease: false))
+        #expect(!AudioCachePrewarmSeedPolicy.canReplaceSparseFile(isActiveSessionPath: false, activePlaybackUses: 1, hasPlaybackLease: false))
+        #expect(!AudioCachePrewarmSeedPolicy.canReplaceSparseFile(isActiveSessionPath: false, activePlaybackUses: 0, hasPlaybackLease: true))
+    }
+
     @Test("Bare-only sources stop after their initial detail read")
     func bareOnlyEligibility() {
         let pending = MetadataBackfillEligibilityPolicy.reasons(

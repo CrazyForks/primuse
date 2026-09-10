@@ -684,6 +684,7 @@
 "serverShare.error.unsafeURL" = "サーバーからストリーム URL またはアカウント認証情報を含むリンクが返されました。";
 "serverShare.error.malformedResponse" = "サーバーから有効な公開メディアリンクが返されませんでした。";
 "metadata.rangeRead.error.suffixUnsupported" = "このサーバーは、メタデータ取得に必要なファイル末尾の範囲読み取りに対応していません。";
+"metadata.rangeRead.error.invalidRangeResponse" = "このサーバーはメタデータ読み取りに対して無効なバイト範囲の応答を返しました。";
 "ext.widget.live" = "ライブ";
 "ext.widget.wrapped.brand" = "PRIMUSE WRAPPED";
 "audio.quality.lossless" = "ロスレス";

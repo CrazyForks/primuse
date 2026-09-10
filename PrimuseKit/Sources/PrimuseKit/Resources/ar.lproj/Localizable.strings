@@ -543,6 +543,7 @@
 "library_recommendations_title" = "التوصيات";
 "local_import_insufficient_space" = "المساحة الحرة غير كافية (مطلوب %lld بايت، متاح %lld بايت).";
 "metadata.rangeRead.error.suffixUnsupported" = "لا يمكن لهذا الخادم توفير قراءة ذيل الملف المحدود اللازمة لبيانات التعريف.";
+"metadata.rangeRead.error.invalidRangeResponse" = "أعاد هذا الخادم استجابة نطاق بايت غير صالحة لقراءة بيانات التعريف.";
 "more" = "المزيد";
 "nfs.version.auto" = "آلي";
 "password" = "كلمة المرور";

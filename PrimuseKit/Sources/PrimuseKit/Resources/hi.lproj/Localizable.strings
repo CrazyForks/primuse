@@ -543,6 +543,7 @@
 "library_recommendations_title" = "सिफ़ारिशें";
 "local_import_insufficient_space" = "पर्याप्त खाली स्थान नहीं (आवश्यक %lld बाइट्स, उपलब्ध %lld बाइट्स)।";
 "metadata.rangeRead.error.suffixUnsupported" = "यह सर्वर मेटाडेटा के लिए आवश्यक बाउंडेड फ़ाइल-टेल रीड प्रदान नहीं कर सकता है।";
+"metadata.rangeRead.error.invalidRangeResponse" = "इस सर्वर ने मेटाडेटा पढ़ने के लिए अमान्य बाइट-रेंज प्रतिक्रिया लौटाई।";
 "more" = "और";
 "nfs.version.auto" = "स्वचालित";
 "password" = "पासवर्ड";

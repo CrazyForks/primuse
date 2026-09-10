@@ -304,6 +304,7 @@
 "theme_color_turquoise" = "Бірюзовий";
 "ext.tv.sources.removeFromTV" = "Видалити з Apple TV";
 "metadata.rangeRead.error.suffixUnsupported" = "Цей сервер не може забезпечити обмежене читання хвоста файлу, необхідне для метаданих.";
+"metadata.rangeRead.error.invalidRangeResponse" = "Цей сервер повернув недійсну відповідь на запит діапазону байтів під час читання метаданих.";
 "password" = "Пароль";
 "ai_recommendation_intent_familiarContinuity" = "Знайома безперервність";
 "ext.tv.demo.lyric4" = "Залишити на вітер незакінчені слова";

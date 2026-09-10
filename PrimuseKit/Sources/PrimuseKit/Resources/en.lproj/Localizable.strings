@@ -682,6 +682,7 @@
 "serverShare.error.unsafeURL" = "The server returned a link that looks like a stream URL or contains account credentials.";
 "serverShare.error.malformedResponse" = "The server did not return a valid public media link.";
 "metadata.rangeRead.error.suffixUnsupported" = "This server cannot provide the bounded file-tail read needed for metadata.";
+"metadata.rangeRead.error.invalidRangeResponse" = "This server returned an invalid byte-range response for the metadata read.";
 "ext.widget.live" = "LIVE";
 "ext.widget.wrapped.brand" = "PRIMUSE WRAPPED";
 "audio.quality.lossless" = "Lossless";

@@ -208,6 +208,26 @@ enum AutomaticOfflineFailureClassifier {
     }
 }
 
+enum BackgroundAudioCacheTaskWaiter {
+    /// Cancelling one consumer must release it without stopping a transfer
+    /// that playback or another offline requester may still need.
+    static func wait(for task: Task<Void, Never>) async {
+        let race = CancellableResultRace<Void>()
+        let observer = Task {
+            await task.value
+            race.resolve(.success(()))
+        }
+        defer { observer.cancel() }
+        try? await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                race.install(continuation)
+            }
+        } onCancel: {
+            race.cancel()
+        }
+    }
+}
+
 enum AutomaticOfflineTaskJoinPolicy {
     static func canJoin(
         existingArtifactSignature: String?,
@@ -5740,6 +5760,12 @@ final class SourceManager {
                 message: String(localized: "offline_download_failed")
             )
         }
+        // Manual requests have no artifact signature to join the offline task
+        // registry, so wait for any existing prefetch before creating a writer.
+        if artifactSignature == nil {
+            await waitForBackgroundAudioCache(for: song)
+            guard !Task.isCancelled else { return .cancelled }
+        }
         let handle = offlineDownloadTask(
             for: song,
             refreshDisposition: refreshDisposition,
@@ -7694,7 +7720,7 @@ final class SourceManager {
             return
         }
         plog("↩️ Cache: joining in-flight prefetch for '\(song.title)'")
-        await task.value
+        await BackgroundAudioCacheTaskWaiter.wait(for: task)
     }
 
     func cancelBackgroundAudioCaching(keeping songIDs: Set<String>) {
@@ -8387,6 +8413,18 @@ final class SourceManager {
         if isPrewarmed(song: song) {
             return
         }
+        // A streaming session records the ranges it wrote in memory and reads
+        // them back from this very path; replacing the file underneath it
+        // would serve zeros and could promote a corrupt canonical cache.
+        let relativePath = audioCacheRelativePath(for: song)
+        guard AudioCachePrewarmSeedPolicy.canReplaceSparseFile(
+            isActiveSessionPath: CloudPlaybackSource.activeSessionPaths().contains(partial.path),
+            activePlaybackUses: activePlaybackAudioCachePaths[relativePath] ?? 0,
+            hasPlaybackLease: playbackAudioCacheLeases[song.id] != nil
+        ) else {
+            plog("⏭ Prewarm seed skipped for '\(song.title)': cache path is owned by an active playback session")
+            return
+        }
 
         try? FileManager.default.createDirectory(
             at: partial.deletingLastPathComponent(),
@@ -8737,7 +8775,7 @@ final class SourceManager {
                 requestedOffset: offset,
                 requestedLength: length
             ) != nil else {
-                throw SourceError.connectionFailed("Invalid STRM Content-Range response")
+                throw MetadataRangeReadError.invalidRangeResponse
             }
             return data
         case 200:

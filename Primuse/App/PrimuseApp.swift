@@ -116,7 +116,9 @@ private enum BackgroundScanResumeTask {
             // Background audio is user-facing foreground work. Keep directory
             // scans, scraping and indexing postponed, but let metadata tags
             // advance through a single throttled Range request at a time.
-            if services.playerService.isPlaybackActive {
+            // Playback can also start from the lock screen while this drain
+            // is suspended, so the check repeats after every long wait.
+            let finishDuringPlayback: @MainActor () async -> Void = {
                 backfill.setExecutionMode(.backgroundDuringPlayback)
                 if backfill.hasPendingWork {
                     backfill.start()
@@ -130,6 +132,9 @@ private enum BackgroundScanResumeTask {
                     sourceStore: services.sourcesStore
                 )
                 completion.complete(success: true)
+            }
+            if services.playerService.isPlaybackActive {
+                await finishDuringPlayback()
                 return
             }
 
@@ -156,6 +161,10 @@ private enum BackgroundScanResumeTask {
             )
             await scanService.waitForActiveScansToComplete()
             guard !completion.isCompleted else { return }
+            if services.playerService.isPlaybackActive {
+                await finishDuringPlayback()
+                return
+            }
 
             if scraper.hasPendingBackgroundContinuation {
                 scraper.resumePendingScrape(
@@ -164,6 +173,10 @@ private enum BackgroundScanResumeTask {
                 )
                 await scraper.waitUntilScrapeIdle()
                 guard !completion.isCompleted else { return }
+                if services.playerService.isPlaybackActive {
+                    await finishDuringPlayback()
+                    return
+                }
             }
 
             if backfill.hasPendingWork {
@@ -827,14 +840,44 @@ private final class LifecycleSnapshotUploadCoordinator {
 /// current foreground interaction. Returning to the app cancels the tasks;
 /// the next background/BGProcessing window retries from durable state.
 @MainActor
-private final class BackgroundLibraryMaintenanceCoordinator {
+final class BackgroundLibraryMaintenanceCoordinator {
     static let shared = BackgroundLibraryMaintenanceCoordinator()
 
+    private let isApplicationInBackground: @MainActor () -> Bool
     private var searchIndexTask: Task<Void, Never>?
     private var cacheCleanupTask: Task<Void, Never>?
+    private var sceneSettleTask: Task<Void, Never>?
+
+    init(isApplicationInBackground: @escaping @MainActor () -> Bool = {
+        UIApplication.shared.applicationState == .background
+    }) {
+        self.isApplicationInBackground = isApplicationInBackground
+    }
+
+    /// Runs `work` once UIKit has had `delay` to commit the background
+    /// transition. The scene phase is re-read from UIKit at that moment, and
+    /// `cancel()` (called on `.inactive` and `.active`) drops a pending run so
+    /// a quick return to the foreground never starts background maintenance.
+    func scheduleSceneSettle(
+        after delay: Duration = .seconds(2),
+        _ work: @escaping @MainActor () async -> Void
+    ) {
+        sceneSettleTask?.cancel()
+        sceneSettleTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self,
+                  self.isApplicationInBackground() else { return }
+            self.sceneSettleTask = nil
+            await work()
+        }
+    }
 
     func sceneDidEnterBackground(library: MusicLibrary) {
-        cancel()
+        cancelMaintenance()
         if LibrarySearchIndex.hasPendingPreparation {
             searchIndexTask = Task(priority: .utility) { @MainActor [weak library] in
                 do {
@@ -860,6 +903,12 @@ private final class BackgroundLibraryMaintenanceCoordinator {
     }
 
     func cancel() {
+        sceneSettleTask?.cancel()
+        sceneSettleTask = nil
+        cancelMaintenance()
+    }
+
+    func cancelMaintenance() {
         searchIndexTask?.cancel()
         searchIndexTask = nil
         cacheCleanupTask?.cancel()
@@ -1463,14 +1512,10 @@ struct PrimuseApp: App {
                         // callback itself. Once UIKit has had two seconds to
                         // finish the transition, continue scraping in the normal
                         // background execution window. BGProcessingTask takes
-                        // over later if iOS expires that finite window.
-                        Task { @MainActor in
-                            do {
-                                try await Task.sleep(for: .seconds(2))
-                            } catch {
-                                return
-                            }
-                            guard self.scenePhase == .background else { return }
+                        // over later if iOS expires that finite window. The
+                        // coordinator owns the delay so returning to the
+                        // foreground cancels it and the phase is re-read live.
+                        BackgroundLibraryMaintenanceCoordinator.shared.scheduleSceneSettle {
                             musicLibrary.endSceneTransitionQuiescence()
                             musicLibrary.persistNow()
                             if playerService.isPlaybackActive {
@@ -1548,6 +1593,7 @@ struct PrimuseApp: App {
                             metadataBackfill.setExecutionMode(.standard)
                         }
                         musicLibrary.suspendPendingIdentityResolution()
+                        scraperService.resumeAfterSceneTransition(in: musicLibrary)
                         scanService.resumePendingScans(
                             context: .foregroundResume,
                             sourceManager: sourceManager,
@@ -1599,7 +1645,9 @@ struct PrimuseApp: App {
                         scraperService.cancelPreservingCheckpoint()
                         AppServices.shared.spotlightIndex.suspendSynchronization()
                         AppServices.shared.lyricsTextBackfill.stop()
-                        BackgroundLibraryMaintenanceCoordinator.shared.cancel()
+                        // Playback postpones maintenance, but the pending scene
+                        // settlement must still release publications and persist.
+                        BackgroundLibraryMaintenanceCoordinator.shared.cancelMaintenance()
                     }
                     if metadataBackfill.hasPendingWork, !metadataBackfill.isRunning {
                         metadataBackfill.start()

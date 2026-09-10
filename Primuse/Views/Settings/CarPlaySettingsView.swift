@@ -357,7 +357,7 @@ struct CarPlayEditorTestHost: View {
                 block.itemLimit = 3
                 block.items = (1...4).map { index in
                     CarPlayLayoutItem(id: "source.\(index)", kind: .song,
-                        targetID: "unavailable.\(index)", title: "来源 \(index)")
+                        targetID: "unavailable.\(index)", title: "Source \(index)")
                 }
                 model.change { $0.blocks = [block] }
                 model.flush()

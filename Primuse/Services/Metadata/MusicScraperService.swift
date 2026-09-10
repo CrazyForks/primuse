@@ -146,6 +146,12 @@ final class MusicScraperService {
     private var pendingEnrichmentSongIDs: [String] = []
     private var pendingEnrichmentSongIDSet: Set<String> = []
     private var isPausedForSceneTransition = false
+    /// A batch scrape that the transition gate interrupted. Only that scrape
+    /// restarts when the scene returns to the foreground without a background
+    /// phase; the background continuation path handles the other case.
+    private var sceneTransitionInterruptedScrape = false
+    /// True while `pauseForSceneTransition()` holds new scraping work back.
+    var isGatedForSceneTransition: Bool { isPausedForSceneTransition }
     /// Bound both observable full-library publications and checkpoint replay.
     /// A large library cannot afford a complete observable-array publication
     /// every few songs. Forty still bounds idempotent checkpoint replay, while
@@ -781,6 +787,7 @@ final class MusicScraperService {
         guard !isPausedForSceneTransition else { return }
         isPausedForSceneTransition = true
         let shouldHoldBackgroundWindow = isScraping
+        sceneTransitionInterruptedScrape = isScraping
         plog("MusicScraperService: briefly gating publications for scene transition (scraping=\(isScraping))")
 
         if isScraping {
@@ -801,10 +808,21 @@ final class MusicScraperService {
         isBackgroundEnriching = false
     }
 
+    /// Counterpart of `pauseForSceneTransition()` for the inactive → active
+    /// path (Control Center, notification shade, call banner, Face ID). Without
+    /// it the gate stayed closed for the rest of the process whenever no
+    /// background phase followed, so every later batch scrape was deferred and
+    /// sidecar writes were dropped.
     func resumeAfterSceneTransition(in library: MusicLibrary) {
+        guard isPausedForSceneTransition else { return }
         isPausedForSceneTransition = false
-        plog("MusicScraperService: resuming after foreground scene transition")
-        resumePendingScrape(in: library)
+        let shouldResumeScrape = sceneTransitionInterruptedScrape
+        sceneTransitionInterruptedScrape = false
+        endBackgroundTaskIfHeld()
+        plog("MusicScraperService: resuming after foreground scene transition (scrape=\(shouldResumeScrape))")
+        if shouldResumeScrape {
+            resumePendingScrape(in: library)
+        }
         startBackgroundEnrichmentIfNeeded(in: library)
     }
 
@@ -814,6 +832,7 @@ final class MusicScraperService {
     func resumeBackgroundContinuation(in library: MusicLibrary) {
         guard hasPendingBackgroundContinuation else { return }
         isPausedForSceneTransition = false
+        sceneTransitionInterruptedScrape = false
         plog("MusicScraperService: continuing scrape after background scene settled")
         resumePendingScrape(in: library, allowBackgroundExecution: true)
         startBackgroundEnrichmentIfNeeded(in: library)

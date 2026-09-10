@@ -543,6 +543,7 @@
 "library_recommendations_title" = "คำแนะนำ";
 "local_import_insufficient_space" = "พื้นที่ว่างไม่เพียงพอ (ต้องการ %lld ไบต์ มี %lld ไบต์)";
 "metadata.rangeRead.error.suffixUnsupported" = "เซิร์ฟเวอร์นี้ไม่สามารถจัดเตรียมการอ่านไฟล์แบบมีขอบเขตที่จำเป็นสำหรับเมทาดาทาได้";
+"metadata.rangeRead.error.invalidRangeResponse" = "เซิร์ฟเวอร์นี้ส่งการตอบกลับช่วงไบต์ที่ไม่ถูกต้องสำหรับการอ่านเมทาดาทา";
 "more" = "เพิ่มเติม";
 "nfs.version.auto" = "อัตโนมัติ";
 "password" = "รหัสผ่าน";

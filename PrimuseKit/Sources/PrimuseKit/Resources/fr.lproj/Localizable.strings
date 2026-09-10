@@ -684,6 +684,7 @@
 "serverShare.error.unsafeURL" = "Le serveur a renvoyé un lien de flux ou un lien contenant des identifiants de compte.";
 "serverShare.error.malformedResponse" = "Le serveur n’a pas renvoyé de lien multimédia public valide.";
 "metadata.rangeRead.error.suffixUnsupported" = "Ce serveur ne permet pas la lecture limitée de la fin du fichier nécessaire aux métadonnées.";
+"metadata.rangeRead.error.invalidRangeResponse" = "Ce serveur a renvoyé une réponse de plage d’octets invalide pour la lecture des métadonnées.";
 "ext.widget.live" = "EN DIRECT";
 "ext.widget.wrapped.brand" = "PRIMUSE WRAPPED";
 "audio.quality.lossless" = "Sans perte";

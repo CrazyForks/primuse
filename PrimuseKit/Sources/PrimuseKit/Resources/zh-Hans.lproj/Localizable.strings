@@ -681,6 +681,7 @@
 "serverShare.error.unsafeURL" = "服务器返回的链接疑似播放流地址或包含账户凭据。";
 "serverShare.error.malformedResponse" = "服务器未返回有效的公开媒体链接。";
 "metadata.rangeRead.error.suffixUnsupported" = "此服务器不支持读取元数据所需的文件尾部范围。";
+"metadata.rangeRead.error.invalidRangeResponse" = "此服务器返回的字节范围响应无效，无法读取元数据。";
 "ext.widget.live" = "直播";
 "ext.widget.wrapped.brand" = "PRIMUSE 年度回顾";
 "audio.quality.lossless" = "无损";

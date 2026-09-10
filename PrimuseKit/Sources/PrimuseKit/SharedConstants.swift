@@ -543,12 +543,33 @@ public enum MetadataRangeReadIntent: Sendable, Equatable {
 
 public enum MetadataRangeReadError: Error, LocalizedError, Sendable, Equatable {
     case suffixRangeUnsupported
+    /// The server answered a bounded metadata read, but its status, headers or
+    /// body length do not describe the requested byte range. A malformed file
+    /// response is not evidence that the whole source is unavailable and
+    /// must not park its other songs behind endpoint probes.
+    case invalidRangeResponse
 
     public var errorDescription: String? {
         switch self {
         case .suffixRangeUnsupported:
             return String(localized: "metadata.rangeRead.error.suffixUnsupported", bundle: Bundle.primuseKit)
+        case .invalidRangeResponse:
+            return String(localized: "metadata.rangeRead.error.invalidRangeResponse", bundle: Bundle.primuseKit)
         }
+    }
+}
+
+/// A prewarm seed rewrites a song's sparse `.partial` cache file. It must never
+/// do so while a streaming session, a playback lease or an active playback
+/// reader still owns that path: ranges the session already recorded would read
+/// back as zeros and could be promoted into a corrupt canonical cache file.
+public enum AudioCachePrewarmSeedPolicy {
+    public static func canReplaceSparseFile(
+        isActiveSessionPath: Bool,
+        activePlaybackUses: Int,
+        hasPlaybackLease: Bool
+    ) -> Bool {
+        !isActiveSessionPath && activePlaybackUses <= 0 && !hasPlaybackLease
     }
 }
 
@@ -3061,6 +3082,14 @@ public struct MetadataReadingEnvironment: Sendable {
 }
 
 public enum MetadataBackfillExecutionPolicy {
+    /// Only a plain `.background` window is bounded by the UIKit background
+    /// assertion. Foreground modes never hold it and background playback is
+    /// kept alive by the audio session, so an assertion that expired earlier
+    /// must not veto the queue when one of those modes begins.
+    public static func clearsBackgroundExpiration(entering mode: MetadataBackfillExecutionMode) -> Bool {
+        mode != .background
+    }
+
     /// Process CPU time includes parsing, playback, and UI work across executor
     /// hops, while disk/network waits do not inflate the thermal work budget.
     /// An unavailable or invalid counter keeps the conservative wall-time fallback.

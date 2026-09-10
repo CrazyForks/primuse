@@ -543,6 +543,7 @@
 "library_recommendations_title" = "Polecane";
 "local_import_insufficient_space" = "Za mało wolnego miejsca (wymagane bajty %lld, dostępne bajty %lld).";
 "metadata.rangeRead.error.suffixUnsupported" = "Ten serwer nie może zapewnić ograniczonego odczytu końca pliku wymaganego dla metadanych.";
+"metadata.rangeRead.error.invalidRangeResponse" = "Ten serwer zwrócił nieprawidłową odpowiedź zakresu bajtów dla odczytu metadanych.";
 "more" = "Więcej";
 "nfs.version.auto" = "Automatyczny";
 "password" = "Hasło";

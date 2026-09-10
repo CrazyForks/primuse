@@ -684,6 +684,7 @@
 "serverShare.error.unsafeURL" = "Der Server hat einen Stream-Link oder einen Link mit Zugangsdaten zurückgegeben.";
 "serverShare.error.malformedResponse" = "Der Server hat keinen gültigen öffentlichen Medienlink zurückgegeben.";
 "metadata.rangeRead.error.suffixUnsupported" = "Dieser Server unterstützt den für Metadaten erforderlichen begrenzten Lesezugriff am Dateiende nicht.";
+"metadata.rangeRead.error.invalidRangeResponse" = "Dieser Server hat für den Metadaten-Lesezugriff eine ungültige Bytebereichs-Antwort geliefert.";
 "ext.widget.live" = "LIVE";
 "ext.widget.wrapped.brand" = "PRIMUSE WRAPPED";
 "audio.quality.lossless" = "Verlustfrei";

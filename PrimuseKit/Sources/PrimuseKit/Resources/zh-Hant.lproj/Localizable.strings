@@ -681,6 +681,7 @@
 "serverShare.error.unsafeURL" = "伺服器傳回的連結疑似播放串流網址或包含帳戶憑證。";
 "serverShare.error.malformedResponse" = "伺服器未傳回有效的公開媒體連結。";
 "metadata.rangeRead.error.suffixUnsupported" = "此伺服器不支援讀取中繼資料所需的檔案尾端範圍。";
+"metadata.rangeRead.error.invalidRangeResponse" = "此伺服器回傳的位元組範圍回應無效，無法讀取中繼資料。";
 "ext.widget.live" = "直播";
 "ext.widget.wrapped.brand" = "PRIMUSE 年度回顧";
 "audio.quality.lossless" = "無損";

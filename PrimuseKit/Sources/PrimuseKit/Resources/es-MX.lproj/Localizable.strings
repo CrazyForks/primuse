@@ -543,6 +543,7 @@
 "library_recommendations_title" = "Recomendaciones";
 "local_import_insufficient_space" = "No hay suficiente espacio libre (bytes %lld requeridos, bytes %lld disponibles).";
 "metadata.rangeRead.error.suffixUnsupported" = "Este servidor no puede proporcionar la lectura final del archivo delimitada necesaria para los metadatos.";
+"metadata.rangeRead.error.invalidRangeResponse" = "Este servidor devolvió una respuesta de rango de bytes no válida para la lectura de metadatos.";
 "more" = "Más";
 "nfs.version.auto" = "Automático";
 "password" = "Contraseña";

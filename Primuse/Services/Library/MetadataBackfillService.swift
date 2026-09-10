@@ -1281,7 +1281,9 @@ final class MetadataBackfillService {
     /// so its expiration cannot stop an audio-backed execution window.
     func setExecutionMode(_ mode: MetadataBackfillExecutionMode) {
         #if os(iOS)
-        if mode != .background && mode != .backgroundDuringPlayback { backgroundExecutionExpired = false }
+        if MetadataBackfillExecutionPolicy.clearsBackgroundExpiration(entering: mode) {
+            backgroundExecutionExpired = false
+        }
         #endif
         guard executionMode != mode else { return }
         executionMode = mode

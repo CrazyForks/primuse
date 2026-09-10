@@ -668,7 +668,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
                     requestedOffset: offset,
                     requestedLength: length
                 ) != nil else {
-                    throw SourceError.connectionFailed("Invalid WebDAV Content-Range response")
+                    throw MetadataRangeReadError.invalidRangeResponse
                 }
                 return try boundedMetadataSlice(temporaryURL, offset: 0, length: length)
             case 200:
@@ -703,7 +703,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
                 requestedOffset: offset,
                 requestedLength: length
             ) != nil else {
-                throw SourceError.connectionFailed("Invalid WebDAV Content-Range response")
+                throw MetadataRangeReadError.invalidRangeResponse
             }
             return data
         case 200:
@@ -777,7 +777,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
                 requestedOffset: offset,
                 requestedLength: length
             ) != nil else {
-                throw SourceError.connectionFailed("Invalid WebDAV Content-Range response")
+                throw MetadataRangeReadError.invalidRangeResponse
             }
             return try boundedMetadataSlice(temporaryURL, offset: 0, length: length)
         case 200:

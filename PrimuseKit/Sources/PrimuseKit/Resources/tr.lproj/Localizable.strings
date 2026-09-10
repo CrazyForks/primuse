@@ -304,6 +304,7 @@
 "theme_color_turquoise" = "Turkuaz";
 "ext.tv.sources.removeFromTV" = "Apple TV'den kaldır";
 "metadata.rangeRead.error.suffixUnsupported" = "Bu sunucu, üst veriler için gereken sınırlı dosya kuyruğu okumasını sağlayamaz.";
+"metadata.rangeRead.error.invalidRangeResponse" = "Bu sunucu, üst veri okuması için geçersiz bir bayt aralığı yanıtı döndürdü.";
 "password" = "Şifre";
 "ai_recommendation_intent_familiarContinuity" = "Tanıdık Süreklilik";
 "ext.tv.demo.lyric4" = "Yarım kalan sözleri rüzgara bırakmak";

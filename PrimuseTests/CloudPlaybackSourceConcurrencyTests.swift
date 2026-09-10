@@ -610,6 +610,57 @@ final class CloudPlaybackSourceConcurrencyTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testPrewarmSeedPreservesBytesOwnedByActiveStreamingSession() async throws {
+        let sourceID = "prewarm-ownership-\(UUID().uuidString)"
+        let source = MusicSource(id: sourceID, name: "Prewarm Fixture", type: .webdav)
+        let manager = SourceManager(sourcesProvider: { [source] })
+        manager.setAutomaticAudioCachingEnabled(true)
+        let song = Song(
+            id: UUID().uuidString, title: "Prewarm Fixture", fileFormat: .flac,
+            filePath: "/fixtures/\(UUID().uuidString).flac", sourceID: sourceID
+        )
+        let cache = manager.cacheURL(for: song)
+        let partial = URL(fileURLWithPath: cache.path + ".partial")
+        let marker = URL(fileURLWithPath: partial.path + CloudPlaybackSource.prewarmMarkerSuffix)
+        defer {
+            CloudPlaybackSource.cancelSessions(sourceID: sourceID)
+            try? FileManager.default.removeItem(at: cache.deletingLastPathComponent())
+        }
+
+        // Confirm the source is validated and ordinary seeds really write;
+        // otherwise an unrelated scope guard could make this test pass.
+        await manager.ensureOfflineAudioSnapshot(for: song)
+        let initialHead = Data(repeating: 0x21, count: 4_096)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            manager.seedPrewarmCache(song: song, head: initialHead)
+            if !FileManager.default.fileExists(atPath: marker.path) {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: partial), initialHead)
+        try FileManager.default.removeItem(at: marker)
+        try FileManager.default.removeItem(at: partial)
+
+        let payload = Data(repeating: 0x35, count: Int(CloudPlaybackSource.chunkSize) * 2)
+        let connector = FixtureRangeConnector(sourceID: sourceID, payload: payload)
+        let input = try makeInputSource(
+            sourceID: sourceID, cacheURL: cache, payload: payload,
+            connector: connector, allowsTrailingFill: false, prefetchAhead: 0
+        )
+        XCTAssertTrue(Self.read(input, byteCount: 4_096).success)
+        XCTAssertTrue(CloudPlaybackSource.activeSessionPaths().contains(partial.path))
+        XCTAssertFalse(manager.isPrewarmed(song: song))
+        let before = try Data(contentsOf: partial)
+
+        manager.seedPrewarmCache(song: song, head: Data(repeating: 0x79, count: 8_192))
+
+        XCTAssertEqual(try Data(contentsOf: partial), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertEqual(Self.read(input, byteCount: 4_096, offset: 0).data, Data(repeating: 0x35, count: 4_096))
+    }
+
     private func makeInputSource(
         sourceID: String,
         cacheURL: URL,
