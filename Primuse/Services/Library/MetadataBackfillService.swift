@@ -423,7 +423,59 @@ final class MetadataBackfillService {
         )
         // Explicit batches temporarily own the shared budget. In-flight
         // automatic reads drain normally before those slots become available.
-        return batchSchedulers.isEmpty ? budget : budget.withWorkerCount(0)
+        // Hand-off in the other direction: while a batch is registered but
+        // cannot run (app not active), its already-dispatched reads are still
+        // in flight, so the automatic queue only takes the slots they leave
+        // free instead of the full budget.
+        let manualInFlight = batchSchedulers.values.reduce(0) { $0 + $1.inFlightCount }
+        return budget.withWorkerCount(Self.automaticWorkerCount(
+            budgetWorkerCount: budget.workerCount,
+            hasRegisteredManualBatch: !batchSchedulers.isEmpty,
+            applicationIsActive: Self.applicationIsActive,
+            manualInFlightCount: manualInFlight
+        ))
+    }
+
+    /// A registered manual/explicit reread batch owns the shared worker budget
+    /// — but only while it can actually make progress. The batch's own limits
+    /// closure returns `workerCount 0` whenever the iOS app is not active, so
+    /// keeping the automatic budget at zero as well left *both* queues without
+    /// a worker until the app returned to the foreground.
+    /// When the app is not active the automatic budget therefore applies as if
+    /// no batch were registered; the batch reclaims ownership on the next
+    /// `executionLimits` read once the app is active again.
+    nonisolated static func manualBatchOwnsAutomaticBudget(
+        hasRegisteredManualBatch: Bool,
+        applicationIsActive: Bool
+    ) -> Bool {
+        hasRegisteredManualBatch && applicationIsActive
+    }
+
+    /// Worker count the automatic queue may use. A batch that owns the budget
+    /// leaves nothing; a registered batch that cannot run still keeps the
+    /// slots its in-flight reads occupy, so automatic + manual never exceed
+    /// the device ceiling while the batch drains.
+    nonisolated static func automaticWorkerCount(
+        budgetWorkerCount: Int,
+        hasRegisteredManualBatch: Bool,
+        applicationIsActive: Bool,
+        manualInFlightCount: Int
+    ) -> Int {
+        guard !manualBatchOwnsAutomaticBudget(
+            hasRegisteredManualBatch: hasRegisteredManualBatch,
+            applicationIsActive: applicationIsActive
+        ) else { return 0 }
+        return max(0, budgetWorkerCount - (hasRegisteredManualBatch ? manualInFlightCount : 0))
+    }
+
+    /// macOS has no application-state gate on manual batches, so ownership
+    /// there keeps its historical "always active" meaning.
+    private static var applicationIsActive: Bool {
+        #if os(iOS)
+        UIApplication.shared.applicationState == .active
+        #else
+        true
+        #endif
     }
 
     private func readingEnvironment(sourceID: String? = nil) -> MetadataReadingEnvironment {

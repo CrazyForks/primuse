@@ -94,111 +94,103 @@ private enum BackgroundScanResumeTask {
     private static func handle(_ task: BGTask) {
         let completion = BackgroundTaskCompletion(task)
         let processingSession = UUID()
-        task.expirationHandler = {
-            guard completion.complete(success: false) else { return }
-            Task { @MainActor in
-                let services = AppServices.shared
-                services.scanService.cancelAllActiveScans()
-                services.scraperService.cancelPreservingCheckpoint()
-                services.metadataBackfill.systemBackgroundProcessingExpired(identifier: processingSession)
-            }
-        }
+        let drain = BackgroundProcessingDrain(
+            completion: completion,
+            dependencies: dependencies(processingSession: processingSession)
+        )
+        // Expiration completes the task synchronously and always renews the
+        // BGProcessing request; see BackgroundProcessingDrain.expire().
+        task.expirationHandler = { drain.expire() }
 
         Task { @MainActor in
             guard !completion.isCompleted else { return }
-            let services = AppServices.shared
-            let scanService = services.scanService
-            let backfill = services.metadataBackfill
-            let scraper = services.scraperService
+            let backfill = AppServices.shared.metadataBackfill
             backfill.beginSystemBackgroundProcessing(identifier: processingSession)
             defer { backfill.endSystemBackgroundProcessing(processingSession) }
+            await drain.run()
+        }
+    }
 
-            // Background audio is user-facing foreground work. Keep directory
-            // scans, scraping and indexing postponed, but let metadata tags
-            // advance through a single throttled Range request at a time.
-            // Playback can also start from the lock screen while this drain
-            // is suspended, so the check repeats after every long wait.
-            let finishDuringPlayback: @MainActor () async -> Void = {
-                backfill.setExecutionMode(.backgroundDuringPlayback)
-                if backfill.hasPendingWork {
-                    backfill.start()
-                    await backfill.waitUntilIdle()
-                }
-                scanService.scheduleBackgroundResumeIfNeeded(
-                    backfillPending: backfill.hasPendingWork,
-                    backfillRequiresNetworkConnectivity: backfill.backgroundWakeRequiresNetworkConnectivity,
-                    scrapePending: scraper.hasPendingBackgroundContinuation,
-                    localImportPending: LocalImportService.hasPendingScan,
-                    sourceStore: services.sourcesStore
-                )
-                completion.complete(success: true)
-            }
-            if services.playerService.isPlaybackActive {
-                await finishDuringPlayback()
-                return
-            }
-
-            backfill.setExecutionMode(.background)
-
-            // Drain bounded snapshots for as long as this system task owns
-            // execution time. Expiration cancels work and preserves the queue.
-            services.musicLibrary.resumePendingIdentityResolution()
-            services.resumePendingLocalImportScanIfNeeded()
-            if scanService.hasResumableScanWork {
-                scanService.resumePendingScans(
+    /// Binds the drain to the live services. Kept separate so the sequence
+    /// itself has no dependency on `AppServices`.
+    private static func dependencies(
+        processingSession: UUID
+    ) -> BackgroundProcessingDrain.Dependencies {
+        BackgroundProcessingDrain.Dependencies(
+            isPlaybackActive: { AppServices.shared.playerService.isPlaybackActive },
+            isApplicationActive: { LiveApplicationState.isActive },
+            hasResumableScanWork: { AppServices.shared.scanService.hasResumableScanWork },
+            resumeScans: {
+                let services = AppServices.shared
+                services.scanService.resumePendingScans(
                     context: .background,
                     sourceManager: services.sourceManager,
                     library: services.musicLibrary,
                     sourceStore: services.sourcesStore,
                     scraperService: services.scraperService
                 )
-            }
-            scanService.startPeriodicQuickSyncIfNeeded(
-                sourceManager: services.sourceManager,
-                library: services.musicLibrary,
-                sourceStore: services.sourcesStore,
-                scraperService: services.scraperService
-            )
-            await scanService.waitForActiveScansToComplete()
-            guard !completion.isCompleted else { return }
-            if services.playerService.isPlaybackActive {
-                await finishDuringPlayback()
-                return
-            }
-
-            if scraper.hasPendingBackgroundContinuation {
-                scraper.resumePendingScrape(
+            },
+            waitForScans: {
+                await AppServices.shared.scanService.waitForActiveScansToComplete()
+            },
+            cancelScans: { AppServices.shared.scanService.cancelAllActiveScans() },
+            startPeriodicQuickSync: {
+                let services = AppServices.shared
+                services.scanService.startPeriodicQuickSyncIfNeeded(
+                    sourceManager: services.sourceManager,
+                    library: services.musicLibrary,
+                    sourceStore: services.sourcesStore,
+                    scraperService: services.scraperService
+                )
+            },
+            hasPendingScrape: {
+                AppServices.shared.scraperService.hasPendingBackgroundContinuation
+            },
+            resumeScrape: {
+                let services = AppServices.shared
+                services.scraperService.resumePendingScrape(
                     in: services.musicLibrary,
                     allowBackgroundExecution: true
                 )
-                await scraper.waitUntilScrapeIdle()
-                guard !completion.isCompleted else { return }
-                if services.playerService.isPlaybackActive {
-                    await finishDuringPlayback()
-                    return
-                }
+            },
+            waitForScrape: {
+                await AppServices.shared.scraperService.waitUntilScrapeIdle()
+            },
+            cancelScrape: { AppServices.shared.scraperService.cancelPreservingCheckpoint() },
+            backfillHasPendingWork: { AppServices.shared.metadataBackfill.hasPendingWork },
+            startBackfill: { AppServices.shared.metadataBackfill.start() },
+            waitBackfillIdle: { await AppServices.shared.metadataBackfill.waitUntilIdle() },
+            setBackfillMode: { AppServices.shared.metadataBackfill.setExecutionMode($0) },
+            expireBackfill: {
+                AppServices.shared.metadataBackfill
+                    .systemBackgroundProcessingExpired(identifier: processingSession)
+            },
+            setBackgroundPlaybackActive: {
+                AppServices.shared.scanService.setBackgroundPlaybackActive($0)
+            },
+            prepareNonPlaybackWork: {
+                let services = AppServices.shared
+                services.musicLibrary.resumePendingIdentityResolution()
+                services.resumePendingLocalImportScanIfNeeded()
+            },
+            scheduleNextRequest: {
+                // If anything still has a checkpoint or pending bare songs,
+                // automatically renew the BGProcessing request for a later wake.
+                let services = AppServices.shared
+                let backfill = services.metadataBackfill
+                services.scanService.scheduleBackgroundResumeIfNeeded(
+                    backfillPending: backfill.hasPendingWork,
+                    backfillRequiresNetworkConnectivity: backfill.backgroundWakeRequiresNetworkConnectivity,
+                    scrapePending: services.scraperService.hasPendingBackgroundContinuation,
+                    localImportPending: LocalImportService.hasPendingScan,
+                    sourceStore: services.sourcesStore
+                )
             }
-
-            if backfill.hasPendingWork {
-                backfill.start()
-                await backfill.waitUntilIdle()
-            }
-
-            // If anything still has a checkpoint or pending bare songs,
-            // automatically renew the BGProcessing request for a later wake.
-            scanService.scheduleBackgroundResumeIfNeeded(
-                backfillPending: backfill.hasPendingWork,
-                backfillRequiresNetworkConnectivity: backfill.backgroundWakeRequiresNetworkConnectivity,
-                scrapePending: scraper.hasPendingBackgroundContinuation,
-                localImportPending: LocalImportService.hasPendingScan,
-                sourceStore: services.sourcesStore
-            )
-            completion.complete(success: true)
-        }
+        )
     }
 }
 
-private final class BackgroundTaskCompletion: @unchecked Sendable {
+private final class BackgroundTaskCompletion: BackgroundTaskCompleting, @unchecked Sendable {
     private let task: BGTask
     private let lock = NSLock()
     private var didComplete = false
@@ -731,6 +723,189 @@ final class PrimuseAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 #endif
+
+/// The exactly-once completion contract of a background processing task.
+/// `BGTask` exists only on iOS, so `BackgroundProcessingDrain` depends on this
+/// instead and stays buildable — and testable — on every platform.
+protocol BackgroundTaskCompleting: AnyObject, Sendable {
+    var isCompleted: Bool { get }
+
+    /// Returns true only for the caller that actually completed the task.
+    @discardableResult
+    func complete(success: Bool) -> Bool
+}
+
+/// One BGProcessingTask drain: scans → scraping → metadata backfill, then a
+/// renewed request. Every dependency is an injected closure so the ordering,
+/// the background-playback branch and the expiration/renewal contract can be
+/// exercised without BGTaskScheduler.
+///
+/// Two invariants the previous inline implementation did not hold:
+/// * the next BGProcessing request is scheduled exactly once per drain,
+///   including after an expiration (previously an expired task returned
+///   without scheduling, so pending work never got another wake);
+/// * the task is completed exactly once, and whoever completes it owns the
+///   renewal.
+@MainActor
+final class BackgroundProcessingDrain {
+    struct Dependencies: Sendable {
+        var isPlaybackActive: @MainActor @Sendable () -> Bool = { false }
+        var isApplicationActive: @MainActor @Sendable () -> Bool = { false }
+        var hasResumableScanWork: @MainActor @Sendable () -> Bool = { false }
+        var resumeScans: @MainActor @Sendable () -> Void = {}
+        var waitForScans: @MainActor @Sendable () async -> Void = {}
+        var cancelScans: @MainActor @Sendable () -> Void = {}
+        var startPeriodicQuickSync: @MainActor @Sendable () -> Void = {}
+        var hasPendingScrape: @MainActor @Sendable () -> Bool = { false }
+        var resumeScrape: @MainActor @Sendable () -> Void = {}
+        var waitForScrape: @MainActor @Sendable () async -> Void = {}
+        var cancelScrape: @MainActor @Sendable () -> Void = {}
+        var backfillHasPendingWork: @MainActor @Sendable () -> Bool = { false }
+        var startBackfill: @MainActor @Sendable () -> Void = {}
+        var waitBackfillIdle: @MainActor @Sendable () async -> Void = {}
+        var setBackfillMode: @MainActor @Sendable (MetadataBackfillExecutionMode) -> Void = { _ in }
+        var expireBackfill: @MainActor @Sendable () -> Void = {}
+        var setBackgroundPlaybackActive: @MainActor @Sendable (Bool) -> Void = { _ in }
+        /// Identity resolution and interrupted local imports. Postponed while
+        /// audio is playing, exactly like scraping and indexing.
+        var prepareNonPlaybackWork: @MainActor @Sendable () -> Void = {}
+        var scheduleNextRequest: @MainActor @Sendable () -> Void = {}
+    }
+
+    // Both are immutable and Sendable, so `expire()` can read the completion
+    // from whatever queue BGTaskScheduler calls it on.
+    private nonisolated let completion: any BackgroundTaskCompleting
+    private nonisolated let dependencies: Dependencies
+    private var didScheduleNextRequest = false
+
+    /// `BGTaskScheduler` can run the launch handler off the main queue, so the
+    /// drain must be constructible before hopping onto the main actor.
+    nonisolated init(
+        completion: any BackgroundTaskCompleting,
+        dependencies: Dependencies
+    ) {
+        self.completion = completion
+        self.dependencies = dependencies
+    }
+
+    func run() async {
+        guard !completion.isCompleted else { return }
+        if dependencies.isPlaybackActive() {
+            await drainDuringPlayback()
+            return
+        }
+
+        dependencies.setBackgroundPlaybackActive(false)
+        dependencies.setBackfillMode(.background)
+        // Drain bounded snapshots for as long as this system task owns
+        // execution time. Expiration cancels work and preserves the queue.
+        dependencies.prepareNonPlaybackWork()
+        if dependencies.hasResumableScanWork() {
+            dependencies.resumeScans()
+        }
+        dependencies.startPeriodicQuickSync()
+        await dependencies.waitForScans()
+        guard !completion.isCompleted else { return }
+        // Playback can start from the lock screen while this drain is
+        // suspended, so the check repeats after every long wait.
+        if dependencies.isPlaybackActive() {
+            await drainDuringPlayback()
+            return
+        }
+
+        if dependencies.hasPendingScrape() {
+            dependencies.resumeScrape()
+            await dependencies.waitForScrape()
+            guard !completion.isCompleted else { return }
+            if dependencies.isPlaybackActive() {
+                await drainDuringPlayback()
+                return
+            }
+        }
+
+        if dependencies.backfillHasPendingWork() {
+            dependencies.startBackfill()
+            await dependencies.waitBackfillIdle()
+        }
+        finish()
+    }
+
+    /// Background audio is user-facing foreground work, but it also keeps the
+    /// process alive. Scans therefore continue on the reduced playback profile
+    /// (no UIKit assertion, background priority, coarser library flushes)
+    /// instead of being suspended, while scraping, Spotlight indexing and
+    /// lyrics stay postponed.
+    private func drainDuringPlayback() async {
+        guard !completion.isCompleted else { return }
+        dependencies.setBackgroundPlaybackActive(true)
+        dependencies.setBackfillMode(.backgroundDuringPlayback)
+        if dependencies.hasResumableScanWork() {
+            dependencies.resumeScans()
+        }
+        await dependencies.waitForScans()
+        guard !completion.isCompleted else { return }
+        if dependencies.backfillHasPendingWork() {
+            dependencies.startBackfill()
+            await dependencies.waitBackfillIdle()
+        }
+        guard !completion.isCompleted else { return }
+        finish()
+    }
+
+    /// Called on an arbitrary queue by BGTaskScheduler, which expects
+    /// `setTaskCompleted` immediately. Completion therefore stays synchronous
+    /// and only the teardown hops onto the main actor.
+    nonisolated func expire() {
+        guard completion.complete(success: false) else { return }
+        Task { @MainActor in
+            self.finishExpiration()
+        }
+    }
+
+    /// Cancels the work this drain was running and *always* renews the
+    /// request, so pending scans/scraping/backfill still get a later wake.
+    ///
+    /// The expiration callback and this main-actor hop are separated by the
+    /// main queue, during which the user can return to the foreground and
+    /// start a new scan. Cancelling then would kill that newer foreground
+    /// work, so cancellation is skipped whenever the app is active — the
+    /// foreground scene owns the lifecycle from that point. (Backfill keeps
+    /// its own expiration entry point, which re-checks app state and playback
+    /// mode itself.)
+    ///
+    /// Background playback is the second case where scans must survive: they
+    /// deliberately keep running on the reduced playback profile, hold no
+    /// UIKit assertion and are kept alive by the audio session, while
+    /// `drainDuringPlayback()` waits on them — so this BGProcessing task is
+    /// routinely expired mid-scan. Cancelling there would abort a scan the
+    /// process is perfectly able to finish. When playback later stops,
+    /// `ScanService.setBackgroundPlaybackActive(false)` re-acquires the
+    /// per-scan assertion, so the normal expiration → cancel → checkpoint path
+    /// protects the data again. This mirrors
+    /// `MetadataBackfillService.systemBackgroundProcessingExpired`, which
+    /// already ignores expiration in `.backgroundDuringPlayback`.
+    func finishExpiration() {
+        if !dependencies.isApplicationActive() {
+            if !dependencies.isPlaybackActive() {
+                dependencies.cancelScans()
+            }
+            dependencies.cancelScrape()
+        }
+        dependencies.expireBackfill()
+        scheduleNextRequestOnce()
+    }
+
+    private func finish() {
+        scheduleNextRequestOnce()
+        completion.complete(success: true)
+    }
+
+    private func scheduleNextRequestOnce() {
+        guard !didScheduleNextRequest else { return }
+        didScheduleNextRequest = true
+        dependencies.scheduleNextRequest()
+    }
+}
 
 /// Serializes best-effort disk cleanup and remembers the last fully completed
 /// pass. A seven-day stale-file policy does not need to rescan every cache tree
@@ -1550,6 +1725,22 @@ struct PrimuseApp: App {
                                 if metadataBackfill.hasPendingWork {
                                     metadataBackfill.start()
                                 }
+                                // Audio keeps the process alive, so scanning
+                                // continues on the reduced playback profile
+                                // (no UIKit assertion, background priority,
+                                // coarser library flushes) instead of waiting
+                                // for the foreground. Scraping, Spotlight and
+                                // lyrics stay postponed as before.
+                                scanService.setBackgroundPlaybackActive(true)
+                                if scanService.hasResumableScanWork {
+                                    scanService.resumePendingScans(
+                                        context: .background,
+                                        sourceManager: sourceManager,
+                                        library: musicLibrary,
+                                        sourceStore: sourcesStore,
+                                        scraperService: scraperService
+                                    )
+                                }
                                 scanService.scheduleBackgroundResumeIfNeeded(
                                     backfillPending: metadataBackfill.hasPendingWork,
                                     backfillRequiresNetworkConnectivity: metadataBackfill.backgroundWakeRequiresNetworkConnectivity,
@@ -1559,6 +1750,7 @@ struct PrimuseApp: App {
                                 )
                                 return
                             }
+                            scanService.setBackgroundPlaybackActive(false)
                             metadataBackfill.setExecutionMode(.background)
                             musicLibrary.resumePendingIdentityResolution()
                             AppServices.shared.spotlightIndex.resumePendingSynchronization(
@@ -1621,6 +1813,9 @@ struct PrimuseApp: App {
                         }
                         musicLibrary.suspendPendingIdentityResolution()
                         scraperService.resumeAfterSceneTransition(in: musicLibrary)
+                        // Back in the foreground: full scan cadence and the
+                        // normal assertion policy apply again.
+                        scanService.setBackgroundPlaybackActive(false)
                         scanService.resumePendingScans(
                             context: .foregroundResume,
                             sourceManager: sourceManager,
@@ -1667,15 +1862,32 @@ struct PrimuseApp: App {
                     )
                     if isActive {
                         // A remote-control play command can arrive after the
-                        // scene already entered background. Quiesce heavy work
-                        // immediately, preserving its durable checkpoints.
-                        scanService.cancelAllActiveScans()
+                        // scene already entered background. Scraping, indexing
+                        // and lyrics are quiesced with their durable
+                        // checkpoints intact; scanning instead moves to the
+                        // reduced playback profile, which releases the UIKit
+                        // assertions that would otherwise expire under it.
+                        scanService.setBackgroundPlaybackActive(true)
                         scraperService.cancelPreservingCheckpoint()
                         AppServices.shared.spotlightIndex.suspendSynchronization()
                         AppServices.shared.lyricsTextBackfill.stop()
                         // Playback postpones maintenance, but the pending scene
                         // settlement must still release publications and persist.
                         BackgroundLibraryMaintenanceCoordinator.shared.cancelMaintenance()
+                        if scanService.hasResumableScanWork, !scanService.hasActiveScans {
+                            scanService.resumePendingScans(
+                                context: .background,
+                                sourceManager: sourceManager,
+                                library: musicLibrary,
+                                sourceStore: sourcesStore,
+                                scraperService: scraperService
+                            )
+                        }
+                    } else {
+                        // Still backgrounded without audio: re-arm the finite
+                        // UIKit window so its expiration persists checkpoints
+                        // and cancels the scans before iOS suspends us.
+                        scanService.setBackgroundPlaybackActive(false)
                     }
                     if metadataBackfill.hasPendingWork, !metadataBackfill.isRunning {
                         metadataBackfill.start()

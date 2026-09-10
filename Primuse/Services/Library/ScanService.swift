@@ -10,6 +10,71 @@ import UIKit
 
 typealias ServerMirrorApplyFence = @MainActor () -> Bool
 
+/// How much of the device a running scan may consume. Background audio keeps
+/// the process alive without a UIKit assertion, so a scan may continue while
+/// the app is backgrounded — but only on a deliberately reduced profile so it
+/// cannot compete with the audio render thread.
+enum ScanExecutionProfile: Sendable, Equatable {
+    /// Foreground, or a finite background window backed by a UIKit assertion.
+    case standard
+    /// Backgrounded with audio playing: the process stays alive because of
+    /// playback, so scanning runs at the lowest priority and commits to the
+    /// observable library far less often.
+    case backgroundPlayback
+}
+
+/// Pure cadence/priority values for `ScanExecutionProfile`. Kept free of any
+/// service state so the background-playback budget is unit-testable.
+enum ScanExecutionProfilePolicy {
+    /// 每 200 首提交一次 (见 ScanService.flushBatchSize 的历史注释)。
+    static let standardFlushBatchSize = 200
+    static let standardFlushInterval: TimeInterval = 1.5
+    static let standardProgressPublishInterval: TimeInterval = 0.75
+    /// Twice the batch and a much longer ceiling: every flush runs
+    /// `addSongs` (rebuildIndex + snapshot persistence) on the main actor,
+    /// which is exactly the work that must stay out of the audio path.
+    static let backgroundPlaybackFlushBatchSize = 400
+    static let backgroundPlaybackFlushInterval: TimeInterval = 5
+    /// Nothing observes scan progress while the app is backgrounded, so
+    /// publishing it only rate-limits the observation churn on resume.
+    static let backgroundPlaybackProgressPublishInterval: TimeInterval = 5
+
+    static func flushBatchSize(for profile: ScanExecutionProfile) -> Int {
+        switch profile {
+        case .standard: standardFlushBatchSize
+        case .backgroundPlayback: backgroundPlaybackFlushBatchSize
+        }
+    }
+
+    static func flushInterval(for profile: ScanExecutionProfile) -> TimeInterval {
+        switch profile {
+        case .standard: standardFlushInterval
+        case .backgroundPlayback: backgroundPlaybackFlushInterval
+        }
+    }
+
+    static func progressPublishInterval(for profile: ScanExecutionProfile) -> TimeInterval {
+        switch profile {
+        case .standard: standardProgressPublishInterval
+        case .backgroundPlayback: backgroundPlaybackProgressPublishInterval
+        }
+    }
+
+    /// Foreground priorities are unchanged; only the background-playback
+    /// profile is demoted so the audio pipeline always wins the CPU.
+    static func taskPriority(
+        for profile: ScanExecutionProfile,
+        context: BaiduSnapshotExecutionContext
+    ) -> TaskPriority {
+        switch profile {
+        case .backgroundPlayback:
+            .background
+        case .standard:
+            context == .userInitiatedForeground ? .userInitiated : .utility
+        }
+    }
+}
+
 /// Manages music source scanning state and tasks.
 /// Lives in the SwiftUI environment so scan progress persists across navigation.
 @MainActor
@@ -104,6 +169,53 @@ final class ScanService {
     }
     #if os(iOS)
     private var backgroundTaskIDs: [String: UIBackgroundTaskIdentifier] = [:]
+    /// True while the app is backgrounded with audio playing. Playback keeps
+    /// the process eligible to run, so scans continue on the reduced
+    /// `.backgroundPlayback` profile instead of being cancelled outright.
+    @ObservationIgnored private var backgroundPlaybackProfileActive = false
+    #endif
+
+    /// The profile every running scan currently obeys. Derived rather than
+    /// stored per scan: a scan started in the foreground and still running
+    /// after the scene backgrounds during playback must adopt the reduced
+    /// cadence too.
+    var currentExecutionProfile: ScanExecutionProfile {
+        #if os(iOS)
+        backgroundPlaybackProfileActive && UIApplication.shared.applicationState != .active
+            ? .backgroundPlayback
+            : .standard
+        #else
+        .standard
+        #endif
+    }
+
+    /// True while at least one scan task is in flight.
+    var hasActiveScans: Bool { !activeTasks.isEmpty }
+
+    #if os(iOS)
+    /// Enters/leaves the background-playback execution profile.
+    ///
+    /// Entering releases the per-scan UIApplication assertions: background
+    /// audio already keeps the process alive, and holding a ~30 s assertion
+    /// would only let its expiration handler cancel an otherwise healthy scan
+    /// (the same reasoning as `MetadataBackfillService.setExecutionMode`).
+    /// Leaving re-acquires an assertion for every active scan while the app is
+    /// still backgrounded, so the existing expiration → `cancelScan` →
+    /// forced-checkpoint path protects the data before iOS suspends us.
+    func setBackgroundPlaybackActive(_ active: Bool) {
+        guard backgroundPlaybackProfileActive != active else { return }
+        backgroundPlaybackProfileActive = active
+        if active {
+            for sourceID in Array(backgroundTaskIDs.keys) {
+                endBackgroundTask(for: sourceID)
+            }
+        } else {
+            guard UIApplication.shared.applicationState != .active else { return }
+            for sourceID in Array(activeTasks.keys) where backgroundTaskIDs[sourceID] == nil {
+                beginBackgroundTask(for: sourceID)
+            }
+        }
+    }
     #endif
 
     private let checkpointStore: ScanCheckpointFileStore
@@ -441,9 +553,10 @@ final class ScanService {
             localImportScanRevisions[source.id] = (generation, LocalImportService.pendingScanRevision)
         }
 
-        let taskPriority: TaskPriority = snapshotExecutionContext == .userInitiatedForeground
-            ? .userInitiated
-            : .utility
+        let taskPriority = ScanExecutionProfilePolicy.taskPriority(
+            for: currentExecutionProfile,
+            context: snapshotExecutionContext
+        )
         let task = Task(priority: taskPriority) {
             defer {
                 // Only release shared state if we're still the current scan.
@@ -673,18 +786,27 @@ final class ScanService {
         return ScanCheckpoint.earliestAutomaticResumeDate(in: backingOff, after: now)
     }
 
-    /// 扫描期间向 library 批量提交的阈值。改大可以显著降低 main actor 上
-    /// rebuildIndex / persistSnapshot 的频率, 避免 1w+ 首库 scale 时出现
-    /// "扫描期间 UI 卡顿"。1w 首库下从原本的每 10 首提交一次 (1000 次
-    /// rebuildIndex) 降到每 200 首一次 (50 次), 主线程阻塞时间下降 20×。
-    private static let flushBatchSize = 200
-    /// Scanner streams can yield much faster than the display refresh rate.
-    /// Publishing progress four times a second is enough for smooth feedback
-    /// without repeatedly invalidating the Sources hierarchy.
-    private static let progressPublishInterval: TimeInterval = 0.75
-    /// 即便没攒够 batchSize, 距离上次 flush 超过这个间隔也强制 flush 一次
-    /// 让用户看到 "scanned X" 数字仍在动 (别等到扫描结束才一次性更新)。
-    private static let flushInterval: TimeInterval = 1.5
+    /// 扫描期间向 library 批量提交的阈值 (以及进度发布节流)。改大可以显著
+    /// 降低 main actor 上 rebuildIndex / persistSnapshot 的频率, 避免 1w+ 首
+    /// 库 scale 时出现 "扫描期间 UI 卡顿"。1w 首库下从原本的每 10 首提交一次
+    /// (1000 次 rebuildIndex) 降到每 200 首一次 (50 次), 主线程阻塞时间下降
+    /// 20×。数值本身在 ScanExecutionProfilePolicy, 前台档位保持不变;
+    /// 后台播放档位提交得更少, 见该 policy 的注释。
+    ///
+    /// Live cadence for the profile the app is in right now: a scan started in
+    /// the foreground and still running after the scene backgrounds during
+    /// playback adopts the reduced cadence on its next iteration.
+    private var currentFlushBatchSize: Int {
+        ScanExecutionProfilePolicy.flushBatchSize(for: currentExecutionProfile)
+    }
+
+    private var currentFlushInterval: TimeInterval {
+        ScanExecutionProfilePolicy.flushInterval(for: currentExecutionProfile)
+    }
+
+    private var currentProgressPublishInterval: TimeInterval {
+        ScanExecutionProfilePolicy.progressPublishInterval(for: currentExecutionProfile)
+    }
 
     /// Re-launch any source whose scan was interrupted (has a checkpoint with
     /// unfinished progress) and is not already running. Idempotent — safe to
@@ -1293,7 +1415,8 @@ final class ScanService {
 
                 let pendingDelta = update.scannedCount - lastIncrementalUpdate
                 let timeSinceFlush = Date().timeIntervalSince(lastFlushAt)
-                if pendingDelta >= Self.flushBatchSize || (pendingDelta > 0 && timeSinceFlush >= Self.flushInterval) {
+                if pendingDelta >= currentFlushBatchSize
+                    || (pendingDelta > 0 && timeSinceFlush >= currentFlushInterval) {
                     // 中间 flush ── lastSongs 是当前累积的部分扫描结果, 还没
                     // 扫到的歌会被 addSongs 临时移除, 下次 flush 又补回。
                     // 这种"伪移除"不该触发缓存清理, 否则扫描中用户的本地
@@ -1945,8 +2068,8 @@ final class ScanService {
                 let observedMutationCount = max(update.mutationCount, update.addedCount)
                 let pendingDelta = observedMutationCount - lastIncrementalMutation
                 let timeSinceFlush = Date().timeIntervalSince(lastFlushAt)
-                let shouldFlushIncrementally = pendingDelta >= Self.flushBatchSize
-                    || (pendingDelta > 0 && timeSinceFlush >= Self.flushInterval)
+                let shouldFlushIncrementally = pendingDelta >= currentFlushBatchSize
+                    || (pendingDelta > 0 && timeSinceFlush >= currentFlushInterval)
                 if shouldFlushIncrementally, !requiresAtomicCatalogCommit {
                     // 中间 flush ── lastSongs 是当前累积的部分扫描结果, 还没
                     // 扫到的歌会被 addSongs 临时移除, 下次 flush 又补回。
@@ -3160,7 +3283,7 @@ final class ScanService {
         lastPublishedAt: inout Date
     ) {
         let now = Date()
-        guard now.timeIntervalSince(lastPublishedAt) >= Self.progressPublishInterval else {
+        guard now.timeIntervalSince(lastPublishedAt) >= currentProgressPublishInterval else {
             return
         }
         var state = scanStates[sourceID] ?? ScanState(isScanning: true)
@@ -3501,6 +3624,12 @@ final class ScanService {
     private func beginBackgroundTask(for sourceID: String) {
         #if os(iOS)
         endBackgroundTask(for: sourceID)
+        // Background audio already keeps the process eligible to run. Taking a
+        // finite UIKit assertion here would only let its ~30 s expiration
+        // cancel a scan the playback profile is deliberately keeping alive.
+        // `setBackgroundPlaybackActive(false)` re-acquires it when playback
+        // stops while the app is still backgrounded.
+        guard currentExecutionProfile != .backgroundPlayback else { return }
         backgroundTaskIDs[sourceID] = UIApplication.shared.beginBackgroundTask(withName: "scan-\(sourceID)") { [weak self] in
             // UIKit invokes the handler on the main thread. Ending the assertion
             // synchronously keeps the release inside the expiration grace period
