@@ -27,7 +27,7 @@ private final class HomeRefreshCoordinator {
     }
 }
 
-private struct PersistedHomeAlbumTile: Codable, Sendable {
+struct PersistedHomeAlbumTile: Codable, Sendable {
     let albumID: String
     let artworkSongID: String?
 }
@@ -86,7 +86,7 @@ private struct RecentlyAddedAlbumsView: View {
     }
 }
 
-private struct PersistedHomeRecommendation: Codable, Sendable {
+struct PersistedHomeRecommendation: Codable, Sendable {
     let songID: String
     let score: Double
     let reasons: [String]
@@ -95,7 +95,7 @@ private struct PersistedHomeRecommendation: Codable, Sendable {
 /// Small, disposable projection of the last complete home page. The library
 /// remains the source of truth: cached IDs are rehydrated from current models,
 /// then the expensive highlights and recommendations refresh in the background.
-private struct PersistedHomeSnapshot: Codable, Sendable {
+struct PersistedHomeSnapshot: Codable, Sendable {
     static let currentVersion = 1
 
     let version: Int
@@ -500,7 +500,7 @@ struct HomeView: View {
         let showsRecommendations: Bool
     }
 
-    fileprivate struct HomeAlbumTile: Identifiable, Sendable {
+    struct HomeAlbumTile: Identifiable, Sendable {
         let album: Album
         let artworkSong: Song?
 
@@ -550,7 +550,7 @@ struct HomeView: View {
         var likedPlaylist: Playlist?
     }
 
-    private struct InitialHomeSnapshotPayload: Sendable {
+    struct InitialHomeSnapshotPayload: Sendable {
         let heroCoverSongs: [Song]
         let recentlyAddedAlbums: [HomeAlbumTile]
         let forYouResults: [MusicDiscoveryResult]
@@ -1164,114 +1164,37 @@ struct HomeView: View {
     /// from current library models when possible, then refresh the expensive
     /// highlights and recommendations off the main actor.
     private func prepareInitialHomeSnapshot() async {
-        let startedAt = ProcessInfo.processInfo.systemUptime
+        let persistedSnapshot = await HomeInitialSnapshotCacheStore.shared.load()
+        guard !Task.isCancelled else { return }
         let signature = homeSnapshotSignature
         let visibleSongs = library.visibleSongs
         let visibleAlbums = library.visibleAlbums
-        let inputsFinishedAt = ProcessInfo.processInfo.systemUptime
-
-        let persistedSnapshot = await HomeInitialSnapshotCacheStore.shared.load()
-        guard !Task.isCancelled else { return }
-        if let payload = rehydrateInitialHomePayload(
+        let payload = Self.rehydrateInitialHomePayload(
             persistedSnapshot,
-            signature: signature,
-            visibleAlbums: visibleAlbums
-        ) {
-            var snapshot = makeHomeSnapshot(
-                forYouResults: payload.forYouResults,
-                heroCoverSongs: payload.heroCoverSongs,
-                recentlyAddedAlbums: payload.recentlyAddedAlbums
-            )
-            snapshot.heroCoverSongs = payload.heroCoverSongs
-            snapshot.recentlyAddedAlbums = payload.recentlyAddedAlbums
-            snapshot.forYouResults = payload.forYouResults
-            publishInitialHomeSnapshot(snapshot, signature: signature)
+            visibleAlbums: visibleAlbums,
+            songForID: { library.unobservedVisibleSong(id: $0) }
+        )
+        let snapshot = makeHomeSnapshot(
+            forYouResults: showForYou ? (payload?.forYouResults ?? []) : [],
+            heroCoverSongs: payload?.heroCoverSongs ?? Array(visibleSongs.prefix(6)),
+            recentlyAddedAlbums: payload?.recentlyAddedAlbums ?? []
+        )
+        publishInitialHomeSnapshot(snapshot, signature: signature)
 
-            let publishFinishedAt = ProcessInfo.processInfo.systemUptime
-            plog(String(
-                format: "🚀 home initial total=%.0fms inputs=%.0f cache=hit rehydrate=%.0f songs=%d",
-                (publishFinishedAt - startedAt) * 1_000,
-                (inputsFinishedAt - startedAt) * 1_000,
-                (publishFinishedAt - inputsFinishedAt) * 1_000,
-                visibleSongs.count
-            ))
-
-            // Give SwiftUI a chance to present the complete cached page before
-            // preparing inputs for the background refresh.
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            scheduleLibraryHighlightsRefresh(
-                songs: visibleSongs,
-                albums: visibleAlbums,
-                recentSongs: snapshot.recentSongs,
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        scheduleLibraryHighlightsRefresh(
+            songs: visibleSongs,
+            albums: visibleAlbums,
+            recentSongs: library.recentlyPlayedSongs(limit: 30),
+            signature: signature
+        )
+        if showForYou {
+            scheduleRecommendationRefresh(
+                input: MusicDiscoveryEngine.recommendationSnapshot(in: library),
                 signature: signature
             )
-            if showForYou {
-                scheduleRecommendationRefresh(
-                    input: MusicDiscoveryEngine.recommendationInput(in: library),
-                    signature: signature
-                )
-            } else {
-                refreshCoordinator.recommendationTask?.cancel()
-                refreshCoordinator.recommendationTask = nil
-            }
-
-            if homeSnapshotSignature != signature {
-                scheduleDebouncedHomeRefresh()
-            }
-            return
         }
-
-        let recommendationInput = showForYou
-            ? MusicDiscoveryEngine.recommendationInput(in: library)
-            : nil
-        let recommendationInputFinishedAt = ProcessInfo.processInfo.systemUptime
-        var snapshot = makeHomeSnapshot(
-            forYouResults: [],
-            heroCoverSongs: [],
-            recentlyAddedAlbums: []
-        )
-        let baseFinishedAt = ProcessInfo.processInfo.systemUptime
-        let recentSongs = snapshot.recentSongs
-
-        let payload = await Task.detached(priority: .utility) {
-            InitialHomeSnapshotPayload(
-                heroCoverSongs: Self.makeHeroCoverSongs(
-                    songs: visibleSongs,
-                    recentSongs: recentSongs
-                ),
-                recentlyAddedAlbums: Self.makeRecentlyAddedAlbumTiles(
-                    songs: visibleSongs,
-                    albums: visibleAlbums,
-                    limit: 12
-                ),
-                forYouResults: recommendationInput.map {
-                    MusicDiscoveryEngine.dailyRecommendations(from: $0, limit: 12)
-                } ?? []
-            )
-        }.value
-        let payloadFinishedAt = ProcessInfo.processInfo.systemUptime
-
-        guard !Task.isCancelled else { return }
-        snapshot.heroCoverSongs = payload.heroCoverSongs
-        snapshot.recentlyAddedAlbums = payload.recentlyAddedAlbums
-        snapshot.forYouResults = payload.forYouResults
-        publishInitialHomeSnapshot(snapshot, signature: signature)
-        model.highlightsSignature = signature
-        model.recommendationSignature = signature
-        persistInitialHomeSnapshotCache(signature: signature)
-        let publishFinishedAt = ProcessInfo.processInfo.systemUptime
-        plog(String(
-            format: "🚀 home initial total=%.0fms inputs=%.0f cache=miss recommendationInput=%.0f base=%.0f payload=%.0f publish=%.0f songs=%d",
-            (publishFinishedAt - startedAt) * 1_000,
-            (inputsFinishedAt - startedAt) * 1_000,
-            (recommendationInputFinishedAt - inputsFinishedAt) * 1_000,
-            (baseFinishedAt - recommendationInputFinishedAt) * 1_000,
-            (payloadFinishedAt - baseFinishedAt) * 1_000,
-            (publishFinishedAt - payloadFinishedAt) * 1_000,
-            visibleSongs.count
-        ))
-
         if homeSnapshotSignature != signature {
             scheduleDebouncedHomeRefresh()
         }
@@ -1289,25 +1212,19 @@ struct HomeView: View {
         model.isPrepared = true
     }
 
-    private func rehydrateInitialHomePayload(
+    static func rehydrateInitialHomePayload(
         _ persisted: PersistedHomeSnapshot?,
-        signature: HomeSnapshotSignature,
-        visibleAlbums: [Album]
+        visibleAlbums: [Album],
+        songForID: (String) -> Song?
     ) -> InitialHomeSnapshotPayload? {
         guard let persisted,
-              persisted.version == PersistedHomeSnapshot.currentVersion,
-              persisted.dayStamp == signature.dayStamp,
-              persisted.visibleSongCount == signature.visibleSongCount,
-              persisted.visibleAlbumCount == signature.visibleAlbumCount,
-              persisted.visibleArtistCount == signature.visibleArtistCount,
-              persisted.recentSongIDs == signature.recentSongIDs else {
-            return nil
-        }
+              persisted.version == PersistedHomeSnapshot.currentVersion else { return nil }
 
+        // A stale projection can still fill the first frame. Resolve every ID
+        // against the current visible library so removed sources stay hidden.
         let heroCoverSongs = persisted.heroSongIDs.compactMap {
-            library.unobservedVisibleSong(id: $0)
+            songForID($0)
         }
-        guard heroCoverSongs.count == persisted.heroSongIDs.count else { return nil }
 
         let albumsByID = Dictionary(
             visibleAlbums.map { ($0.id, $0) },
@@ -1318,17 +1235,14 @@ struct HomeView: View {
                 HomeAlbumTile(
                     album: album,
                     artworkSong: tile.artworkSongID.flatMap {
-                        library.unobservedVisibleSong(id: $0)
+                        songForID($0)
                     }
                 )
             }
         }
-        guard recentlyAddedAlbums.count == persisted.recentlyAddedAlbums.count else {
-            return nil
-        }
 
         let recommendations = persisted.recommendations.compactMap { recommendation in
-            library.unobservedVisibleSong(id: recommendation.songID).map { song in
+            songForID(recommendation.songID).map { song in
                 MusicDiscoveryResult(
                     song: song,
                     score: recommendation.score,
@@ -1336,7 +1250,6 @@ struct HomeView: View {
                 )
             }
         }
-        guard recommendations.count == persisted.recommendations.count else { return nil }
 
         return InitialHomeSnapshotPayload(
             heroCoverSongs: heroCoverSongs,
@@ -1346,6 +1259,8 @@ struct HomeView: View {
     }
 
     private func persistInitialHomeSnapshotCache(signature: HomeSnapshotSignature) {
+        guard model.highlightsSignature == signature,
+              !signature.showsRecommendations || model.recommendationSignature == signature else { return }
         let persisted = PersistedHomeSnapshot(
             version: PersistedHomeSnapshot.currentVersion,
             dayStamp: signature.dayStamp,
@@ -1412,19 +1327,18 @@ struct HomeView: View {
         guard refreshCoordinator.pendingSignature != signature else { return }
         refreshCoordinator.pendingSignature = signature
 
-        let visibleSongIDs = Set(library.visibleSongs.map(\.id))
         let visibleAlbumIDs = Set(library.visibleAlbums.map(\.id))
         let retainedRecommendations = model.snapshot.forYouResults.filter {
-            visibleSongIDs.contains($0.song.id)
+            library.unobservedVisibleSong(id: $0.song.id) != nil
         }
         let retainedHeroCovers = model.snapshot.heroCoverSongs.filter {
-            visibleSongIDs.contains($0.id)
+            library.unobservedVisibleSong(id: $0.id) != nil
         }
         let retainedRecentlyAddedAlbums = model.snapshot.recentlyAddedAlbums.filter {
             visibleAlbumIDs.contains($0.id)
         }
         let recommendationInput = showForYou
-            ? MusicDiscoveryEngine.recommendationInput(in: library)
+            ? MusicDiscoveryEngine.recommendationSnapshot(in: library)
             : nil
         // Array copies are copy-on-write and therefore cheap on the main actor.
         // The detached worker below is the only place that traverses them.
@@ -1448,7 +1362,7 @@ struct HomeView: View {
         scheduleLibraryHighlightsRefresh(
             songs: visibleSongs,
             albums: visibleAlbums,
-            recentSongs: snapshot.recentSongs,
+            recentSongs: library.recentlyPlayedSongs(limit: 30),
             signature: signature
         )
 
@@ -1490,7 +1404,7 @@ struct HomeView: View {
     ) {
         refreshCoordinator.libraryHighlightsTask?.cancel()
         refreshCoordinator.libraryHighlightsTask = Task { @MainActor in
-            let payload = await Task.detached(priority: .utility) {
+            let worker = Task.detached(priority: .utility) {
                 let startedAt = Date()
                 let heroCoverSongs = Self.makeHeroCoverSongs(
                     songs: songs,
@@ -1501,16 +1415,26 @@ struct HomeView: View {
                     albums: albums,
                     limit: 12
                 )
+                let resolvedRecentSongs = recentSongs.isEmpty
+                    ? Array(songs.sorted { $0.dateAdded > $1.dateAdded }.prefix(30))
+                    : recentSongs
                 return (
                     heroCoverSongs,
                     albumTiles,
-                    Date().timeIntervalSince(startedAt)
+                    Date().timeIntervalSince(startedAt),
+                    resolvedRecentSongs
                 )
-            }.value
+            }
+            let payload = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
 
             guard !Task.isCancelled, homeSnapshotSignature == signature else { return }
             model.snapshot.heroCoverSongs = payload.0
             model.snapshot.recentlyAddedAlbums = payload.1
+            model.snapshot.recentSongs = payload.3
             model.highlightsSignature = signature
             persistInitialHomeSnapshotCache(signature: signature)
 
@@ -1526,20 +1450,24 @@ struct HomeView: View {
         }
     }
 
-    /// Recommendation inputs still filter the library on the main actor, so
-    /// callers must deduplicate before preparing them. Scoring runs off actor
-    /// while the existing cards remain visible.
+    /// Capture array references on the main actor; prepare and score the
+    /// recommendation input in the worker while the current page stays visible.
     private func scheduleRecommendationRefresh(
-        input: MusicDiscoveryEngine.RecommendationInput,
+        input: MusicDiscoveryEngine.RecommendationSnapshot,
         signature: HomeSnapshotSignature
     ) {
         refreshCoordinator.recommendationTask?.cancel()
         refreshCoordinator.recommendationTask = Task { @MainActor in
-            let payload = await Task.detached(priority: .utility) {
+            let worker = Task.detached(priority: .utility) {
                 let startedAt = Date()
-                let results = MusicDiscoveryEngine.dailyRecommendations(from: input, limit: 12)
+                let results = MusicDiscoveryEngine.dailyRecommendations(from: input.makeInput(), limit: 12, isCancelled: { Task.isCancelled })
                 return (results, Date().timeIntervalSince(startedAt))
-            }.value
+            }
+            let payload = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
 
             guard !Task.isCancelled, homeSnapshotSignature == signature else { return }
             model.snapshot.forYouResults = payload.0
@@ -1616,10 +1544,9 @@ struct HomeView: View {
     }
 
     private func makeHomePlaylistTile(_ playlist: Playlist) -> HomePlaylistTile {
-        let songs = library.songs(forPlaylist: playlist.id)
-        return HomePlaylistTile(
+        HomePlaylistTile(
             playlist: playlist,
-            songCount: songs.count
+            songCount: library.songCount(forPlaylist: playlist.id)
         )
     }
 
@@ -2412,7 +2339,7 @@ struct HomeView: View {
     private func makeRecentSongs() -> [Song] {
         let recent = library.recentlyPlayedSongs(limit: 30)
         if !recent.isEmpty { return recent }
-        return Array(library.visibleSongs.sorted { $0.dateAdded > $1.dateAdded }.prefix(30))
+        return model.snapshot.recentSongs.compactMap { library.unobservedVisibleSong(id: $0.id) }
     }
 
     // MARK: - Recently Added Albums

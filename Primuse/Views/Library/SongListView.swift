@@ -102,6 +102,7 @@ struct MacWindowedSongScrollView<Header: View, RowContent: View>: View {
             }
             .frame(minWidth: viewportWidth, alignment: .leading)
         }
+        .defaultScrollAnchor(.topLeading, for: .alignment)
         .scrollIndicators(.hidden, axes: .vertical)
         .scrollIndicators(axes.contains(.horizontal) ? .visible : .hidden, axes: .horizontal)
         .onScrollGeometryChange(for: MacSongScrollWindowMetrics.self) { geometry in
@@ -187,6 +188,7 @@ private struct MacSongScrollSurface<Chrome: View, Results: View>: View {
             }
             .frame(minWidth: viewportWidth, alignment: .leading)
         }
+        .defaultScrollAnchor(.topLeading, for: .alignment)
         .scrollIndicators(.hidden, axes: .vertical)
         .scrollIndicators(
             allowsHorizontalScrolling ? .visible : .hidden,

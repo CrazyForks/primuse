@@ -1898,23 +1898,13 @@ struct GenreLibraryView: View {
 
     private func macGenreRow(_ genre: LibraryGenre) -> some View {
         let selected = selectedGenre?.id == genre.id
-        let palette = GenreVisualStyle.palette(for: genre.id)
         return Button {
             selectedGenreID = genre.id
         } label: {
             HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [palette.leading, palette.trailing],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
-                    .overlay {
-                        Image(systemName: "tag.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.9))
-                    }
-                    .frame(width: 36, height: 36)
+                GenreArtworkMosaic(genre: genre, artworkSize: 30)
+                    .frame(width: 52, height: 40)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: genre.name)
@@ -2022,9 +2012,9 @@ private struct GenreArtworkMosaic: View {
                         RoundedRectangle(cornerRadius: artworkSize * 0.16)
                             .stroke(.white.opacity(0.28), lineWidth: 0.5)
                     }
-                    .shadow(color: .black.opacity(0.26), radius: 7, y: 4)
-                    .rotationEffect(.degrees(Double(index - 1) * 7))
-                    .offset(x: CGFloat(index - 1) * artworkSize * 0.34)
+                    .shadow(color: .black.opacity(0.26), radius: artworkSize * 0.07, y: artworkSize * 0.04)
+                    .rotationEffect(.degrees((Double(index) - Double(songs.count - 1) / 2) * 7))
+                    .offset(x: (CGFloat(index) - CGFloat(songs.count - 1) / 2) * artworkSize * 0.34)
                     .zIndex(Double(index))
                 }
             }

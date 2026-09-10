@@ -2023,6 +2023,37 @@ struct MusicDiscoveryResult: Identifiable, Sendable {
 }
 
 enum MusicDiscoveryEngine {
+    struct RecommendationSnapshot: Sendable {
+        let songs: [Song]
+        let recentSongs: [Song]
+        let historyEntries: [PlayHistoryStore.Entry]
+        let now: Date
+
+        func makeInput() -> RecommendationInput {
+            let playableSongs = songs.filteredPlayable()
+            let songIDs = Set(playableSongs.map(\.id))
+            func entries(in range: PlayHistoryStore.Range) -> [PlayHistoryStore.Entry] {
+                let cutoff = range.startDate(now: now)
+                return historyEntries.filter { $0.playedAt >= cutoff && $0.playedAt <= now }
+            }
+            let monthEntries = entries(in: .month)
+            let topSongs = PlayHistoryStore.rankedItems(from: entries(in: .year), category: .songs, limit: 12)
+            let topArtists = PlayHistoryStore.rankedItems(from: monthEntries, category: .artists, limit: 6)
+            var seenSeedIDs = Set<String>()
+            let seedIDs = (topSongs.map(\.id) + recentSongs.map(\.id)).filter {
+                songIDs.contains($0) && seenSeedIDs.insert($0).inserted
+            }
+            return RecommendationInput(
+                songs: playableSongs,
+                recentWeekIDs: Set(entries(in: .week).map(\.songID)),
+                recentMonthIDs: Set(monthEntries.map(\.songID)),
+                topArtists: Set(topArtists.map { normalized($0.title) }),
+                seedIDs: seedIDs,
+                now: now
+            )
+        }
+    }
+
     struct RecommendationInput: Sendable {
         let songs: [Song]
         let recentWeekIDs: Set<String>
@@ -2072,26 +2103,19 @@ enum MusicDiscoveryEngine {
         history: PlayHistoryStore = .shared,
         now: Date = Date()
     ) -> RecommendationInput {
-        let songs = library.visibleSongs.filteredPlayable()
-        let songIDs = Set(songs.map(\.id))
-        var seedIDs: [String] = []
-        var seenSeedIDs = Set<String>()
+        recommendationSnapshot(in: library, history: history, now: now).makeInput()
+    }
 
-        for item in history.topSongs(in: .year, limit: 12)
-        where songIDs.contains(item.id) && seenSeedIDs.insert(item.id).inserted {
-            seedIDs.append(item.id)
-        }
-        for song in library.recentlyPlayedSongs(limit: 12)
-        where songIDs.contains(song.id) && seenSeedIDs.insert(song.id).inserted {
-            seedIDs.append(song.id)
-        }
-
-        return RecommendationInput(
-            songs: songs,
-            recentWeekIDs: Set(history.entries(in: .week, now: now).map(\.songID)),
-            recentMonthIDs: Set(history.entries(in: .month, now: now).map(\.songID)),
-            topArtists: Set(history.topArtists(in: .month, limit: 6).map { normalized($0.title) }),
-            seedIDs: seedIDs,
+    @MainActor
+    static func recommendationSnapshot(
+        in library: MusicLibrary,
+        history: PlayHistoryStore = .shared,
+        now: Date = Date()
+    ) -> RecommendationSnapshot {
+        RecommendationSnapshot(
+            songs: library.visibleSongs,
+            recentSongs: library.recentlyPlayedSongs(limit: 12),
+            historyEntries: history.entries,
             now: now
         )
     }

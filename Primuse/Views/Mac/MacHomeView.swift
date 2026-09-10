@@ -73,7 +73,7 @@ struct MacHomeView: View {
     // searchRevision, 不去抖会触发几十次全库重算。cancel + 重启计时, 只在最后
     // 一次 revision 落定后重算。
     @State private var refreshCoordinator = MacHomeRefreshCoordinator()
-    private static let derivedRefreshDebounce: Duration = .milliseconds(300)
+    private static let derivedRefreshDebounce: Duration = .seconds(3)
 
     @MainActor
     @Observable
@@ -81,9 +81,10 @@ struct MacHomeView: View {
         fileprivate var snapshot = DerivedSnapshot()
         var isPrepared = false
         @ObservationIgnored var signature: DerivedSignature?
+        @ObservationIgnored var recommendationSignature: DerivedSignature?
 
         func needsRefresh(for signature: DerivedSignature) -> Bool {
-            !isPrepared || self.signature != signature
+            !isPrepared || self.signature != signature || recommendationSignature != signature
         }
     }
 
@@ -394,23 +395,48 @@ struct MacHomeView: View {
         let albums = library.visibleAlbums
         let artists = library.visibleArtists
         let recentlyPlayed = library.recentlyPlayedSongs(limit: 100)
-        let recommendationInput = MusicDiscoveryEngine.recommendationInput(in: library)
+        let recommendationSnapshot = MusicDiscoveryEngine.recommendationSnapshot(in: library)
 
         refreshCoordinator.computeTask?.cancel()
         refreshCoordinator.computeTask = Task { @MainActor in
-            let snapshot = await Task.detached(priority: .utility) {
+            let worker = Task.detached(priority: .utility) {
                 Self.makeDerivedSnapshot(
                     songs: songs,
                     albums: albums,
                     artists: artists,
-                    recentlyPlayed: recentlyPlayed,
-                    recommendationInput: recommendationInput
+                    recentlyPlayed: recentlyPlayed
                 )
-            }.value
+            }
+            var snapshot = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
             guard !Task.isCancelled, derivedSignature == signature else { return }
+            snapshot.recommendationResults = model.snapshot.recommendationResults.compactMap { result in
+                library.unobservedVisibleSong(id: result.song.id).map {
+                    MusicDiscoveryResult(song: $0, score: result.score, reasons: result.reasons)
+                }
+            }
             model.snapshot = snapshot
             model.isPrepared = true
             model.signature = signature
+
+            let recommendationWorker = Task.detached(priority: .utility) {
+                MusicDiscoveryEngine.dailyRecommendations(
+                    from: recommendationSnapshot.makeInput(),
+                    limit: 12,
+                    isCancelled: { Task.isCancelled }
+                )
+            }
+            let recommendations = await withTaskCancellationHandler {
+                await recommendationWorker.value
+            } onCancel: {
+                recommendationWorker.cancel()
+            }
+            guard !Task.isCancelled, derivedSignature == signature else { return }
+            model.snapshot.recommendationResults = recommendations
+            model.recommendationSignature = signature
         }
     }
 
@@ -418,8 +444,7 @@ struct MacHomeView: View {
         songs: [Song],
         albums: [Album],
         artists: [Artist],
-        recentlyPlayed: [Song],
-        recommendationInput: MusicDiscoveryEngine.RecommendationInput
+        recentlyPlayed: [Song]
     ) -> DerivedSnapshot {
         var snapshot = DerivedSnapshot()
         snapshot.songCount = songs.count
@@ -462,10 +487,6 @@ struct MacHomeView: View {
         }
         let covered = mosaicPool.filter { $0.coverArtFileName?.isEmpty == false }
         snapshot.mosaicSongs = Array((covered.isEmpty ? mosaicPool : covered).prefix(6))
-        snapshot.recommendationResults = MusicDiscoveryEngine.dailyRecommendations(
-            from: recommendationInput,
-            limit: 12
-        )
         return snapshot
     }
 

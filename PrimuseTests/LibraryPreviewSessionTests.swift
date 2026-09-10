@@ -5,6 +5,69 @@ import XCTest
 
 @MainActor
 final class HomePresentationCacheTests: XCTestCase {
+    func testStaleDiskCacheRestoresOnlyCurrentVisibleContent() throws {
+        let song = Song(id: "kept", title: "Updated title", fileFormat: .mp3, filePath: "/kept.mp3", sourceID: "source")
+        let album = Album(id: "kept-album", title: "Updated album")
+        let cached = PersistedHomeSnapshot(
+            version: PersistedHomeSnapshot.currentVersion, dayStamp: 20200101,
+            visibleSongCount: 99, visibleAlbumCount: 50, visibleArtistCount: 10,
+            recentSongIDs: ["removed"], heroSongIDs: ["removed", "kept"],
+            recentlyAddedAlbums: [
+                PersistedHomeAlbumTile(albumID: "removed-album", artworkSongID: "removed"),
+                PersistedHomeAlbumTile(albumID: album.id, artworkSongID: "removed")
+            ],
+            recommendations: [
+                PersistedHomeRecommendation(songID: "removed", score: 100, reasons: []),
+                PersistedHomeRecommendation(songID: song.id, score: 80, reasons: [])
+            ]
+        )
+        let restored = try XCTUnwrap(HomeView.rehydrateInitialHomePayload(
+            cached, visibleAlbums: [album], songForID: { $0 == song.id ? song : nil }
+        ))
+        XCTAssertEqual(restored.heroCoverSongs.map(\.id), [song.id])
+        XCTAssertEqual(restored.forYouResults.map(\.song.title), ["Updated title"])
+        XCTAssertEqual(restored.recentlyAddedAlbums.map(\.album.title), ["Updated album"])
+        XCTAssertNil(restored.recentlyAddedAlbums.first?.artworkSong)
+
+        let removedSource = try XCTUnwrap(HomeView.rehydrateInitialHomePayload(
+            cached, visibleAlbums: [], songForID: { _ in nil }
+        ))
+        XCTAssertTrue(removedSource.heroCoverSongs.isEmpty)
+        XCTAssertTrue(removedSource.recentlyAddedAlbums.isEmpty)
+        XCTAssertTrue(removedSource.forYouResults.isEmpty)
+    }
+
+    func testRecommendationSnapshotBuildsOffMainThreadWithVisiblePlayableSeeds() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let playable = Song(id: "playable", title: "Song", fileFormat: .mp3, filePath: "/song.mp3", sourceID: "source")
+        let unavailable = Song(id: "unavailable", title: "Unavailable", fileFormat: .mp3, filePath: "", sourceID: "source")
+        func entry(_ id: String, daysAgo: Double) -> PlayHistoryStore.Entry {
+            PlayHistoryStore.Entry(songID: id, songTitle: id, artistName: "Artist", albumTitle: "Album",
+                playedAt: now.addingTimeInterval(-daysAgo * 86_400), listenedSec: 60, sourceID: "source")
+        }
+        let snapshot = MusicDiscoveryEngine.RecommendationSnapshot(
+            songs: [playable, unavailable], recentSongs: [playable, unavailable, playable],
+            historyEntries: [entry("playable", daysAgo: 2), entry("removed", daysAgo: 20), entry("future", daysAgo: -1)],
+            now: now
+        )
+        let worker = Task.detached { [snapshot] in
+            HomePresentationCacheTests.prepareRecommendationSnapshot(snapshot)
+        }
+        let result = await worker.value
+        XCTAssertFalse(result.1)
+        XCTAssertEqual(result.0.songs.map(\.id), [playable.id])
+        XCTAssertEqual(result.0.seedIDs, [playable.id])
+        XCTAssertEqual(result.0.recentWeekIDs, ["playable"])
+        XCTAssertEqual(result.0.recentMonthIDs, ["playable", "removed"])
+        XCTAssertTrue(MusicDiscoveryEngine.dailyRecommendations(from: result.0, isCancelled: { true }).isEmpty)
+    }
+
+    private nonisolated static func prepareRecommendationSnapshot(
+        _ snapshot: MusicDiscoveryEngine.RecommendationSnapshot
+    ) -> (MusicDiscoveryEngine.RecommendationInput, Bool) {
+        (snapshot.makeInput(), Thread.isMainThread)
+    }
+
     private func signature(
         library: Int = 1, history: Int = 1, pins: String = "",
         recommendations: Bool = true
