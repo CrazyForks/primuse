@@ -922,6 +922,28 @@ final class BackgroundLibraryMaintenanceCoordinator {
 /// revisit every instantiated song row in a large library before running the
 /// two side effects below.
 @MainActor
+/// Live process activity from UIKit/AppKit for code that runs after an await
+/// and therefore cannot trust a `scenePhase` value captured earlier.
+private enum LiveApplicationState {
+    @MainActor static var isActive: Bool {
+        #if os(macOS)
+        NSApplication.shared.isActive
+        #elseif os(iOS)
+        UIApplication.shared.applicationState == .active
+        #else
+        true
+        #endif
+    }
+
+    @MainActor static var isBackground: Bool {
+        #if os(iOS)
+        UIApplication.shared.applicationState == .background
+        #else
+        false
+        #endif
+    }
+}
+
 private struct NetworkPathChangeObserver: View {
     @Environment(\.scenePhase) private var scenePhase
 
@@ -1234,9 +1256,14 @@ struct PrimuseApp: App {
                     try? await Task.sleep(for: .milliseconds(350))
                     guard !Task.isCancelled else { return }
                     await AppServices.shared.completeDeferredStartup()
-                    navidromeAutoRefresh.setApplicationActive(scenePhase == .active)
+                    // This task keeps the `scenePhase` copy captured when the
+                    // scene was first built, which can still be `.inactive`
+                    // from the launch transition even though the app became
+                    // active during the await above. Read the live state so
+                    // a cold launch does not park activity-gated services.
+                    navidromeAutoRefresh.setApplicationActive(LiveApplicationState.isActive)
                     #if os(iOS) || os(macOS)
-                    audioCacheSync.setApplicationActive(scenePhase != .background)
+                    audioCacheSync.setApplicationActive(!LiveApplicationState.isBackground)
                     #endif
 
                     PrimuseAppDelegate.sync = cloudSync
