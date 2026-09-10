@@ -6731,7 +6731,8 @@ final class SourceManager {
 
     nonisolated static func isMissingFileError(_ error: Error) -> Bool {
         if case SourceError.fileNotFound = error { return true }
-        if case SourceError.pathNotFound = error { return true }
+        // A missing source path can mean that its export or access scope
+        // changed before deletion reached the file, so it cannot prove absence.
         if case CloudDriveError.fileNotFound = error { return true }
 
         let ns = error as NSError

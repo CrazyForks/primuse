@@ -229,6 +229,42 @@ final class FnMusicSourceTests: XCTestCase {
         XCTAssertEqual(otherFailedAttempts, 1)
     }
 
+    func testDuplicateCleanupRetainsInaccessibleNFSExportAndContinuesWritableSource() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NFSDeletion-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nfs = MusicSource(id: UUID().uuidString, name: "NFS", type: .nfs)
+        let local = MusicSource(id: UUID().uuidString, name: "Writable", type: .local)
+        let path = NFSSelectionPathCodec.makeSelectionPath(exportPath: "/original", relativePath: "/song.flac")
+        let songs = [Song(id: "nfs-song", title: "NFS song", fileFormat: .flac, filePath: path, sourceID: nfs.id),
+                     Song(id: "local-song", title: "Local song", fileFormat: .flac, filePath: "/song.flac", sourceID: local.id)]
+        let nfsConnector = try DuplicateDeletionFixtureConnector(sourceID: nfs.id, root: root.appendingPathComponent("nfs"), paths: [path])
+        let localConnector = try DuplicateDeletionFixtureConnector(sourceID: local.id, root: root.appendingPathComponent("local"), paths: [songs[1].filePath])
+        await nfsConnector.setNFSExportConstraint("/replacement")
+        let library = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
+        let store = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
+        store.add(nfs)
+        store.add(local)
+        library.addSongs(songs, affectedSourceIDs: [nfs.id, local.id])
+        await library.waitForPendingIndex()
+        let manager = SourceManager(sourcesProvider: { [nfs, local] }, connectorFactory: {
+            $0.id == nfs.id ? nfsConnector : localConnector
+        })
+        let cleaner = DuplicateCleanupService(library: library, sourceManager: manager, sourcesStore: store)
+
+        try await XCTUnwrap(cleaner.cleanup(songs)).value
+
+        XCTAssertEqual(library.songs.map(\.id), [songs[0].id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nfsConnector.fileURL(path).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localConnector.fileURL(songs[1].filePath).path))
+        XCTAssertEqual(cleaner.lastCompletedCount, 1)
+        XCTAssertEqual(cleaner.lastSourceFailures.first?.reasons, [.unavailable])
+        await nfsConnector.setNFSExportConstraint("/original")
+        try await XCTUnwrap(cleaner.retryFailedSource(nfs.id)).value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nfsConnector.fileURL(path).path))
+        XCTAssertTrue(library.songs.isEmpty)
+        XCTAssertTrue(cleaner.lastSourceFailures.isEmpty)
+    }
+
     func testBatchPartialDeletionConfirmsEachAudioResult() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("BatchDeletion-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -517,6 +553,7 @@ private actor DuplicateDeletionFixtureConnector: MusicSourceConnector {
     nonisolated let preferredDeleteBatchSize: Int
     private var deniedPaths: Set<String> = []
     private var deleteAttempts: [String: Int] = [:]
+    private var nfsExportConstraint: String?
 
     init(sourceID: String, root: URL, paths: [String], batchSize: Int = 1) throws {
         self.sourceID = sourceID
@@ -530,6 +567,7 @@ private actor DuplicateDeletionFixtureConnector: MusicSourceConnector {
     }
     nonisolated func fileURL(_ path: String) -> URL { root.appendingPathComponent(String(path.dropFirst())) }
     func setDeniedPaths(_ paths: Set<String>) { deniedPaths = paths }
+    func setNFSExportConstraint(_ path: String) { nfsExportConstraint = path }
     func attempts(for path: String) -> Int { deleteAttempts[path, default: 0] }
     func connect() async throws { }
     func disconnect() async { }
@@ -540,6 +578,9 @@ private actor DuplicateDeletionFixtureConnector: MusicSourceConnector {
     func deleteFile(at path: String) async throws {
         deleteAttempts[path, default: 0] += 1
         if deniedPaths.contains(path) { throw SourceFileMutationError.permissionDenied }
+        if let nfsExportConstraint {
+            _ = try NFSSelectionPathCodec.parse(path, constrainedToExport: nfsExportConstraint)
+        }
         try FileManager.default.removeItem(at: fileURL(path))
     }
     func deleteFiles(at paths: [String]) async throws {
