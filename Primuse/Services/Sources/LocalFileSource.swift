@@ -278,9 +278,8 @@ actor LocalFileSource: ExistingSongAwareScanningConnector, EmbeddedMetadataWrite
 
     func deleteFile(at path: String) async throws {
         let fileURL = try resolvedURL(for: path, allowRoot: false)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw SourceError.fileNotFound(path)
-        }
+        // fileExists also returns false when a parent is inaccessible. Only
+        // the mutation's actual error can distinguish missing from denied.
         try FileManager.default.removeItem(at: fileURL)
     }
 

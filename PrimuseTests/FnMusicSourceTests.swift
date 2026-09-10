@@ -140,55 +140,151 @@ final class FnMusicSourceTests: XCTestCase {
         XCTAssertNil(network.scan.nextAutomaticResumeDate(at: now, sourceStore: network.store))
     }
 
-    func testWebDAVDuplicateCleanupSurvivesRescanAndReloadWithoutSourceAccess() async throws {
+    func testWebDAVCleanupDeletesFilesAndRetainsPermissionFailuresAcrossRescanAndReload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DuplicateCleanup-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
         var source = MusicSource(id: UUID().uuidString, name: "WebDAV fixture", type: .webdav)
         source.extraConfig = MusicSource.encodeScannedDirectories(["/"], into: nil, type: source.type)
-        let fixture = try makeScanFixture(count: 2, failAfterPage: false, source: source, root: root)
+        let fixture = try makeScanFixture(count: 3, failAfterPage: false, source: source, root: root)
         XCTAssertTrue(fixture.start())
         await fixture.scan.waitForActiveScansToComplete()
         await fixture.library.waitForPendingIndex()
-        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
-        XCTAssertEqual(Set(fixture.library.songs.map(\.id)), ["track-0", "track-1"])
-        let redundant = try XCTUnwrap(fixture.library.songs.first { $0.id == "track-1" })
-        // A source-side delete would fail before it can connect. Library-only
-        // cleanup must still succeed when the share is unavailable.
-        let unavailableManager = SourceManager(sourcesProvider: {
-            throw SourceError.connectionFailed("Source access is unavailable")
-        })
-        let cleanup = DuplicateCleanupService(
-            library: fixture.library, sourceManager: unavailableManager, sourcesStore: fixture.store
-        )
-        let revision = cleanup.completionRevision
-        let task = try XCTUnwrap(cleanup.cleanup([redundant]))
-        await task.value
-        XCTAssertEqual(fixture.library.songs.map(\.id), ["track-0"])
-        XCTAssertEqual(fixture.store.source(id: source.id)?.songCount, 1)
+        let songs = fixture.library.songs.sorted { $0.id < $1.id }
+        XCTAssertEqual(songs.count, 3)
+        let connector = try DuplicateDeletionFixtureConnector(sourceID: source.id, root: root.appendingPathComponent("audio"), paths: songs.map(\.filePath))
+        await connector.setDeniedPaths([songs[1].filePath])
+        let savedSource = source
+        let manager = SourceManager(sourcesProvider: { [savedSource] }, connectorFactory: { _ in connector })
+        let cleanup = DuplicateCleanupService(library: fixture.library, sourceManager: manager, sourcesStore: fixture.store)
+        try await XCTUnwrap(cleanup.cleanup(Array(songs.dropFirst()))).value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: connector.fileURL(songs[2].filePath).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: connector.fileURL(songs[1].filePath).path))
+        XCTAssertEqual(Set(fixture.library.songs.map(\.id)), [songs[0].id, songs[1].id])
+        XCTAssertEqual(fixture.store.source(id: source.id)?.songCount, 2)
         XCTAssertEqual(cleanup.lastCompletedCount, 1)
-        XCTAssertTrue(cleanup.lastFailedTitles.isEmpty)
-        XCTAssertEqual(cleanup.completionRevision, revision + 1)
+        XCTAssertEqual(cleanup.lastSourceFailures.first?.reasons, [.permissionDenied])
+        XCTAssertEqual(cleanup.completionRevision, 1)
 
         XCTAssertTrue(fixture.start())
         await fixture.scan.waitForActiveScansToComplete()
-        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
-        XCTAssertEqual(fixture.library.songs.map(\.id), ["track-0"])
-        XCTAssertEqual(fixture.store.source(id: source.id)?.songCount, 1)
+        XCTAssertEqual(Set(fixture.library.songs.map(\.id)), [songs[0].id, songs[1].id])
         try await fixture.library.persistNowAndWait().get()
+        let reloaded = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
+        await reloaded.waitForPendingIndex()
+        XCTAssertEqual(Set(reloaded.songs.map(\.id)), [songs[0].id, songs[1].id])
+        await connector.setDeniedPaths([])
+        try await XCTUnwrap(cleanup.retryFailedSource(source.id)).value
+        XCTAssertFalse(FileManager.default.fileExists(atPath: connector.fileURL(songs[1].filePath).path))
+        XCTAssertEqual(fixture.library.songs.map(\.id), [songs[0].id])
+        XCTAssertTrue(cleanup.lastSourceFailures.isEmpty)
+    }
 
-        let reloadedLibrary = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
-        let reloadedStore = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
-        await reloadedLibrary.waitForPendingIndex()
-        XCTAssertEqual(reloadedLibrary.songs.map(\.id), ["track-0"])
-        XCTAssertEqual(reloadedStore.source(id: source.id)?.songCount, 1)
-        XCTAssertTrue(fixture.scan.scanSource(
-            source, sourceManager: fixture.manager, library: reloadedLibrary, sourceStore: reloadedStore
-        ))
-        await fixture.scan.waitForActiveScansToComplete()
-        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
-        XCTAssertEqual(reloadedLibrary.songs.map(\.id), ["track-0"])
-        XCTAssertEqual(reloadedStore.source(id: source.id)?.songCount, 1)
-        let scanCount = await fixture.connector.scanCount
-        XCTAssertEqual(scanCount, 3)
+    func testDuplicateCleanupContinuesOtherSourcesAndRetriesOnlyTheFailedSource() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("MixedDeletion-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sources = [MusicSource(id: UUID().uuidString, name: "Denied", type: .webdav),
+                       MusicSource(id: UUID().uuidString, name: "Writable", type: .local),
+                       MusicSource(id: UUID().uuidString, name: "Also denied", type: .smb)]
+        let songs = sources.enumerated().map { i, source in
+            Song(id: "song-\(i)", title: "Song \(i)", fileFormat: .flac, filePath: "/song.flac", sourceID: source.id)
+        }
+        let connectors = try sources.enumerated().map { i, source in
+            try DuplicateDeletionFixtureConnector(sourceID: source.id, root: root.appendingPathComponent("source-\(i)"), paths: ["/song.flac"])
+        }
+        await connectors[0].setDeniedPaths(["/song.flac"])
+        await connectors[2].setDeniedPaths(["/song.flac"])
+        let library = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
+        let store = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
+        for source in sources { store.add(source) }
+        library.addSongs(songs, affectedSourceIDs: Set(sources.map(\.id)))
+        await library.waitForPendingIndex()
+        let manager = SourceManager(sourcesProvider: { sources }, connectorFactory: { source in connectors[sources.firstIndex { $0.id == source.id }!] })
+        let cleaner = DuplicateCleanupService(library: library, sourceManager: manager, sourcesStore: store)
+        try await XCTUnwrap(cleaner.cleanup(songs)).value
+        XCTAssertEqual(Set(library.songs.map(\.id)), [songs[0].id, songs[2].id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: connectors[1].fileURL("/song.flac").path))
+        XCTAssertEqual(cleaner.lastSourceFailures.count, 2)
+        await connectors[0].setDeniedPaths([])
+        try await XCTUnwrap(cleaner.retryFailedSource(sources[0].id)).value
+        XCTAssertEqual(library.songs.map(\.id), [songs[2].id])
+        XCTAssertEqual(cleaner.lastSourceFailures.map(\.id), [sources[2].id])
+        let writableAttempts = await connectors[1].attempts(for: "/song.flac")
+        let otherFailedAttempts = await connectors[2].attempts(for: "/song.flac")
+        XCTAssertEqual(writableAttempts, 1)
+        XCTAssertEqual(otherFailedAttempts, 1)
+    }
+
+    func testBatchPartialDeletionConfirmsEachAudioResult() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("BatchDeletion-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = MusicSource(id: UUID().uuidString, name: "Batch", type: .baiduPan)
+        let songs = ["first", "denied"].map { Song(id: $0, title: $0, fileFormat: .flac, filePath: "/\($0).flac", sourceID: source.id) }
+        let connector = try DuplicateDeletionFixtureConnector(sourceID: source.id, root: root, paths: songs.map(\.filePath), batchSize: 2)
+        await connector.setDeniedPaths([songs[1].filePath])
+        let manager = SourceManager(sourcesProvider: { [source] }, connectorFactory: { _ in connector })
+        let outcomes = await manager.deleteSourceFiles(for: songs, deleteSidecarsForSongIDs: [], onProgress: { _ in })
+        XCTAssertEqual(outcomes.map { $0.result.shouldRemoveLibraryRecord }, [true, false])
+        XCTAssertEqual(outcomes[0].result.audioStatus, .alreadyMissing)
+        XCTAssertEqual(outcomes[1].result.failedPaths.first?.reason, .permissionDenied)
+    }
+
+    func testLocalDeletionPermissionErrorNeverRemovesLibraryRecord() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PermissionDeletion-\(UUID().uuidString)")
+        let locked = root.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let file = locked.appendingPathComponent("song.flac")
+        try Data([1, 2, 3]).write(to: file)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        let source = MusicSource(id: UUID().uuidString, name: "Local", type: .local, basePath: root.path)
+        let song = Song(id: "locked", title: "Locked", fileFormat: .flac, filePath: "/locked/song.flac", sourceID: source.id)
+        let manager = SourceManager(sourcesProvider: { [source] })
+        let result = await manager.deleteSourceFiles(for: song, deleteSidecars: false)
+        XCTAssertFalse(result.shouldRemoveLibraryRecord)
+        XCTAssertEqual(result.failedPaths.first?.reason, .permissionDenied)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+        XCTAssertEqual(try Data(contentsOf: file), Data([1, 2, 3]))
+    }
+
+    func testDuplicateCleanupKeepsSidecarsStillUsedByFailedCopies() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("SidecarDeletion-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = MusicSource(id: UUID().uuidString, name: "Share", type: .webdav)
+        let kept = Song(id: "denied", title: "Song", fileFormat: .mp3, filePath: "/song.mp3", sourceID: source.id)
+        let removed = Song(id: "removed", title: "Song", fileFormat: .flac, filePath: "/song.flac", sourceID: source.id)
+        let connector = try DuplicateDeletionFixtureConnector(sourceID: source.id, root: root.appendingPathComponent("files"), paths: [kept.filePath, removed.filePath, "/song.lrc"])
+        await connector.setDeniedPaths([kept.filePath])
+        let library = MusicLibrary(storageDirectory: root.appendingPathComponent("library"))
+        let store = SourcesStore(storageDirectoryURL: root.appendingPathComponent("sources"))
+        store.add(source)
+        library.addSongs([kept, removed], affectedSourceIDs: [source.id])
+        await library.waitForPendingIndex()
+        let manager = SourceManager(sourcesProvider: { [source] }, connectorFactory: { _ in connector })
+        let cleaner = DuplicateCleanupService(library: library, sourceManager: manager, sourcesStore: store)
+        try await XCTUnwrap(cleaner.cleanup([kept, removed])).value
+        XCTAssertEqual(library.songs.map(\.id), [kept.id])
+        XCTAssertEqual(try Data(contentsOf: connector.fileURL("/song.lrc")), Data([1, 2, 3]))
+        let sidecarAttempts = await connector.attempts(for: "/song.lrc")
+        XCTAssertEqual(sidecarAttempts, 0)
+    }
+
+    func testDeletionMissingDetectionRejectsAmbiguousProviderMessages() {
+        XCTAssertFalse(SourceManager.isMissingFileError(SourceError.connectionFailed("Account not found or access denied")))
+        XCTAssertFalse(SourceManager.isMissingFileError(NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))))
+        XCTAssertTrue(SourceManager.isMissingFileError(SourceError.fileNotFound("/song.flac")))
+        XCTAssertTrue(SourceManager.isMissingFileError(NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))))
+        XCTAssertEqual(SourceFileDeletionFailureReason.classify(SourceError.authenticationFailed), .authenticationRequired)
+        XCTAssertEqual(SourceFileDeletionFailureReason.classify(NSError(domain: NSPOSIXErrorDomain, code: Int(EROFS))), .readOnly)
+    }
+
+    func testLocalReauthorizationPreservesRootMappingAndRejectsAnotherDisk() {
+        XCTAssertEqual(LocalBookmarkStore.reauthorizationIndices(originalPaths: ["/Volumes/First", "/Volumes/Second"], selectedPaths: ["/Volumes/Second"]), [1])
+        XCTAssertEqual(LocalBookmarkStore.reauthorizationIndices(originalPaths: ["/Volumes/First", "/Volumes/Second"], selectedPaths: ["/Volumes/Second", "/Volumes/First"]), [1, 0])
+        XCTAssertNil(LocalBookmarkStore.reauthorizationIndices(originalPaths: ["/Volumes/First"], selectedPaths: ["/Volumes/Other"]))
+        XCTAssertNil(LocalBookmarkStore.reauthorizationIndices(originalPaths: ["/Volumes/First"], selectedPaths: ["/Volumes/First", "/Volumes/First"]))
     }
 
     private struct ScanFixture {
@@ -398,4 +494,40 @@ private final class FnMusicSourceURLProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+private actor DuplicateDeletionFixtureConnector: MusicSourceConnector {
+    let sourceID: String
+    nonisolated let root: URL
+    nonisolated let preferredDeleteBatchSize: Int
+    private var deniedPaths: Set<String> = []
+    private var deleteAttempts: [String: Int] = [:]
+
+    init(sourceID: String, root: URL, paths: [String], batchSize: Int = 1) throws {
+        self.sourceID = sourceID
+        self.root = root
+        self.preferredDeleteBatchSize = batchSize
+        for path in paths {
+            let file = root.appendingPathComponent(String(path.dropFirst()))
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([1, 2, 3]).write(to: file)
+        }
+    }
+    nonisolated func fileURL(_ path: String) -> URL { root.appendingPathComponent(String(path.dropFirst())) }
+    func setDeniedPaths(_ paths: Set<String>) { deniedPaths = paths }
+    func attempts(for path: String) -> Int { deleteAttempts[path, default: 0] }
+    func connect() async throws { }
+    func disconnect() async { }
+    func listFiles(at path: String) async throws -> [RemoteFileItem] { [] }
+    func localURL(for path: String) async throws -> URL { fileURL(path) }
+    func streamData(for path: String) async throws -> AsyncThrowingStream<Data, Error> { .init { $0.finish() } }
+    func scanAudioFiles(from path: String) async throws -> AsyncThrowingStream<RemoteFileItem, Error> { .init { $0.finish() } }
+    func deleteFile(at path: String) async throws {
+        deleteAttempts[path, default: 0] += 1
+        if deniedPaths.contains(path) { throw SourceFileMutationError.permissionDenied }
+        try FileManager.default.removeItem(at: fileURL(path))
+    }
+    func deleteFiles(at paths: [String]) async throws {
+        for path in paths { try await deleteFile(at: path) }
+    }
 }

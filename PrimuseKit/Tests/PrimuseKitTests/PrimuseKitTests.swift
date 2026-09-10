@@ -230,9 +230,9 @@ import Testing
     #expect(SourceFileDeletionPolicy.shouldShowDeleteAction(for: .smb))
     #expect(!SourceFileDeletionPolicy.shouldShowDeleteAction(for: .upnp))
     #expect(!SourceFileDeletionPolicy.shouldShowDeleteAction(for: .appleMusicLibrary))
+    #expect(!SourceFileDeletionPolicy.shouldShowDeleteAction(for: .fnos))
     #expect(!SourceFileDeletionPolicy.shouldShowDeleteAction(for: nil))
-    // Duplicate cleanup never touches WebDAV files; other writable sources still delete.
-    #expect(!SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: .webdav))
+    #expect(SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: .webdav))
     #expect(SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: .smb))
     #expect(SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: .local))
     #expect(!SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: .upnp))
@@ -259,7 +259,7 @@ import Testing
         batchCount: 1,
         aggregateErrorIndicatesMissing: true
     ))
-    #expect(!SourceBatchDeletionFailurePolicy.shouldRetryIndividually(
+    #expect(SourceBatchDeletionFailurePolicy.shouldRetryIndividually(
         batchCount: 100,
         aggregateErrorIndicatesMissing: false
     ))

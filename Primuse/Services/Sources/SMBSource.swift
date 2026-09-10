@@ -499,7 +499,20 @@ actor SMBSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
 
         try await runWithRetry {
             let client = try await self.ensureConnectedShare(named: shareName)
-            try await client.removeItem(atPath: relativePath)
+            do {
+                try await client.removeItem(atPath: relativePath)
+            } catch {
+                let ns = error as NSError
+                if ns.domain == NSPOSIXErrorDomain {
+                    switch ns.code {
+                    case Int(ENOENT): throw SourceError.fileNotFound(normalizedPath)
+                    case Int(EACCES), Int(EPERM): throw SourceFileMutationError.permissionDenied
+                    case Int(EROFS): throw SourceFileMutationError.readOnly
+                    default: break
+                    }
+                }
+                throw error
+            }
         }
     }
 
@@ -774,6 +787,7 @@ actor SMBSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
             return error
         }
         if error is SourceError { return error }
+        if error is SourceFileMutationError { return error }
         if error is EmbeddedMetadataWritebackSourceError { return error }
         let ns = error as NSError
         if ns.domain == NSPOSIXErrorDomain {

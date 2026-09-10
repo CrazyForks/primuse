@@ -3718,3 +3718,16 @@
 "carplay_siri_button" = "Üst düğme";
 "carplay_siri_row" = "Liste satırı";
 "carplay_delete_module" = "Modülü Sil";
+
+"delete_source_permission_denied" = "Kaynak dosyaları silme izni reddedildi.";
+"delete_source_read_only" = "Bu kaynak salt okunur veya dosya silmeye izin vermiyor.";
+"delete_source_original_selection" = "Bu kaynağın özgün dosyalarını veya klasörlerini seçin. Başka bir konum erişimi geri getirmez.";
+"dup_delete_permission_help" = "Sunucuda veya bulutta bu hesaba dosya silme izni verip yeniden deneyin. Yeniden giriş yapmak klasör izinlerini değiştirmez.";
+"dup_delete_local_help" = "Özgün dosyaları veya klasörleri yeniden seçin. Disk salt okunursa önce yazma iznini açın.";
+"dup_delete_auth_help" = "Bu kaynağa yeniden giriş yapıp tekrar deneyin.";
+"dup_delete_unavailable_help" = "Bu kaynağın bağlantısını ve erişimini kontrol edip yeniden deneyin. Silinemeyen dosyalar korundu.";
+"dup_delete_result_title" = "Silinemeyen Dosyalar";
+"dup_delete_reauthorize" = "Dosya Erişimini Geri Yükle";
+"dup_delete_retry_source" = "Bu Kaynağı Yeniden Dene";
+"dup_delete_choose_files" = "Dosya seç";
+"dup_delete_source_warning_format" = "Kaynaklarından %d özgün dosya silinecek. Silinemeyen dosyalar korunacak.";

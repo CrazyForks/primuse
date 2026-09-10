@@ -1,5 +1,17 @@
 import Foundation
 
+enum SourceFileMutationError: Error, LocalizedError, Sendable {
+    case permissionDenied
+    case readOnly
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied: String(localized: "delete_source_permission_denied")
+        case .readOnly: String(localized: "delete_source_read_only")
+        }
+    }
+}
+
 enum SourceError: Error, LocalizedError, Sendable {
     case pathNotFound(String)
     case fileNotFound(String)

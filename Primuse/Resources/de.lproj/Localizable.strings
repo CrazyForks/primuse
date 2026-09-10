@@ -3812,3 +3812,16 @@
 "carplay_siri_button" = "Taste oben";
 "carplay_siri_row" = "Listenzeile";
 "carplay_delete_module" = "Modul löschen";
+
+"delete_source_permission_denied" = "Keine Berechtigung zum Löschen der Quelldateien.";
+"delete_source_read_only" = "Diese Quelle ist schreibgeschützt oder erlaubt kein Löschen.";
+"delete_source_original_selection" = "Wähle die ursprünglichen Dateien oder Ordner dieser Quelle. Ein anderer Ort stellt den Zugriff nicht wieder her.";
+"dup_delete_permission_help" = "Erlaube diesem Konto das Löschen auf dem Server oder Cloudspeicher und versuche es erneut. Erneutes Anmelden ändert keine Ordnerrechte.";
+"dup_delete_local_help" = "Wähle die ursprünglichen Dateien oder Ordner erneut aus. Bei einem schreibgeschützten Laufwerk muss zuerst das Schreiben erlaubt werden.";
+"dup_delete_auth_help" = "Melde dich erneut bei dieser Quelle an und versuche es erneut.";
+"dup_delete_unavailable_help" = "Prüfe Verbindung und Zugriff auf diese Quelle und versuche es erneut. Betroffene Dateien wurden behalten.";
+"dup_delete_result_title" = "Dateien nicht gelöscht";
+"dup_delete_reauthorize" = "Dateizugriff wiederherstellen";
+"dup_delete_retry_source" = "Diese Quelle erneut versuchen";
+"dup_delete_choose_files" = "Dateien auswählen";
+"dup_delete_source_warning_format" = "%d Originaldateien werden aus ihren Quellen gelöscht. Fehlgeschlagene Dateien bleiben erhalten.";

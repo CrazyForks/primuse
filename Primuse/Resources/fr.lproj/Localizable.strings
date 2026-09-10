@@ -3812,3 +3812,16 @@
 "carplay_siri_button" = "Bouton en haut";
 "carplay_siri_row" = "Ligne de liste";
 "carplay_delete_module" = "Supprimer le module";
+
+"delete_source_permission_denied" = "Autorisation de supprimer les fichiers source refusée.";
+"delete_source_read_only" = "Cette source est en lecture seule ou interdit la suppression.";
+"delete_source_original_selection" = "Sélectionnez les fichiers ou dossiers d’origine de cette source. Un autre emplacement ne rétablit pas l’accès.";
+"dup_delete_permission_help" = "Autorisez ce compte à supprimer des fichiers sur le serveur ou le stockage cloud, puis réessayez. Se reconnecter ne modifie pas les droits des dossiers.";
+"dup_delete_local_help" = "Sélectionnez à nouveau les fichiers ou dossiers d’origine. Si le disque est en lecture seule, autorisez d’abord l’écriture.";
+"dup_delete_auth_help" = "Reconnectez-vous à cette source, puis réessayez.";
+"dup_delete_unavailable_help" = "Vérifiez la connexion et l’accès à cette source, puis réessayez. Les fichiers concernés ont été conservés.";
+"dup_delete_result_title" = "Fichiers non supprimés";
+"dup_delete_reauthorize" = "Rétablir l’accès aux fichiers";
+"dup_delete_retry_source" = "Réessayer cette source";
+"dup_delete_choose_files" = "Choisir des fichiers";
+"dup_delete_source_warning_format" = "%d fichiers d’origine seront supprimés de leurs sources. Ceux dont la suppression échoue seront conservés.";

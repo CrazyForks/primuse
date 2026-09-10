@@ -6,6 +6,7 @@ import PrimuseKit
 struct CloudDriveConnectionView: View {
     let source: MusicSource
     @Binding var selectedDirectories: [String]
+    var requestReauthorization = false
     @Environment(\.dismiss) private var dismiss
     @Environment(SourceManager.self) private var sourceManager
     @Environment(SourcesStore.self) private var sourcesStore
@@ -607,6 +608,20 @@ struct CloudDriveConnectionView: View {
 
         Task {
             let tokenManager = CloudTokenManager(sourceID: source.id)
+
+            if requestReauthorization {
+                do {
+                    if source.type == .drime {
+                        step = .needsSetup
+                    } else {
+                        step = try await resolvedCredentials(using: tokenManager) == nil ? .needsSetup : .readyToAuth
+                    }
+                } catch {
+                    errorMessage = error.localizedDescription
+                    step = .failed
+                }
+                return
+            }
 
             if source.type == .drime {
                 switch await tokenManager.lookupTokens() {

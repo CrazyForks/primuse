@@ -3590,3 +3590,16 @@
 "carplay_siri_button" = "Top button";
 "carplay_siri_row" = "List row";
 "carplay_delete_module" = "Delete Module";
+
+"delete_source_permission_denied" = "Permission to delete source files was denied.";
+"delete_source_read_only" = "This source is read-only or does not allow file deletion.";
+"delete_source_original_selection" = "Select the original files or folders for this source. Selecting another location will not restore access.";
+"dup_delete_permission_help" = "Allow this account to delete files on the server or cloud drive, then retry. Signing in again does not change folder permissions.";
+"dup_delete_local_help" = "Select the original files or folders to restore access. If the disk is read-only, enable writing on the disk before retrying.";
+"dup_delete_auth_help" = "Sign in to this source again, then retry.";
+"dup_delete_unavailable_help" = "Check this source’s connection and access, then retry. The failed files were kept.";
+"dup_delete_result_title" = "Files Not Deleted";
+"dup_delete_reauthorize" = "Restore File Access";
+"dup_delete_retry_source" = "Retry This Source";
+"dup_delete_choose_files" = "Choose files";
+"dup_delete_source_warning_format" = "%d original files will be deleted from their sources. Failed files will be kept.";

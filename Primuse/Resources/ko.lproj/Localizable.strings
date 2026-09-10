@@ -3812,3 +3812,16 @@
 "carplay_siri_button" = "상단 버튼";
 "carplay_siri_row" = "목록 행";
 "carplay_delete_module" = "모듈 삭제";
+
+"delete_source_permission_denied" = "원본 파일 삭제 권한이 거부되었습니다.";
+"delete_source_read_only" = "이 소스는 읽기 전용이거나 파일 삭제를 허용하지 않습니다.";
+"delete_source_original_selection" = "이 소스의 원래 파일이나 폴더를 선택하세요. 다른 위치를 선택하면 접근 권한을 복원할 수 없습니다.";
+"dup_delete_permission_help" = "서버나 클라우드에서 이 계정에 파일 삭제 권한을 부여한 뒤 다시 시도하세요. 다시 로그인해도 폴더 권한은 변경되지 않습니다.";
+"dup_delete_local_help" = "원래 파일이나 폴더를 다시 선택하세요. 디스크가 읽기 전용이면 쓰기를 허용한 뒤 다시 시도하세요.";
+"dup_delete_auth_help" = "이 소스에 다시 로그인한 뒤 다시 시도하세요.";
+"dup_delete_unavailable_help" = "이 소스의 연결 및 접근 상태를 확인한 뒤 다시 시도하세요. 실패한 파일은 유지되었습니다.";
+"dup_delete_result_title" = "삭제되지 않은 파일";
+"dup_delete_reauthorize" = "파일 접근 권한 복원";
+"dup_delete_retry_source" = "이 소스 다시 시도";
+"dup_delete_choose_files" = "파일 선택";
+"dup_delete_source_warning_format" = "소스에서 원본 파일 %d개를 삭제합니다. 삭제에 실패한 파일은 유지됩니다.";

@@ -3789,3 +3789,16 @@
 "carplay_siri_button" = "頂部按鈕";
 "carplay_siri_row" = "列表橫列";
 "carplay_delete_module" = "刪除模組";
+
+"delete_source_permission_denied" = "沒有刪除來源檔案的權限。";
+"delete_source_read_only" = "此來源為唯讀或不允許刪除檔案。";
+"delete_source_original_selection" = "請選擇此來源原來的檔案或資料夾，選擇其他位置無法恢復授權。";
+"dup_delete_permission_help" = "請在伺服器或雲端硬碟上允許此帳號刪除檔案，再重試。重新登入不會改變資料夾權限。";
+"dup_delete_local_help" = "請重新選擇原檔案或資料夾以恢復授權。若磁碟為唯讀，請先開放寫入權限再重試。";
+"dup_delete_auth_help" = "請重新登入此來源，再重試。";
+"dup_delete_unavailable_help" = "請檢查此來源的連線及存取狀態後重試，失敗檔案已保留。";
+"dup_delete_result_title" = "部分檔案未刪除";
+"dup_delete_reauthorize" = "重新授權檔案存取";
+"dup_delete_retry_source" = "重試此來源";
+"dup_delete_choose_files" = "選擇檔案";
+"dup_delete_source_warning_format" = "將從來源刪除 %d 個原始檔案，刪除失敗的檔案會保留。";

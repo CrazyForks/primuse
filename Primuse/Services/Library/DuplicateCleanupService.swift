@@ -15,6 +15,13 @@ final class DuplicateCleanupService {
         var isFinished: Bool { done >= total }
     }
 
+    struct SourceFailure: Identifiable {
+        let source: MusicSource
+        var songs: [Song]
+        var reasons: Set<SourceFileDeletionFailureReason>
+        var id: String { source.id }
+    }
+
     /// 当前进度。nil 表示空闲。
     private(set) var progress: Progress?
     /// 最近一次完成的总数 (= 真正从库里移除的歌曲数), view 用于「已清理 N 首」
@@ -24,6 +31,7 @@ final class DuplicateCleanupService {
     /// 让 view 能向用户反馈「N 首删除失败」, 同时这些歌不会被 tombstone,
     /// 下次重扫仍可见。
     private(set) var lastFailedTitles: [String] = []
+    private(set) var lastSourceFailures: [SourceFailure] = []
     /// 每次资料库批量删除和结果字段都提交后递增。界面监听它刷新扫描，不能
     /// 监听源文件进度的 100%，因为那一刻资料库事务尚未落地。
     private(set) var completionRevision: UInt = 0
@@ -40,6 +48,12 @@ final class DuplicateCleanupService {
         self.sourcesStore = sourcesStore
     }
 
+    @discardableResult
+    func retryFailedSource(_ sourceID: String) -> Task<Void, Never>? {
+        let failedIDs = Set(lastSourceFailures.filter { $0.id == sourceID }.flatMap { $0.songs.map(\.id) })
+        return cleanup(library.songs.filter { failedIDs.contains($0.id) && $0.sourceID == sourceID })
+    }
+
     /// 串行删除 songs (按源端逐首)。已有任务进行中时忽略再次触发。
     /// 返回的 Task 不需要 await — 调用方只关心 progress 字段。
     @discardableResult
@@ -52,19 +66,19 @@ final class DuplicateCleanupService {
         let deletableSourceIDs = Set(sourcesStore.sources.lazy
             .filter { $0.type.supportsFileDeletion }
             .map(\.id))
-        // WebDAV copies leave the share untouched: the redundant rows are
-        // removed from the library (and tombstoned against rescans) without
-        // sending a DELETE to the server.
-        let sourceFileDeletionSourceIDs = Set(sourcesStore.sources.lazy
-            .filter { SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: $0.type) }
-            .map(\.id))
         let songs = requestedSongs.filter { deletableSourceIDs.contains($0.sourceID) }
         if songs.count != requestedSongs.count {
             plog("⚠️ Duplicate cleanup ignored \(requestedSongs.count - songs.count) read-only song(s)")
         }
         guard !songs.isEmpty else { return nil }
-        let sourceDeletionSongs = songs.filter { sourceFileDeletionSourceIDs.contains($0.sourceID) }
-        let libraryOnlySongs = songs.filter { !sourceFileDeletionSourceIDs.contains($0.sourceID) }
+        let sourceByID = Dictionary(sourcesStore.sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let requestedIDs = Set(songs.map(\.id))
+        let currentIDs = Set(library.songs.map(\.id))
+        let remainingFailures = lastSourceFailures.compactMap { failure -> SourceFailure? in
+            var retained = failure
+            retained.songs.removeAll { requestedIDs.contains($0.id) || !currentIDs.contains($0.id) }
+            return retained.songs.isEmpty ? nil : retained
+        }
         progress = Progress(done: 0, total: songs.count)
 
         let task = Task { @MainActor in
@@ -80,33 +94,18 @@ final class DuplicateCleanupService {
                 self.activeTask = nil
             }
 
-            // Sidecar sharing used to scan the complete retained library once
-            // for every song being removed. Plan all decisions off-main in one
-            // pass before touching the source.
-            let librarySnapshot = self.library.songs
-            let deletingIDs = Set(songs.map(\.id))
-            let sidecarDeletionSongIDs = await Task.detached(priority: .utility) {
-                let retainedSongs = librarySnapshot.filter { !deletingIDs.contains($0.id) }
-                return SourceManager.sidecarDeletionSongIDs(
-                    deleting: sourceDeletionSongs,
-                    retaining: retainedSongs
-                )
-            }.value
-
             // 只有源端文件确实被删 (或本就不存在) 的歌才能从库里移除并写
             // tombstone; 删除失败、文件仍在 NAS/云盘上的歌必须保留, 否则它们
             // 会被 tombstone 永久挡掉重扫, 而用户没有恢复入口。
-            // WebDAV 例外: 用户明确要求只清理资料库里的重复条目、不动服务器
-            // 文件, 因此这些歌直接移除并写 tombstone, 重扫不会再次加回。
-            var removableSongs: [Song] = libraryOnlySongs
+            var removableSongs: [Song] = []
             var failedSongs: [Song] = []
+            var failuresBySource = Dictionary(remainingFailures.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             var failureCount = 0
             var lastProgressPublishAt = Date.distantPast
             let outcomes = await self.sourceManager.deleteSourceFiles(
-                for: sourceDeletionSongs,
-                deleteSidecarsForSongIDs: sidecarDeletionSongIDs
-            ) { sourceDone in
-                let done = sourceDone + libraryOnlySongs.count
+                for: songs,
+                deleteSidecarsForSongIDs: []
+            ) { done in
                 // A local folder can delete hundreds of tiny files per second.
                 // Publishing every counter value made the entire duplicate
                 // Form recompute at that rate, so cap UI updates while keeping
@@ -131,6 +130,12 @@ final class DuplicateCleanupService {
                 if !outcome.result.shouldRemoveLibraryRecord {
                     failureCount += max(outcome.result.failedPaths.count, 1)
                     failedSongs.append(outcome.song)
+                    if let source = sourceByID[outcome.song.sourceID] {
+                        var failure = failuresBySource[source.id] ?? SourceFailure(source: source, songs: [], reasons: [])
+                        failure.songs.append(outcome.song)
+                        failure.reasons.formUnion(outcome.result.failedPaths.map(\.reason))
+                        failuresBySource[source.id] = failure
+                    }
                 } else {
                     removableSongs.append(outcome.song)
                 }
@@ -140,6 +145,14 @@ final class DuplicateCleanupService {
                 plog("⚠️ Duplicate cleanup source deletion failures: \(failureCount) (\(failedSongs.count) songs retained in library)")
             }
 
+            // A selected copy may have survived a permission failure. Plan
+            // sidecars only after the actual audio outcomes are known.
+            let removedIDs = Set(removableSongs.map(\.id))
+            await self.sourceManager.deleteSidecars(
+                for: removableSongs,
+                retaining: self.library.songs.filter { !removedIDs.contains($0.id) }
+            )
+
             // `primuseSongsRemoved` now performs cache cleanup once for this
             // whole batch. The previous path deleted caches per song here and
             // then deleted the same caches again from that notification.
@@ -148,10 +161,11 @@ final class DuplicateCleanupService {
                 self.sourcesStore.updateLocal(sourceID) { $0.songCount = remaining }
             }
             self.lastCompletedCount = removableSongs.count
-            self.lastFailedTitles = failedSongs.map(\.title)
+            self.lastSourceFailures = failuresBySource.values.sorted { $0.source.name < $1.source.name }
+            self.lastFailedTitles = self.lastSourceFailures.flatMap { $0.songs.map(\.title) }
             self.completionRevision &+= 1
 
-            if outcomes.count < sourceDeletionSongs.count {
+            if outcomes.count < songs.count {
                 self.progress = nil
             } else if self.progress?.done != songs.count {
                 self.progress = Progress(done: songs.count, total: songs.count)

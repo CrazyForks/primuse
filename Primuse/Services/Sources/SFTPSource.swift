@@ -493,7 +493,15 @@ actor SFTPSource: MusicSourceConnector, EmbeddedMetadataWritebackAdapter {
             throw SourceError.connectionFailed("Not connected")
         }
 
-        try await sftp.remove(at: resolvedRemotePath(for: path))
+        do {
+            try await sftp.remove(at: resolvedRemotePath(for: path))
+        } catch let status as SFTPMessage.Status {
+            switch status.errorCode {
+            case .noSuchFile: throw SourceError.fileNotFound(path)
+            case .permissionDenied: throw SourceFileMutationError.permissionDenied
+            default: throw status
+            }
+        }
     }
 
     /// SFTP READ via Citadel's `SFTPFile.read(from:length:)`。SFTP 协议级支持

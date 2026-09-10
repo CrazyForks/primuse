@@ -1,5 +1,8 @@
 import SwiftUI
 import PrimuseKit
+#if os(macOS)
+import AppKit
+#endif
 
 /// 重复歌曲管理 — 找 library 里 title+artist+duration 一致的多版本歌曲,
 /// 让用户保留一个 (推荐: 最高音质), 其他从 library 移除。
@@ -21,6 +24,9 @@ struct DuplicateSongsView: View {
     @State private var lastActionMessage: String?
     @State private var showAllGroups = false
     @State private var scanGeneration = 0
+    @State private var showDeletionFailures = false
+    @State private var pendingDeletion: [Song] = []
+    @State private var showSelectionConfirm = false
     #if os(macOS)
     @State private var retentionStrategy: MacDuplicateRetentionStrategy = .highestBitrate
     @State private var macKeptSongIDsByGroup: [String: Set<String>] = [:]
@@ -54,15 +60,35 @@ struct DuplicateSongsView: View {
 
     @ViewBuilder
     var body: some View {
+        Group {
         #if os(macOS)
         macBody
         #else
         iosBody
         #endif
+        }
+        .sheet(isPresented: $showDeletionFailures) {
+            DuplicateDeletionFailuresView()
+        }
+        .alert("dup_clean_all_confirm", isPresented: $showSelectionConfirm) {
+            Button("delete", role: .destructive) {
+                startCleanup(pendingDeletion)
+                pendingDeletion = []
+            }
+            Button("cancel", role: .cancel) { pendingDeletion = [] }
+        } message: {
+            Text(String(format: String(localized: "dup_delete_source_warning_format"), pendingDeletion.count))
+        }
     }
 
     private var iosBody: some View {
         Form {
+            if !cleaner.lastSourceFailures.isEmpty {
+                Section {
+                    Button("dup_delete_result_title") { showDeletionFailures = true }
+                        .disabled(cleaner.progress != nil)
+                }
+            }
             // 内嵌进度条 (而不是 overlay), 这样切到其他菜单再回来仍能看到,
             // 因为状态在 DuplicateCleanupService 里, 不绑 view 生命周期。
             if let p = cleaner.progress {
@@ -141,6 +167,7 @@ struct DuplicateSongsView: View {
             Button("cancel", role: .cancel) {}
         } message: {
             Text(String(format: String(localized: "dup_clean_all_message_format"), totalRedundantCount))
+            Text(String(format: String(localized: "dup_delete_source_warning_format"), totalRedundantCount))
         }
         .overlay(alignment: .bottom) {
             if let msg = lastActionMessage {
@@ -180,6 +207,7 @@ struct DuplicateSongsView: View {
                     totalRedundantCount,
                     recoverableSizeText
                 ))
+                Text(String(format: String(localized: "dup_delete_source_warning_format"), totalRedundantCount))
             }
             .overlay(alignment: .bottom) {
                 if let msg = lastActionMessage {
@@ -203,6 +231,12 @@ struct DuplicateSongsView: View {
     private var duplicateCleanupArtboard: some View {
         VStack(spacing: 0) {
             duplicateMacHeader
+
+            if !cleaner.lastSourceFailures.isEmpty {
+                Button("dup_delete_result_title") { showDeletionFailures = true }
+                    .disabled(cleaner.progress != nil)
+                    .padding(.top, 8)
+            }
 
             duplicateSummaryCard
                 .padding(.horizontal, 20)
@@ -878,7 +912,8 @@ struct DuplicateSongsView: View {
             deletableSourceIDs: deletableSourceIDsSnapshot
         )
         guard !toRemove.isEmpty else { return }
-        startCleanup(toRemove)
+        pendingDeletion = toRemove
+        showSelectionConfirm = true
     }
 
     private func deleteSingle(song: Song, in group: DuplicateGroup) {
@@ -887,7 +922,8 @@ struct DuplicateSongsView: View {
             deletableSourceIDs: deletableSourceIDsSnapshot
         ).map(\.id))
         guard removableSongIDs.contains(song.id) else { return }
-        startCleanup([song])
+        pendingDeletion = [song]
+        showSelectionConfirm = true
     }
 
     private func cleanAll() {
@@ -915,7 +951,7 @@ struct DuplicateSongsView: View {
     private func showCleanupResult() {
         let failedCount = cleaner.lastFailedTitles.count
         if failedCount > 0 {
-            flashAction(String(format: String(localized: "dup_clean_failed_format"), failedCount))
+            showDeletionFailures = true
         } else if cleaner.lastCompletedCount > 0 {
             flashAction(String(
                 format: String(localized: "dup_clean_all_done_format"),
@@ -956,7 +992,6 @@ struct DuplicateSongsView: View {
 
     private var recoverableBytes: Int64 {
         let writableSourceIDs = deletableSourceIDsSnapshot
-        // WebDAV rows only leave the library; their bytes stay on the share.
         let fileDeletingSourceIDs = Set(sourcesStore.sources.lazy
             .filter { SourceFileDeletionPolicy.duplicateCleanupRemovesSourceFile(for: $0.type) }
             .map(\.id))
@@ -1161,6 +1196,159 @@ struct DuplicateSongsView: View {
         case .flac, .alac, .wav, .aiff, .aif, .ape, .wv: return .purple
         case .dsf, .dff: return .pink
         default: return .blue
+        }
+    }
+}
+
+private struct DuplicateDeletionFailuresView: View {
+    @Environment(DuplicateCleanupService.self) private var cleaner
+    @Environment(SourcesStore.self) private var sourcesStore
+    @Environment(SourceManager.self) private var sourceManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var recoveringSource: MusicSource?
+    @State private var localSource: MusicSource?
+    @State private var recoveryError: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text(String(format: String(localized: "dup_clean_failed_format"), cleaner.lastFailedTitles.count))
+                    if cleaner.lastCompletedCount > 0 {
+                        Text(String(format: String(localized: "dup_clean_all_done_format"), cleaner.lastCompletedCount))
+                    }
+                }
+                ForEach(cleaner.lastSourceFailures) { failure in
+                    Section(failure.source.name) {
+                        Text(String(format: String(localized: "dup_clean_failed_format"), failure.songs.count))
+                        ForEach(failure.reasons.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { reason in
+                            Text(helpText(reason, source: failure.source))
+                                .foregroundStyle(.secondary)
+                        }
+                        if failure.source.type == .local {
+                            #if os(iOS) || os(macOS)
+                            if !LocalImportService.isManagedSource(failure.source), !failure.reasons.contains(.readOnly) {
+                                Button("dup_delete_reauthorize") { localSource = latest(failure.source) }
+                            }
+                            #endif
+                        } else {
+                            Button(failure.source.type.isCloudDrive ? LocalizedStringKey("cloud_retry_auth") : LocalizedStringKey("edit_source")) {
+                                recoveringSource = latest(failure.source)
+                            }
+                        }
+                        Button("dup_delete_retry_source", role: .destructive) {
+                            cleaner.retryFailedSource(failure.id)
+                            dismiss()
+                        }
+                        .disabled(cleaner.progress != nil)
+                    }
+                }
+            }
+            .navigationTitle("dup_delete_result_title")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("close") { dismiss() }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 520, minHeight: 360)
+        #endif
+        .sheet(item: $recoveringSource) { source in
+            if source.type.isCloudDrive {
+                CloudDriveConnectionView(source: source, selectedDirectories: .constant(source.scannedDirectories), requestReauthorization: true)
+            } else {
+                AddSourceView(sourceType: source.type, editingSource: source) { updated in
+                    do {
+                        guard try sourcesStore.updateDurably(updated.id, mutate: { $0 = updated }) else { return }
+                        Task { await sourceManager.refreshConnector(for: updated.id) }
+                    } catch {
+                        recoveryError = error.localizedDescription
+                    }
+                }
+            }
+        }
+        #if os(iOS)
+        .sheet(item: $localSource) { source in
+            VStack {
+                Text("delete_source_original_selection").padding()
+                if let recoveryError {
+                    Text(recoveryError).foregroundStyle(.red).padding(.horizontal)
+                }
+                HStack {
+                    Button("choose_folder") { localPickerMode = .referenceFolder }
+                    Button("dup_delete_choose_files") { localPickerMode = .referenceFiles }
+                    Button("cancel", role: .cancel) { localSource = nil }
+                }
+                .padding()
+            }
+            .sheet(item: $localPickerMode) { mode in
+                IOSLocalDocumentPicker(mode: mode.value) { result in
+                    localPickerMode = nil
+                    switch result {
+                    case .success(let urls): restoreLocalAccess(source, urls: urls)
+                    case .failure(let error): recoveryError = error.localizedDescription
+                    }
+                }
+            }
+        }
+        #elseif os(macOS)
+        .onChange(of: localSource) { _, source in
+            guard let source else { return }
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = true
+            panel.allowsMultipleSelection = true
+            panel.message = String(localized: "delete_source_original_selection")
+            panel.begin { response in
+                guard response == .OK else { localSource = nil; return }
+                restoreLocalAccess(source, urls: panel.urls)
+            }
+        }
+        #endif
+        .alert("dup_delete_result_title", isPresented: Binding(get: { recoveryError != nil && localSource == nil && recoveringSource == nil }, set: { if !$0 { recoveryError = nil } })) {
+            Button("close", role: .cancel) { recoveryError = nil }
+        } message: {
+            Text(recoveryError ?? "")
+        }
+    }
+
+    #if os(iOS)
+    private enum LocalPicker: String, Identifiable {
+        case referenceFolder, referenceFiles
+        var id: String { rawValue }
+        var value: LocalImportPickerMode { self == .referenceFolder ? .referenceFolder : .referenceFiles }
+    }
+    @State private var localPickerMode: LocalPicker?
+    #endif
+
+    private func latest(_ source: MusicSource) -> MusicSource {
+        sourcesStore.source(id: source.id) ?? source
+    }
+
+    #if os(iOS) || os(macOS)
+    private func restoreLocalAccess(_ source: MusicSource, urls: [URL]) {
+        do {
+            try LocalBookmarkStore.reauthorize(source: latest(source), urls: urls)
+            Task { await sourceManager.refreshConnector(for: source.id) }
+            localSource = nil
+        } catch {
+            #if os(macOS)
+            localSource = nil
+            #endif
+            recoveryError = error.localizedDescription
+        }
+    }
+    #endif
+
+    private func helpText(_ reason: SourceFileDeletionFailureReason, source: MusicSource) -> String {
+        switch reason {
+        case .readOnly: String(localized: "delete_source_read_only")
+        case .permissionDenied:
+            source.type == .local ? String(localized: "dup_delete_local_help") : String(localized: "dup_delete_permission_help")
+        case .authenticationRequired:
+            source.type == .local ? String(localized: "dup_delete_local_help") : String(localized: "dup_delete_auth_help")
+        case .unavailable, .other: String(localized: "dup_delete_unavailable_help")
         }
     }
 }

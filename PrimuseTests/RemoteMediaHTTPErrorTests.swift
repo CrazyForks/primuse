@@ -187,6 +187,42 @@ final class RemoteMediaHTTPErrorTests: XCTestCase {
         ))
     }
 
+    @MainActor
+    func testWebDAVDeleteSendsRequestAndRequiresConfirmedCompletionForHTTPAndHTTPS() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [DeletionStatusURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        for useSSL in [false, true] {
+            let sourceID = UUID().uuidString
+            let source = WebDAVSource(sourceID: sourceID, host: "127.0.0.1", useSsl: useSSL,
+                                      username: "", password: "", mutationSession: session)
+            for status in [200, 204, 401, 403, 404, 405, 410, 202, 207] {
+                let path = "/\(sourceID)/\(status).flac"
+                do {
+                    try await source.deleteFile(at: path)
+                    XCTAssertTrue([200, 204].contains(status), "HTTP \(status) must not confirm deletion")
+                } catch {
+                    switch status {
+                    case 401: XCTAssertEqual(SourceFileDeletionFailureReason.classify(error), .authenticationRequired)
+                    case 403: XCTAssertEqual(SourceFileDeletionFailureReason.classify(error), .permissionDenied)
+                    case 405: XCTAssertEqual(SourceFileDeletionFailureReason.classify(error), .readOnly)
+                    case 404, 410: XCTAssertTrue(SourceManager.isMissingFileError(error))
+                    case 202, 207: XCTAssertFalse(SourceManager.isMissingFileError(error))
+                    default: XCTFail("Unexpected DELETE failure: \(error)")
+                    }
+                }
+                let requests = DeletionStatusURLProtocol.requests(path: path)
+                XCTAssertEqual(requests.count, 1)
+                XCTAssertEqual(requests.first?.httpMethod, "DELETE")
+                XCTAssertNil(requests.first?.value(forHTTPHeaderField: "Authorization"))
+            }
+            await source.disconnect()
+            let cache = FileManager.default.temporaryDirectory.appendingPathComponent("primuse_webdav_cache").appendingPathComponent(sourceID)
+            try? FileManager.default.removeItem(at: cache)
+        }
+    }
+
     private func makeWebDAV() -> WebDAVSource {
         let sourceID = "media-http-errors-\(UUID().uuidString)"
         let source = WebDAVSource(
@@ -205,4 +241,21 @@ final class RemoteMediaHTTPErrorTests: XCTestCase {
         }
         return source
     }
+}
+
+private final class DeletionStatusURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [String: [URLRequest]] = [:]
+    static func requests(path: String) -> [URLRequest] { lock.withLock { recorded[path] ?? [] } }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url else { return }
+        Self.lock.withLock { Self.recorded[url.path, default: []].append(request) }
+        let status = Int(url.deletingPathExtension().lastPathComponent) ?? 500
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Length": "0"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
 }

@@ -14,9 +14,13 @@ import AppKit
 enum LocalBookmarkStore {
     private enum StoreError: LocalizedError {
         case permissionDenied
+        case originalSelectionRequired
 
         var errorDescription: String? {
-            String(localized: "local_reference_permission_missing")
+            switch self {
+            case .permissionDenied: String(localized: "local_reference_permission_missing")
+            case .originalSelectionRequired: String(localized: "delete_source_original_selection")
+            }
         }
     }
 
@@ -47,6 +51,51 @@ enum LocalBookmarkStore {
     static func save(sourceID: String, url: URL) throws {
         let data = try makeBookmark(for: url)
         UserDefaults.standard.set(data, forKey: legacyKey(for: sourceID))
+    }
+
+    /// Regrant access without changing a source's identity or the virtual paths
+    /// already stored on its songs. Selecting a different disk must not redirect
+    /// a pending delete onto similarly named files there.
+    static func reauthorize(source: MusicSource, urls: [URL]) throws {
+        if let encoded = UserDefaults.standard.data(forKey: referencesKey(for: source.id)) {
+            var stored = try JSONDecoder().decode([StoredReference].self, from: encoded)
+            let originalPaths = stored.map { reference in
+                resolve(reference.bookmarkData)?.url.standardizedFileURL.path
+                    ?? (stored.count == 1 ? source.basePath : nil) ?? ""
+            }
+            guard let indices = reauthorizationIndices(
+                originalPaths: originalPaths,
+                selectedPaths: urls.map { $0.standardizedFileURL.path }
+            ) else { throw StoreError.originalSelectionRequired }
+            for (url, index) in zip(urls, indices) {
+                let original = stored[index]
+                stored[index] = StoredReference(
+                    virtualPathComponent: original.virtualPathComponent,
+                    bookmarkData: try makeBookmark(for: url),
+                    isDirectory: original.isDirectory
+                )
+            }
+            UserDefaults.standard.set(try JSONEncoder().encode(stored), forKey: referencesKey(for: source.id))
+        } else {
+            let originalPath = UserDefaults.standard.data(forKey: legacyKey(for: source.id))
+                .flatMap { resolve($0)?.url.standardizedFileURL.path } ?? source.basePath ?? ""
+            guard urls.count == 1,
+                  reauthorizationIndices(originalPaths: [originalPath], selectedPaths: urls.map { $0.standardizedFileURL.path }) != nil
+            else { throw StoreError.originalSelectionRequired }
+            try save(sourceID: source.id, url: urls[0])
+        }
+    }
+
+    static func reauthorizationIndices(originalPaths: [String], selectedPaths: [String]) -> [Int]? {
+        guard !selectedPaths.isEmpty,
+              Set(selectedPaths).count == selectedPaths.count,
+              Set(originalPaths).count == originalPaths.count else { return nil }
+        var indices: [Int] = []
+        for path in selectedPaths {
+            guard !path.isEmpty, let index = originalPaths.firstIndex(of: path) else { return nil }
+            indices.append(index)
+        }
+        return indices
     }
 
     /// Persists one logical local source backed by one or more picker URLs.

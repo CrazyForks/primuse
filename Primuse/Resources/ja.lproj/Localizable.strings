@@ -3813,3 +3813,16 @@
 "carplay_siri_button" = "上部のボタン";
 "carplay_siri_row" = "リスト行";
 "carplay_delete_module" = "モジュールを削除";
+
+"delete_source_permission_denied" = "元ファイルを削除する権限がありません。";
+"delete_source_read_only" = "このソースは読み取り専用か、ファイルの削除が許可されていません。";
+"delete_source_original_selection" = "このソースの元のファイルまたはフォルダを選択してください。別の場所ではアクセスを復元できません。";
+"dup_delete_permission_help" = "サーバーまたはクラウドでこのアカウントに削除権限を付与してから再試行してください。再ログインしてもフォルダの権限は変わりません。";
+"dup_delete_local_help" = "元のファイルまたはフォルダを再選択してください。ディスクが読み取り専用の場合は、書き込みを許可してから再試行してください。";
+"dup_delete_auth_help" = "このソースに再ログインしてから再試行してください。";
+"dup_delete_unavailable_help" = "このソースの接続とアクセスを確認して再試行してください。失敗したファイルは保持されています。";
+"dup_delete_result_title" = "削除されなかったファイル";
+"dup_delete_reauthorize" = "ファイルアクセスを復元";
+"dup_delete_retry_source" = "このソースを再試行";
+"dup_delete_choose_files" = "ファイルを選択";
+"dup_delete_source_warning_format" = "ソースから%d個の元ファイルを削除します。削除できないファイルは保持されます。";

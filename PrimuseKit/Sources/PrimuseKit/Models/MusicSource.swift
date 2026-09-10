@@ -213,7 +213,7 @@ public enum MusicSourceType: String, Codable, Sendable, CaseIterable {
     /// be counted as removable duplicates.
     public var supportsFileDeletion: Bool {
         switch self {
-        case .upnp, .subsonic, .navidrome, .airsonic, .gonic, .fnMusic, .daoliyu, .songloft,
+        case .upnp, .subsonic, .navidrome, .airsonic, .gonic, .fnos, .fnMusic, .daoliyu, .songloft,
              .appleMusic, .appleMusicLibrary:
             return false
         default:
@@ -554,11 +554,8 @@ public enum SourceFileDeletionPolicy {
         sourceType?.supportsFileDeletion == true
     }
 
-    /// Duplicate cleanup keeps the files of a WebDAV share untouched and only
-    /// removes the redundant library copies; every other writable source still
-    /// deletes the redundant file itself.
     public static func duplicateCleanupRemovesSourceFile(for sourceType: MusicSourceType) -> Bool {
-        sourceType.supportsFileDeletion && sourceType != .webdav
+        sourceType.supportsFileDeletion
     }
 
     public static func shouldRemoveLibraryRecord(
@@ -574,15 +571,14 @@ public enum SourceFileDeletionPolicy {
     }
 }
 
-/// A missing-file error from a multi-file provider request describes at least
-/// one path, not necessarily every path in the chunk. Retrying individually is
-/// required before any library row can be classified as already missing.
+/// A failed batch can contain both successful and failed deletions. Confirm
+/// each item before updating its library row, regardless of the aggregate error.
 public enum SourceBatchDeletionFailurePolicy {
     public static func shouldRetryIndividually(
         batchCount: Int,
         aggregateErrorIndicatesMissing: Bool
     ) -> Bool {
-        batchCount > 1 && aggregateErrorIndicatesMissing
+        batchCount > 1
     }
 }
 

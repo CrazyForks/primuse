@@ -36,6 +36,7 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
     private let username: String
     private let password: String
     private let alternateTLSValidationHostname: String?
+    private let mutationSession: URLSession?
     private var provider: WebDAVFileProvider?
     private var usesTrustedURLSession = false
     private var connectTask: Task<Void, Error>?
@@ -59,9 +60,11 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
         basePath: String? = nil,
         username: String,
         password: String,
-        alternateTLSValidationHostname: String? = nil
+        alternateTLSValidationHostname: String? = nil,
+        mutationSession: URLSession? = nil
     ) {
         self.sourceID = sourceID
+        self.mutationSession = mutationSession
         self.host = host
         self.port = port
         self.useSsl = useSsl
@@ -429,39 +432,22 @@ actor WebDAVSource: MusicSourceConnector, OpenListSTRMResolvingConnector,
     }
 
     func deleteFile(at path: String) async throws {
-        if usesTrustedURLSession {
-            let request = try makeWebDAVRequest(
-                url: fileURL(for: path),
-                method: "DELETE"
-            )
-            let (_, response) = try await TrustedHTTPTransport.data(
-                for: request,
-                session: try requireTransportSession(rangeSession)
-            )
-            guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode) else {
-                if let status = (response as? HTTPURLResponse)?.statusCode,
-                   status == 401 || status == 403 {
-                    throw SourceError.authenticationFailed
-                }
-                throw SourceError.connectionFailed(
-                    "WebDAV delete failed: HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)"
-                )
-            }
-            invalidateLocalCache(for: path)
-            return
+        let session = try requireTransportSession(rangeSession)
+        let request = try makeWebDAVRequest(url: fileURL(for: path), method: "DELETE")
+        // Use one response contract for HTTP and HTTPS. The provider callback
+        // otherwise treats accepted/incomplete 202 and 207 replies as success.
+        let (_, response) = try await TrustedHTTPTransport.data(for: request, session: mutationSession ?? session)
+        guard let http = response as? HTTPURLResponse else {
+            throw SourceError.connectionFailed("Invalid WebDAV delete response")
         }
-        guard let provider else { throw SourceError.connectionFailed("Not connected") }
-
-        let providerPath = providerRelativePath(path)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-            provider.removeItem(path: providerPath) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
-            }
+        switch http.statusCode {
+        case 200, 204: break
+        case 401: throw SourceError.authenticationFailed
+        case 403: throw SourceFileMutationError.permissionDenied
+        case 404, 410: throw SourceError.fileNotFound(path)
+        case 405: throw SourceFileMutationError.readOnly
+        default:
+            throw RemoteMediaHTTPError(service: "WebDAV", statusCode: http.statusCode)
         }
         invalidateLocalCache(for: path)
     }

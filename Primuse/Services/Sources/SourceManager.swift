@@ -5,10 +5,56 @@ import Network
 import NIOCore
 import PrimuseKit
 
+enum SourceFileDeletionFailureReason: String, Hashable, Sendable {
+    case permissionDenied, authenticationRequired, readOnly, unavailable, other
+
+    nonisolated static func classify(_ error: Error, depth: Int = 0) -> Self {
+        switch error {
+        case SourceFileMutationError.permissionDenied: return .permissionDenied
+        case SourceFileMutationError.readOnly: return .readOnly
+        case SourceError.authenticationFailed, SourceError.credentialUnavailable: return .authenticationRequired
+        case CloudDriveError.notAuthenticated, CloudDriveError.tokenExpired,
+             CloudDriveError.tokenRefreshFailed: return .authenticationRequired
+        case CloudDriveError.permissionDenied: return .permissionDenied
+        default: break
+        }
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain {
+            if ns.code == Int(EACCES) || ns.code == Int(EPERM) { return .permissionDenied }
+            if ns.code == Int(EROFS) { return .readOnly }
+        }
+        if ns.domain == NSCocoaErrorDomain {
+            if ns.code == NSFileReadNoPermissionError || ns.code == NSFileWriteNoPermissionError {
+                return .permissionDenied
+            }
+            if ns.code == NSFileWriteVolumeReadOnlyError { return .readOnly }
+        }
+        if depth < 8, let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+            let reason = classify(underlying, depth: depth + 1)
+            if reason != .other { return reason }
+        }
+        if error is URLError || error is SourceConnectionTerminalError { return .unavailable }
+        if case SourceError.connectionFailed = error { return .unavailable }
+        if case SourceError.pathNotFound = error { return .unavailable }
+        return .other
+    }
+}
+
 struct SongFileDeletionResult: Sendable {
     struct Failure: Sendable {
         let path: String
         let message: String
+        var reason: SourceFileDeletionFailureReason = .other
+
+        init(path: String, message: String, reason: SourceFileDeletionFailureReason = .other) {
+            self.path = path
+            self.message = message
+            self.reason = reason
+        }
+
+        init(path: String, error: Error) {
+            self.init(path: path, message: error.localizedDescription, reason: .classify(error))
+        }
     }
 
     var deletedPaths: [String] = []
@@ -2126,6 +2172,7 @@ final class SourceManager {
     /// Connector lifecycle and scope validation are internal bookkeeping. Directory
     /// browser views resolve a connector while SwiftUI is evaluating `body`; tracking
     /// these mutations would invalidate that same body and create a render loop.
+    @ObservationIgnored private let connectorFactory: ((MusicSource) -> any MusicSourceConnector)?
     @ObservationIgnored private var connectors: [String: any MusicSourceConnector] = [:]
     @ObservationIgnored private var connectorScopeFingerprints: [String: String] = [:]
     @ObservationIgnored private var requiredConnectorScopeFingerprints: [String: String] = [:]
@@ -2205,6 +2252,7 @@ final class SourceManager {
     private var musicVideoCacheTargets: [String: URL] = [:]
 
     init(database: LibraryDatabase) {
+        self.connectorFactory = nil
         let initialCacheScopeState = Self.loadInitialAudioCacheScopeState()
         self.recordedAudioCacheScopeSignatures = initialCacheScopeState.signatures
         self.legacyAudioCacheAdoptionSourceIDs = initialCacheScopeState.legacyAdoptionSourceIDs
@@ -2219,12 +2267,14 @@ final class SourceManager {
 
     init(
         sourcesProvider: @escaping @Sendable () async throws -> [MusicSource],
-        songsProvider: @escaping @MainActor () -> [Song] = { [] }
+        songsProvider: @escaping @MainActor () -> [Song] = { [] },
+        connectorFactory: ((MusicSource) -> any MusicSourceConnector)? = nil
     ) {
         let initialCacheScopeState = Self.loadInitialAudioCacheScopeState()
         self.recordedAudioCacheScopeSignatures = initialCacheScopeState.signatures
         self.legacyAudioCacheAdoptionSourceIDs = initialCacheScopeState.legacyAdoptionSourceIDs
         self.needsLegacyAudioCacheAdoptionDiscovery = initialCacheScopeState.needsLegacyDiscovery
+        self.connectorFactory = connectorFactory
         self.sourcesProvider = sourcesProvider
         self.songsProvider = songsProvider
         observeLibraryInvalidations()
@@ -2526,6 +2576,7 @@ final class SourceManager {
     }
 
     private func directConnector(for source: MusicSource) -> any MusicSourceConnector {
+        if let connectorFactory { return connectorFactory(source) }
         let connector: any MusicSourceConnector
         switch source.type {
         case .synology:
@@ -6504,7 +6555,7 @@ final class SourceManager {
             )
         } catch {
             var result = SongFileDeletionResult()
-            result.failedPaths.append(.init(path: song.filePath, message: error.localizedDescription))
+            result.failedPaths.append(.init(path: song.filePath, error: error))
             Self.logDeletionFailures(result, song: song)
             return result
         }
@@ -6532,7 +6583,7 @@ final class SourceManager {
             plog("⚠️ Batch source deletion could not load sources: \(message)")
             let outcomes = songs.map { song in
                 var result = SongFileDeletionResult()
-                result.failedPaths.append(.init(path: song.filePath, message: message))
+                result.failedPaths.append(.init(path: song.filePath, error: error))
                 return SongFileDeletionOutcome(song: song, result: result)
             }
             onProgress(songs.count)
@@ -6573,7 +6624,7 @@ final class SourceManager {
                 plog("⚠️ Batch source deletion connection failed for source \(sourceID): \(message)")
                 for song in sourceSongs {
                     var failure = SongFileDeletionResult()
-                    failure.failedPaths.append(.init(path: song.filePath, message: message))
+                    failure.failedPaths.append(.init(path: song.filePath, error: error))
                     outcomeBySongID[song.id] = SongFileDeletionOutcome(song: song, result: failure)
                     completedCount += 1
                 }
@@ -6622,7 +6673,7 @@ final class SourceManager {
                             batchCount: chunk.count,
                             aggregateErrorIndicatesMissing: aggregateMissing
                         ) {
-                            plog("⚠️ Batch source deletion reported a missing path; retrying \(chunk.count) items individually for source \(sourceID)")
+                            plog("⚠️ Batch source deletion incomplete; confirming \(chunk.count) items individually for source \(sourceID)")
                             for song in chunk {
                                 if Task.isCancelled { break sourceLoop }
                                 let result = await Self.performSourceFileDeletion(
@@ -6648,7 +6699,7 @@ final class SourceManager {
                                 result.missingPaths.append(song.filePath)
                                 result.audioStatus = .alreadyMissing
                             } else {
-                                result.failedPaths.append(.init(path: song.filePath, message: message))
+                                result.failedPaths.append(.init(path: song.filePath, error: error))
                             }
                             outcomeBySongID[song.id] = SongFileDeletionOutcome(song: song, result: result)
                         }
@@ -6676,6 +6727,50 @@ final class SourceManager {
         // Preserve caller order even though provider batching is grouped by
         // source. This keeps progress/result handling deterministic.
         return songs.compactMap { outcomeBySongID[$0.id] }
+    }
+
+    nonisolated static func isMissingFileError(_ error: Error) -> Bool {
+        if case SourceError.fileNotFound = error { return true }
+        if case SourceError.pathNotFound = error { return true }
+        if case CloudDriveError.fileNotFound = error { return true }
+
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(ENOENT) {
+            return true
+        }
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileNoSuchFileError {
+            return true
+        }
+
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileReadNoSuchFileError {
+            return true
+        }
+        // Provider text (notably FTP 550) can mean either missing or denied.
+        // Never hide a song based on an ambiguous or localized message.
+        return false
+    }
+
+    func deleteSidecars(for songs: [Song], retaining retainedSongs: [Song]) async {
+        guard !songs.isEmpty else { return }
+        let selectedIDs = await Task.detached(priority: .utility) {
+            Self.sidecarDeletionSongIDs(deleting: songs, retaining: retainedSongs)
+        }.value
+        guard !selectedIDs.isEmpty, let sources = try? await sourcesProvider() else { return }
+        let sourcesByID = Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for song in songs where selectedIDs.contains(song.id) {
+            guard let source = sourcesByID[song.sourceID] else { continue }
+            let connector = connector(for: source)
+            do {
+                try await connector.connect()
+                for path in Self.sidecarPathsToDelete(for: song) {
+                    do { try await connector.deleteFile(at: path) }
+                    catch where Self.isMissingFileError(error) { }
+                    catch { plog("⚠️ Sidecar cleanup failed: \(error.localizedDescription)") }
+                }
+            } catch {
+                plog("⚠️ Sidecar source unavailable: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Build all sidecar-sharing decisions in one O(librarySize) pass. The old
@@ -6719,7 +6814,8 @@ final class SourceManager {
         var result = SongFileDeletionResult()
         result.failedPaths.append(.init(
             path: song.filePath,
-            message: String(localized: "source_unavailable")
+            message: String(localized: "source_unavailable"),
+            reason: .unavailable
         ))
         return result
     }
@@ -6745,7 +6841,7 @@ final class SourceManager {
                     result.missingPaths.append(song.filePath)
                     result.audioStatus = .alreadyMissing
                 } else {
-                    result.failedPaths.append(.init(path: song.filePath, message: error.localizedDescription))
+                    result.failedPaths.append(.init(path: song.filePath, error: error))
                     logDeletionFailures(result, song: song)
                     return result
                 }
@@ -6773,7 +6869,7 @@ final class SourceManager {
                 }
             }
         } catch {
-            result.failedPaths.append(.init(path: song.filePath, message: error.localizedDescription))
+            result.failedPaths.append(.init(path: song.filePath, error: error))
         }
 
         logDeletionFailures(result, song: song)
@@ -9724,24 +9820,7 @@ private extension SourceManager {
         return "/" + components.joined(separator: "/")
     }
 
-    nonisolated static func isMissingFileError(_ error: Error) -> Bool {
-        if case SourceError.fileNotFound = error { return true }
-        if case SourceError.pathNotFound = error { return true }
-        if case CloudDriveError.fileNotFound = error { return true }
 
-        let ns = error as NSError
-        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(ENOENT) {
-            return true
-        }
-        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileNoSuchFileError {
-            return true
-        }
-
-        let message = error.localizedDescription.lowercased()
-        return message.contains("not found")
-            || message.contains("no such file")
-            || message.contains("不存在")
-    }
 }
 
 extension Notification.Name {
