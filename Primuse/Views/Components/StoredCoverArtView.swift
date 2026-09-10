@@ -169,6 +169,30 @@ enum PlaylistArtworkResource {
     case musicKit(MusicKit.Artwork)
 }
 
+@MainActor
+enum UploadedArtworkLoader {
+    static func load(
+        contentID: String?,
+        readData: @escaping @Sendable (String) async -> Data? = { contentID in
+            MetadataAssetStore.shared.customArtworkData(contentID: contentID)
+        },
+        apply: @MainActor (PlatformImage?) -> Void
+    ) async {
+        guard !Task.isCancelled else { return }
+        guard let contentID else {
+            apply(nil)
+            return
+        }
+        let data = await Task.detached(priority: .utility) {
+            await readData(contentID)
+        }.value
+        // Detached reads can finish after a replacement task has displayed a
+        // newer cover. A cancelled task must leave that view state untouched.
+        guard !Task.isCancelled else { return }
+        apply(data.flatMap { PlatformImage(data: $0) })
+    }
+}
+
 /// App-layer half of the shared playlist artwork resolver. PrimuseKit owns the
 /// deterministic ordering; this adapter proves that each candidate can really
 /// be displayed by the same cache/source/MusicKit chain used for song covers.
@@ -353,18 +377,9 @@ struct PlaylistArtworkView: View {
             resolvedPlanSignature = currentPlan.signature
         }
         .task(id: "\(uploadedContentID ?? "")#\(library.artworkOverrideRevision)#\(reloadRevision)") {
-            guard let contentID = uploadedContentID else {
-                uploadedImage = nil
-                return
+            await UploadedArtworkLoader.load(contentID: uploadedContentID) {
+                uploadedImage = $0
             }
-            let data = await Task.detached(priority: .utility) {
-                MetadataAssetStore.shared.customArtworkData(contentID: contentID)
-            }.value
-            guard !Task.isCancelled, let data else {
-                uploadedImage = nil
-                return
-            }
-            uploadedImage = PlatformImage(data: data)
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
             guard notification(
@@ -557,18 +572,9 @@ struct AlbumArtworkView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: "\(uploadedContentID ?? "")#\(library.artworkOverrideRevision)#\(reloadRevision)") {
-            guard let contentID = uploadedContentID else {
-                uploadedImage = nil
-                return
+            await UploadedArtworkLoader.load(contentID: uploadedContentID) {
+                uploadedImage = $0
             }
-            let data = await Task.detached(priority: .utility) {
-                MetadataAssetStore.shared.customArtworkData(contentID: contentID)
-            }.value
-            guard !Task.isCancelled, let data else {
-                uploadedImage = nil
-                return
-            }
-            uploadedImage = PlatformImage(data: data)
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
             guard let contentID = uploadedContentID else { return }
@@ -752,18 +758,9 @@ struct ArtistArtworkView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: "\(uploadedContentID ?? "")#\(library.artworkOverrideRevision)#\(reloadRevision)") {
-            guard let contentID = uploadedContentID else {
-                uploadedImage = nil
-                return
+            await UploadedArtworkLoader.load(contentID: uploadedContentID) {
+                uploadedImage = $0
             }
-            let data = await Task.detached(priority: .utility) {
-                MetadataAssetStore.shared.customArtworkData(contentID: contentID)
-            }.value
-            guard !Task.isCancelled, let data else {
-                uploadedImage = nil
-                return
-            }
-            uploadedImage = PlatformImage(data: data)
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseArtworkDidCache)) { note in
             guard let contentID = uploadedContentID else { return }

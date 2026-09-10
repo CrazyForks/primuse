@@ -35,6 +35,82 @@ final class LibraryPortableArtworkTests: XCTestCase {
         ])
     }
 
+    func testCancelledUploadedArtworkReadDoesNotClearReplacementImage() async throws {
+        let oldImage = try image(jpeg: true, color: .red)
+        let newImage = try image(jpeg: true, color: .blue)
+
+        for oldResult in [oldImage, nil] as [Data?] {
+            let gate = UploadedArtworkReadGate()
+            var displayedImage: UIImage?
+            var updateCount = 0
+            let oldTask = Task {
+                await UploadedArtworkLoader.load(contentID: "old", readData: { _ in
+                    await gate.suspend()
+                    return oldResult
+                }) {
+                    displayedImage = $0
+                    updateCount += 1
+                }
+            }
+            await gate.waitUntilSuspended()
+            oldTask.cancel()
+
+            await UploadedArtworkLoader.load(contentID: "new", readData: { _ in newImage }) {
+                displayedImage = $0
+                updateCount += 1
+            }
+            let replacement = displayedImage
+            XCTAssertNotNil(replacement)
+
+            await gate.release()
+            await oldTask.value
+            XCTAssertTrue(displayedImage === replacement)
+            XCTAssertEqual(updateCount, 1)
+        }
+    }
+
+    func testCancelledUploadedArtworkReadDoesNotRestoreRemovedOverride() async throws {
+        let data = try image(jpeg: true)
+        let gate = UploadedArtworkReadGate()
+        var displayedImage = UIImage(data: data)
+        var updateCount = 0
+        let oldTask = Task {
+            await UploadedArtworkLoader.load(contentID: "old", readData: { _ in
+                await gate.suspend()
+                return data
+            }) {
+                displayedImage = $0
+                updateCount += 1
+            }
+        }
+        await gate.waitUntilSuspended()
+        oldTask.cancel()
+
+        await UploadedArtworkLoader.load(contentID: nil) {
+            displayedImage = $0
+            updateCount += 1
+        }
+        XCTAssertNil(displayedImage)
+
+        await gate.release()
+        await oldTask.value
+        XCTAssertNil(displayedImage)
+        XCTAssertEqual(updateCount, 1)
+    }
+
+    func testCurrentUploadedArtworkReadFailureClearsPreviousImage() async throws {
+        let data = try image(jpeg: true)
+        for result in [nil, Data("invalid image".utf8)] as [Data?] {
+            var displayedImage = UIImage(data: data)
+            XCTAssertNotNil(displayedImage)
+
+            await UploadedArtworkLoader.load(contentID: "missing", readData: { _ in result }) {
+                displayedImage = $0
+            }
+            XCTAssertNil(displayedImage)
+        }
+    }
+
     func testBoundedJPEGIsTransferredWithoutRecompression() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -174,5 +250,28 @@ final class LibraryPortableArtworkTests: XCTestCase {
         task.cancel()
         let result = await task.value
         XCTAssertNil(result)
+    }
+}
+
+private actor UploadedArtworkReadGate {
+    private var isSuspended = false
+    private var suspendedWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        isSuspended = true
+        suspendedWaiter?.resume()
+        suspendedWaiter = nil
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        guard !isSuspended else { return }
+        await withCheckedContinuation { suspendedWaiter = $0 }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
