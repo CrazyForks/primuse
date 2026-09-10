@@ -389,6 +389,67 @@ final class TVScanProgressPresentationPolicyTests: XCTestCase {
 }
 
 @MainActor
+final class TVFnConnectCredentialTests: XCTestCase {
+    func testDraftAccessCodeOverridesStoredCodesWithoutSaving() throws {
+        let source = MusicSource(id: "fn-draft-\(UUID().uuidString)", name: "FN", type: .fnMusic,
+                                 host: "livingroom-nas", fnMusicConnectionMode: .fnConnect,
+                                 username: "listener")
+        defer { _ = TVCredentialStore.clearLocalCredential(sourceID: source.id) }
+        XCTAssertTrue(TVCredentialStore.replaceLocalCredential(
+            sourceID: source.id, username: "listener", password: "saved-password",
+            accessCode: "saved-code"
+        ))
+        let key = FnMusicAPIProtocol.fnConnectAccessCodeCredentialKey
+        let bundle = CredentialBundle(entries: [source.id: CredentialEntry(
+            password: "bundle-password", extra: [key: "bundle-code"]
+        )])
+        let draft = TVCredentialStore.credential(
+            for: source, bundle: bundle, password: "draft-password", fnConnectAccessCode: "draft-code"
+        )
+        XCTAssertEqual(draft.password, "draft-password")
+        XCTAssertEqual(draft.extra[key], "draft-code")
+        let saved = try XCTUnwrap(TVCredentialStore.loadLocalCredential(sourceID: source.id))
+        XCTAssertEqual(saved.password, "saved-password")
+        XCTAssertEqual(saved.accessCode, "saved-code")
+    }
+
+    func testLocalAccessCodeWinsOverOlderBundleAndBlankDraft() {
+        let source = MusicSource(id: "fn-local-\(UUID().uuidString)", name: "FN", type: .fnMusic,
+                                 host: "livingroom-nas", fnMusicConnectionMode: .fnConnect)
+        defer { _ = TVCredentialStore.clearLocalCredential(sourceID: source.id) }
+        XCTAssertTrue(TVCredentialStore.replaceLocalCredential(
+            sourceID: source.id, username: "listener", password: "local-password",
+            accessCode: "new-code"
+        ))
+        let key = FnMusicAPIProtocol.fnConnectAccessCodeCredentialKey
+        let bundle = CredentialBundle(entries: [source.id: CredentialEntry(extra: [key: "old-code"])])
+        let credential = TVCredentialStore.credential(
+            for: source, bundle: bundle, password: "", fnConnectAccessCode: ""
+        )
+        XCTAssertEqual(credential.password, "local-password")
+        XCTAssertEqual(credential.extra[key], "new-code")
+    }
+
+    func testBundleAccessCodeSurvivesLANProjectionWithoutLocalCode() {
+        var source = MusicSource(id: "fn-bundle-\(UUID().uuidString)", name: "FN", type: .fnMusic,
+                                 username: "listener")
+        source.connectionConfiguration = SourceConnectionConfiguration(
+            localEndpoint: SourceConnectionEndpoint(host: "192.168.50.20", port: 5666, useSsl: false),
+            remoteAccessMode: .vendor, vendorIdentifier: "livingroom-nas"
+        )
+        source = source.projectingPreferredConnectionForLegacy()
+        XCTAssertEqual(source.effectiveFnMusicConnectionMode, .address)
+        let key = FnMusicAPIProtocol.fnConnectAccessCodeCredentialKey
+        let bundle = CredentialBundle(entries: [source.id: CredentialEntry(
+            password: "bundle-password", extra: [key: "bundle-code"]
+        )])
+        let credential = TVCredentialStore.credential(for: source, bundle: bundle)
+        XCTAssertEqual(credential.password, "bundle-password")
+        XCTAssertEqual(credential.extra[key], "bundle-code")
+    }
+}
+
+@MainActor
 final class SourcesStoreDurabilityTests: XCTestCase {
     func testAddDurablySurvivesStoreReinitialization() throws {
         let fileManager = FileManager.default

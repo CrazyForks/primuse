@@ -368,11 +368,13 @@ public struct FnConnectResolver: Sendable {
     private let dataLoader: DataLoader
     private let lookupTimeout: TimeInterval
     private let probeTimeout: TimeInterval
+    private let relayProbeTimeout: TimeInterval
 
     public init(
         session: URLSession = .shared,
         lookupTimeout: TimeInterval = 10,
-        probeTimeout: TimeInterval = 2
+        probeTimeout: TimeInterval = 2,
+        relayProbeTimeout: TimeInterval = 10
     ) {
         self.dataLoader = {
             try await StreamResolverHTTPTransport.data(
@@ -383,16 +385,19 @@ public struct FnConnectResolver: Sendable {
         }
         self.lookupTimeout = lookupTimeout
         self.probeTimeout = probeTimeout
+        self.relayProbeTimeout = relayProbeTimeout
     }
 
     public init(
         data: @escaping DataLoader,
         lookupTimeout: TimeInterval = 10,
-        probeTimeout: TimeInterval = 2
+        probeTimeout: TimeInterval = 2,
+        relayProbeTimeout: TimeInterval = 10
     ) {
         self.dataLoader = data
         self.lookupTimeout = lookupTimeout
         self.probeTimeout = probeTimeout
+        self.relayProbeTimeout = relayProbeTimeout
     }
 
     public static func fnID(from rawValue: String) -> String? {
@@ -429,15 +434,18 @@ public struct FnConnectResolver: Sendable {
         _ rawValue: String,
         accessCode: String? = nil
     ) async throws -> FnMusicResolvedEndpoint {
+        try Task.checkCancellation()
         guard let fnID = Self.fnID(from: rawValue) else {
             throw FnConnectError.invalidID
         }
         let parameters = try await lookup(fnID: fnID)
+        try Task.checkCancellation()
         let groups = Self.candidateGroups(fnID: fnID, parameters: parameters)
         var sawAccessCodeChallenge = false
 
         for group in groups where !group.isEmpty {
             let result = await probe(group, accessCode: accessCode)
+            try Task.checkCancellation()
             if let endpoint = result.endpoint {
                 return endpoint
             }
@@ -482,9 +490,10 @@ public struct FnConnectResolver: Sendable {
             throw FnConnectError.invalidResponse
         }
         guard code == 0 else {
-            if code == 404 || code == 1001 || code == 1004 {
+            if [404, 1001, 1004, 3_000_006, 3_000_037].contains(code) {
                 throw FnConnectError.serverNotFound
             }
+            if code == 3_000_009 { throw FnConnectError.unreachable }
             throw FnConnectError.invalidResponse
         }
         guard let data = envelope["data"] as? [String: Any] else {
@@ -527,18 +536,20 @@ public struct FnConnectResolver: Sendable {
     }
 
     private func probe(_ candidate: Candidate, accessCode: String?) async -> ProbeResult {
+        guard !Task.isCancelled else { return .failed }
         let accessCodeResult = await probeAccessCode(candidate, accessCode: accessCode)
         if accessCodeResult == .accessCodeChallenge {
             return .accessCodeChallenge
         }
         guard accessCodeResult == .reachable else { return .failed }
+        guard !Task.isCancelled else { return .failed }
 
         guard let url = FnMusicAPIProtocol.endpointURL(
             serverBaseURL: candidate.endpoint.baseURL,
             path: "/sys/config"
         ) else { return .failed }
         var request = URLRequest(url: url)
-        request.timeoutInterval = probeTimeout
+        request.timeoutInterval = candidate.endpoint.usesRelay ? relayProbeTimeout : probeTimeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         applyConnectionHeaders(
@@ -568,7 +579,7 @@ public struct FnConnectResolver: Sendable {
             return .failed
         }
         var request = URLRequest(url: url)
-        request.timeoutInterval = probeTimeout
+        request.timeoutInterval = candidate.endpoint.usesRelay ? relayProbeTimeout : probeTimeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
         applyConnectionHeaders(
             to: &request,
@@ -732,12 +743,19 @@ public struct FnConnectResolver: Sendable {
 /// Per-client endpoint cache. FN Connect is re-resolved only after an explicit
 /// route failure, while legacy address sources keep their exact stored URL.
 public actor FnMusicEndpointProvider {
+    private struct ResolutionOperation {
+        let id: UUID
+        let generation: UInt64
+        let task: Task<FnMusicResolvedEndpoint, Error>
+    }
+
     private let directEndpoint: FnMusicResolvedEndpoint?
     private let fnID: String?
     private let accessCode: String?
     private let resolver: FnConnectResolver
     private var cachedEndpoint: FnMusicResolvedEndpoint?
-    private var resolutionTask: Task<FnMusicResolvedEndpoint, Error>?
+    private var resolutionOperation: ResolutionOperation?
+    private var resolutionGeneration: UInt64 = 0
 
     public init(
         source: MusicSource,
@@ -766,34 +784,45 @@ public actor FnMusicEndpointProvider {
     }
 
     public func endpoint(forceRefresh: Bool = false) async throws -> FnMusicResolvedEndpoint {
+        try Task.checkCancellation()
         if let directEndpoint { return directEndpoint }
         if forceRefresh {
-            resolutionTask?.cancel()
-            resolutionTask = nil
-            cachedEndpoint = nil
+            invalidate()
         }
         if let cachedEndpoint { return cachedEndpoint }
-        if let resolutionTask {
-            return try await resolutionTask.value
+        let operation: ResolutionOperation
+        if let existing = resolutionOperation {
+            operation = existing
+        } else {
+            guard let fnID else { throw FnConnectError.invalidID }
+            operation = ResolutionOperation(
+                id: UUID(),
+                generation: resolutionGeneration,
+                task: Task { try await resolver.resolve(fnID, accessCode: accessCode) }
+            )
+            resolutionOperation = operation
         }
-        guard let fnID else { throw FnConnectError.invalidID }
-
-        let task = Task { try await resolver.resolve(fnID, accessCode: accessCode) }
-        resolutionTask = task
         do {
-            let endpoint = try await task.value
+            let endpoint = try await operation.task.value
+            // Invalidation can start a new resolution while this await is suspended.
+            // Neither late success nor late failure owns the replacement operation.
+            guard resolutionGeneration == operation.generation else { throw CancellationError() }
             cachedEndpoint = endpoint
-            resolutionTask = nil
+            if resolutionOperation?.id == operation.id { resolutionOperation = nil }
+            try Task.checkCancellation()
             return endpoint
         } catch {
-            resolutionTask = nil
+            if resolutionOperation?.id == operation.id {
+                resolutionOperation = nil
+            }
             throw error
         }
     }
 
     public func invalidate() {
-        resolutionTask?.cancel()
-        resolutionTask = nil
+        resolutionGeneration &+= 1
+        resolutionOperation?.task.cancel()
+        resolutionOperation = nil
         cachedEndpoint = nil
     }
 }

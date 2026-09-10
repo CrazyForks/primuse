@@ -1671,8 +1671,8 @@ final class LibrarySnapshotSync: Sendable {
                     ))
                 }
             }
-            if source.type == .fnMusic,
-               source.effectiveFnMusicConnectionMode == .fnConnect {
+            // Access codes protect both LAN and relay routes; legacy mode may project the LAN route.
+            if source.type == .fnMusic {
                 let account = FnMusicAPIProtocol.fnConnectAccessCodeAccount(sourceID: source.id)
                 switch KeychainService.passwordLookup(for: account) {
                 case .found(let accessCode):

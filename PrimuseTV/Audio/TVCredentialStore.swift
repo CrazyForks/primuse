@@ -39,7 +39,12 @@ enum TVCredentialStore {
     /// 凭据来源链:① 用户在 **TV 本地手动输入** 的凭据(最高优先,跨设备 session 不通用时
     /// 直接在 TV 登录)② 经 CloudKit 加密同步下来的凭据包 ③ 可同步 iCloud 钥匙串(兜底)。
     /// 中继类型还会附上 iPhone 中继端点(放 extra,供 RelayStreamResolver 拼 URL)。
-    static func credential(for source: MusicSource, bundle: CredentialBundle?) -> SourceCredential {
+    static func credential(
+        for source: MusicSource,
+        bundle: CredentialBundle?,
+        password: String? = nil,
+        fnConnectAccessCode: String? = nil
+    ) -> SourceCredential {
         var cred: SourceCredential
         let local = loadLocalCredential(sourceID: source.id)
         let entry = bundle?.entries[source.id]
@@ -84,9 +89,16 @@ enum TVCredentialStore {
         if source.authType == .password, let username = source.username, !username.isEmpty {
             cred.username = username
         }
-        if source.type == .fnMusic,
-           cred.extra[FnMusicAPIProtocol.fnConnectAccessCodeCredentialKey]?.isEmpty != false {
-            let accessCode = local?.accessCode
+        if source.authType != .none, let password, !password.isEmpty {
+            cred.password = password
+            if source.authType == .apiKey { cred.token = password }
+        }
+        if source.type == .fnMusic, source.authType != .none {
+            let accessCode = [
+                fnConnectAccessCode,
+                local?.accessCode,
+                cred.extra[FnMusicAPIProtocol.fnConnectAccessCodeCredentialKey],
+            ].compactMap { $0 }.first { !$0.isEmpty }
                 ?? keychainPassword(
                     account: FnMusicAPIProtocol.fnConnectAccessCodeAccount(sourceID: source.id)
                 )

@@ -180,6 +180,94 @@ struct FnConnectResolverTests {
         #expect(FnMusicRedirectPolicy.redirectedRequest(from: original, to: otherPort) == nil)
     }
 
+    @Test func mapsCurrentDiscoveryErrors() async {
+        for (code, expected) in [(3_000_006, FnConnectError.serverNotFound),
+                                 (3_000_037, .serverNotFound), (3_000_009, .unreachable)] {
+            let resolver = FnConnectResolver(data: { request in
+                (Data("{\"code\":\(code),\"data\":null}".utf8),
+                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                 headerFields: nil)!)
+            })
+            await #expect(throws: expected) { _ = try await resolver.resolve("livingroom-nas") }
+        }
+    }
+
+    @Test func slowRelayRemainsUsableAfterDirectRoutesFail() async throws {
+        let resolver = FnConnectResolver(data: { request in
+            let url = try #require(request.url)
+            if url.path == "/api/v1/fn/con" {
+                return FnConnectDelayedLookup.response(request, json:
+                    #"{"code":0,"data":{"ipv4":["192.168.50.20"],"fn":["livingroom-nas.5ddd.com"]}}"#)
+            }
+            if url.host == "192.168.50.20" { throw URLError(.cannotConnectToHost) }
+            // Model a relay response arriving after three seconds, beyond the LAN budget.
+            guard request.timeoutInterval >= 3 else { throw URLError(.timedOut) }
+            if url.path == "/access_code_verify" {
+                return FnConnectDelayedLookup.response(request, json: "", status: 204)
+            }
+            return FnConnectDelayedLookup.response(request, json: #"{"code":200,"data":{}}"#)
+        })
+        let endpoint = try await resolver.resolve("livingroom-nas")
+        #expect(endpoint.route == .relay)
+    }
+
+    @Test func cancellationDuringProbeIsPreserved() async throws {
+        let loader = FnConnectDelayedLookup(holdProbe: true)
+        let task = Task { try await FnConnectResolver(data: { try await loader.load($0) })
+            .resolve("livingroom-nas") }
+        await loader.waitForPending(1)
+        task.cancel()
+        await loader.release(1)
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+    }
+
+    @Test func invalidatedResolutionCannotReplaceFreshEndpoint() async throws {
+        let loader = FnConnectDelayedLookup()
+        let provider = makeProvider(loader)
+        let old = Task { try await provider.endpoint() }
+        await loader.waitForPending(1)
+        await provider.invalidate()
+        let fresh = Task { try await provider.endpoint() }
+        await loader.waitForPending(2)
+        await loader.release(2)
+        let current = try await fresh.value
+        await loader.release(1)
+        await #expect(throws: CancellationError.self) { _ = try await old.value }
+        #expect(try await provider.endpoint() == current)
+        #expect(current.baseURL.host == "route-2.5ddd.com")
+        #expect(await loader.lookupCount == 2)
+    }
+
+    @Test func lateFailureCannotDiscardReplacementResolution() async throws {
+        let loader = FnConnectDelayedLookup()
+        let provider = makeProvider(loader)
+        let old = Task { try await provider.endpoint() }
+        await loader.waitForPending(1)
+        await provider.invalidate()
+        let fresh = Task { try await provider.endpoint() }
+        await loader.waitForPending(2)
+        await loader.release(1, failure: true)
+        _ = await old.result
+        // A caller arriving after the old failure must join the second lookup.
+        // Only a third lookup completes immediately, so an erroneous duplicate
+        // deterministically returns route-3 before the pending second lookup.
+        await loader.completeFutureLookups()
+        let joined = Task { try await provider.endpoint() }
+        try await Task.sleep(for: .milliseconds(50))
+        await loader.release(2)
+        let current = try await fresh.value
+        #expect(try await joined.value == current)
+        #expect(await loader.lookupCount == 2)
+    }
+
+    private func makeProvider(_ loader: FnConnectDelayedLookup) -> FnMusicEndpointProvider {
+        FnMusicEndpointProvider(
+            source: MusicSource(name: "FN", type: .fnMusic, host: "livingroom-nas",
+                                fnMusicConnectionMode: .fnConnect),
+            dataLoader: { try await loader.load($0) }
+        )
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FnConnectURLProtocol.self]
@@ -399,5 +487,58 @@ private final class FnConnectURLProtocol: URLProtocol, @unchecked Sendable {
             return #"{"code":0,"data":{"ipv4":["192.168.50.20"],"ipv6":[],"publicIpv4":["203.0.113.20"],"publicIpv6":[],"port":{"httpPort":5666,"httpsPort":5667},"fn":["livingroom-nas.5ddd.com"]}}"#
         }
         return #"{"code":0,"data":{"ipv4":[],"ipv6":[],"publicIpv4":[],"publicIpv6":[],"port":{"httpPort":5666,"httpsPort":5667},"fn":["livingroom-nas.5ddd.com"]}}"#
+    }
+}
+
+private actor FnConnectDelayedLookup {
+    private(set) var lookupCount = 0
+    private let holdProbe: Bool
+    private var completeFuture = false
+    private var pending: [Int: CheckedContinuation<Void, Error>] = [:]
+    private var observers: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    init(holdProbe: Bool = false) { self.holdProbe = holdProbe }
+
+    func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let url = request.url!
+        if url.path == "/api/v1/fn/con" {
+            lookupCount += 1
+            let number = lookupCount
+            if !holdProbe, !completeFuture { try await suspend(number) }
+            return Self.response(request, json:
+                "{\"code\":0,\"data\":{\"fn\":[\"route-\(number).5ddd.com\"]}}")
+        }
+        if url.path == "/access_code_verify" {
+            if holdProbe { try await suspend(1) }
+            return Self.response(request, json: "", status: 204)
+        }
+        return Self.response(request, json: #"{"code":200,"data":{}}"#)
+    }
+
+    private func suspend(_ number: Int) async throws {
+        // Deliberately ignore cancellation to exercise a late network callback.
+        try await withCheckedThrowingContinuation { continuation in
+            pending[number] = continuation
+            observers.removeValue(forKey: number)?.resume()
+        }
+    }
+
+    func waitForPending(_ number: Int) async {
+        if pending[number] != nil { return }
+        await withCheckedContinuation { observers[number] = $0 }
+    }
+
+    func release(_ number: Int, failure: Bool = false) {
+        let continuation = pending.removeValue(forKey: number)
+        if failure { continuation?.resume(throwing: URLError(.timedOut)) }
+        else { continuation?.resume() }
+    }
+
+    func completeFutureLookups() { completeFuture = true }
+
+    nonisolated static func response(_ request: URLRequest, json: String, status: Int = 200)
+        -> (Data, URLResponse) {
+        (Data(json.utf8), HTTPURLResponse(url: request.url!, statusCode: status,
+                                        httpVersion: nil, headerFields: nil)!)
     }
 }

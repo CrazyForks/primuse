@@ -740,11 +740,13 @@ struct TVSourceFormView: View {
     private func runTest() {
         guard canTestConnection, let source = draftSource() else { return }
         let draftPassword = password.isEmpty ? nil : password
+        let draftAccessCode = fnConnectAccessCode.isEmpty ? nil : fnConnectAccessCode
         testing = true; testResult = nil
         Task {
             testResult = await store.testConnection(
                 source: source,
-                password: draftPassword
+                password: draftPassword,
+                fnConnectAccessCode: draftAccessCode
             )
             testing = false
         }

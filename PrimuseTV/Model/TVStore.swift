@@ -1195,19 +1195,19 @@ final class TVStore {
     /// secret fields intentionally keep the currently stored values.
     func testConnection(
         source: MusicSource,
-        password: String?
+        password: String?,
+        fnConnectAccessCode: String? = nil
     ) async -> String {
-        var credential = TVCredentialStore.credential(for: source, bundle: credentialBundle)
+        var credential = TVCredentialStore.credential(
+            for: source,
+            bundle: credentialBundle,
+            password: password,
+            fnConnectAccessCode: fnConnectAccessCode
+        )
         if source.authType == .none {
             credential = SourceCredential()
-        } else {
-            if let username = source.username, !username.isEmpty {
-                credential.username = username
-            }
-            if let password, !password.isEmpty {
-                credential.password = password
-                if source.authType == .apiKey { credential.token = password }
-            }
+        } else if let username = source.username, !username.isEmpty {
+            credential.username = username
         }
         return await testConnection(source: source, credential: credential)
     }
