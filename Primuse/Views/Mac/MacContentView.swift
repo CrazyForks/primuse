@@ -13,6 +13,8 @@ struct MacContentView: View {
     @State private var detailNavigationID = UUID()
     @State private var sidebarCollapsed: Bool = false
     @State private var savedSidebarCollapsed: Bool = false
+    @State private var pendingPlaybackRemovalIDs = Set<String>()
+    @State private var isReconcilingPlaybackRemovals = false
     @State private var nowPlayingPresented = false
     @State private var queuePresented = false
     @State private var isWindowFullScreen = false
@@ -51,6 +53,36 @@ struct MacContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("primuse.hasSeenOnboarding") private var hasSeenOnboarding = false
     @AppStorage("primuse.navigation.macRoute.v1") private var persistedRouteID = "home"
+
+    @MainActor
+    private func enqueuePlaybackReconciliation(removing songIDs: Set<String>) {
+        let action = PlaybackLibraryMutationPolicy.action(
+            queueSongIDs: player.queue.map(\.id),
+            currentSongID: player.currentSong?.id,
+            isLiveRadio: player.isLiveRadio,
+            event: .songsRemoved(songIDs)
+        )
+        guard case let .removeSongs(relevantIDs) = action else { return }
+        pendingPlaybackRemovalIDs.formUnion(relevantIDs)
+        guard !isReconcilingPlaybackRemovals else { return }
+        isReconcilingPlaybackRemovals = true
+        Task { @MainActor in
+            defer { isReconcilingPlaybackRemovals = false }
+            while !pendingPlaybackRemovalIDs.isEmpty {
+                let pendingIDs = pendingPlaybackRemovalIDs
+                pendingPlaybackRemovalIDs.removeAll(keepingCapacity: true)
+                let refreshedAction = PlaybackLibraryMutationPolicy.action(
+                    queueSongIDs: player.queue.map(\.id),
+                    currentSongID: player.currentSong?.id,
+                    isLiveRadio: player.isLiveRadio,
+                    event: .songsRemoved(pendingIDs)
+                )
+                guard case let .removeSongs(stillRelevantIDs) = refreshedAction else { continue }
+                await player.prepareQueueForRemovingSongs(withIDs: stillRelevantIDs)
+            }
+            if player.currentSong == nil { nowPlayingPresented = false }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -236,6 +268,9 @@ struct MacContentView: View {
         }
         .onChange(of: selection) { _, route in
             persistedRouteID = persistenceID(for: route)
+        }
+        .background {
+            MacAuthoritativeSongRemovalObserver(onSongsRemoved: enqueuePlaybackReconciliation)
         }
         .onReceive(NotificationCenter.default.publisher(for: .primuseSidebarRequestNewPlaylist)) { _ in
             newPlaylistName = ""
@@ -610,4 +645,24 @@ private final class ResizeHandleNSView: NSView {
         updateTrackingAreas()
     }
 }
+private struct MacAuthoritativeSongRemovalObserver: View {
+    let onSongsRemoved: @MainActor (Set<String>) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onReceive(NotificationCenter.default.publisher(for: .primuseSongsRemoved).receive(on: DispatchQueue.main)) { note in
+                let songIDs: Set<String>
+                if let identifiers = note.userInfo?["songIDs"] as? Set<String> {
+                    songIDs = identifiers
+                } else {
+                    let songs = note.userInfo?["songs"] as? [Song] ?? []
+                    songIDs = Set(songs.map(\.id))
+                }
+                guard !songIDs.isEmpty else { return }
+                onSongsRemoved(songIDs)
+            }
+    }
+}
+
 #endif

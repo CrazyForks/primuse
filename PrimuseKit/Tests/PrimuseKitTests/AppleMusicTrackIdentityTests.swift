@@ -171,6 +171,31 @@ struct AppleMusicTrackIdentityTests {
         #expect(identityIndex.count == 1)
     }
 
+    @Test("Subscription loss preserves the library while preventing catalog synchronization")
+    func subscriptionLossUsesNonDestructiveLocalFallback() {
+        let access = AppleMusicLibraryAccess(storefrontCountryCode: "CN", canPlayCatalogContent: false, canBecomeSubscriber: true)
+        #expect(!access.canPlayCatalogContent)
+        #expect(!access.syncMode.shouldPruneMissingSongs)
+        #expect(!access.syncMode.shouldReplaceMirrorPlaylist)
+    }
+
+    @Test("Storefront and subscription changes invalidate an in-flight library snapshot")
+    func changedAccessCannotCommitOldSnapshot() {
+        let access = AppleMusicLibraryAccess(storefrontCountryCode: "us", canPlayCatalogContent: true, canBecomeSubscriber: false)
+        let normalized = AppleMusicLibraryAccess(storefrontCountryCode: "US", canPlayCatalogContent: true, canBecomeSubscriber: false)
+        #expect(access.canCommit(comparedTo: normalized))
+        #expect(access.syncMode.shouldPruneMissingSongs)
+        var changed = normalized
+        changed.storefrontCountryCode = "CN"
+        #expect(!access.canCommit(comparedTo: changed))
+        #expect(changed.storefrontChanged(since: "US"))
+        #expect(!changed.storefrontChanged(since: nil))
+        #expect(!changed.storefrontChanged(since: "cn"))
+        changed = normalized
+        changed.canPlayCatalogContent = false
+        #expect(!access.canCommit(comparedTo: changed))
+    }
+
     @Test("Partial fallback never authorizes destructive reconciliation")
     func partialFallbackIsNonDestructive() {
         #expect(AppleMusicLibrarySyncMode.authoritative.shouldPruneMissingSongs)

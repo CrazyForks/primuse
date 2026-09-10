@@ -8762,8 +8762,15 @@ final class AudioPlayerService {
                 clearQueue()
                 return
             }
-            setQueue(retainedSongs, startAt: startAt)
-            await play(song: retainedSongs[startAt])
+            if isPlaybackActive {
+                setQueue(retainedSongs, startAt: startAt)
+                await play(song: retainedSongs[startAt])
+            } else {
+                stop()
+                setQueue(retainedSongs, startAt: startAt)
+                stagePausedHandoff(song: retainedSongs[startAt], at: 0)
+                persistPlaybackSession()
+            }
         case .stopAndClearQueue:
             stop()
             clearQueue()

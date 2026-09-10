@@ -931,6 +931,7 @@ final class AppServices {
         didFinishDeferredStartup = true
         #if os(macOS)
         resumePendingLocalImportScanIfNeeded()
+        refreshAppleMusicLocalLibrarySources()
         #endif
         let finishedAt = ProcessInfo.processInfo.systemUptime
         plog(String(
@@ -961,6 +962,25 @@ final class AppServices {
         }
         #endif
     }
+
+    #if os(macOS)
+    /// Revalidate legacy imports after restoring playback so authoritative
+    /// removals also reach the recovered queue. Unreadable files are retained
+    /// by the connector; only a completed inventory can remove old rows.
+    private func refreshAppleMusicLocalLibrarySources() {
+        for source in sourcesStore.allSources where source.type == .appleMusicLibrary
+            && source.isEnabled && !source.isDeleted {
+            guard musicLibrary.songs.contains(where: { $0.sourceID == source.id }),
+                  scanService.scanStates[source.id]?.isScanning != true else { continue }
+            scanService.scanSource(
+                source,
+                sourceManager: sourceManager,
+                library: musicLibrary,
+                sourceStore: sourcesStore
+            )
+        }
+    }
+    #endif
 
     /// iOS resumes in a background execution window to keep large unfinished
     /// imports out of the launch path. macOS can resume after startup settles.

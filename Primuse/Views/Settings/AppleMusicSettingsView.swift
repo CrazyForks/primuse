@@ -44,6 +44,7 @@ struct AppleMusicSettingsView: View {
                 librarySection.settingsAnchor("appleMusic.sync")
             }
         }
+        .task { await appleMusicLibrary.refreshAfterAccountChange() }
         .navigationTitle("settings_apple_music_section")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -115,7 +116,12 @@ struct AppleMusicSettingsView: View {
         HStack {
             Image(systemName: authorizationStatusImage)
                 .foregroundStyle(authorizationStatusColor)
-            Text(statusText)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(statusText)
+                if let message = appleMusic.libraryAccessMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Spacer()
         }
         .contentShape(Rectangle())

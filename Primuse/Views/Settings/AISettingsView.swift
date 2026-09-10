@@ -82,8 +82,13 @@ final class AISettingsEditorModel {
 
     var selectedProviderPreset: AIProviderPreset {
         get {
-            providerPresets[selectedProviderID]
+            let preset = providerPresets[selectedProviderID]
                 ?? AIProviderPreset.matching(configuration: draftConfiguration)
+            guard let intelligence else { return preset }
+            return AIProviderPreset.visibleSelection(
+                preset,
+                for: intelligence.regionAvailability.context.region
+            )
         }
         set { providerPresets[selectedProviderID] = newValue }
     }
@@ -706,6 +711,7 @@ final class AISettingsEditorModel {
         let apiKeyOverrides = apiKeyDrafts
         isWorking = true
         isTestingPrimuseRelay = true
+        status = .idle
         primuseRelayConnectionReport = nil
         primuseRelayConnectionReport = await intelligence.testPrimuseRelayConnection(
             providerSet: providerSet,
@@ -867,8 +873,8 @@ struct AISettingsView: View {
 
     var body: some View {
         Form {
-            if intelligence.regionAvailability.isRefreshing,
-               intelligence.regionAvailability.context.region == .unknown {
+            if !intelligence.shouldExposeRemoteConfiguration,
+               intelligence.regionAvailability.isRefreshing {
                 Section {
                     HStack(spacing: 10) {
                         ProgressView()
@@ -914,7 +920,7 @@ struct AISettingsView: View {
     }
 
     private var connectionSummary: some View {
-        let usesRelay = editor.primuseRelayEnabled
+        let usesRelay = editor.primuseRelayEnabled && editor.status == .idle
         let isReady = usesRelay ? primuseRelayIsOperational : editor.hasUsableAPIKey
         let stateColor = usesRelay ? primuseRelayConnectionColor
             : (isReady ? Color.green : Color.secondary.opacity(0.35))
@@ -1214,12 +1220,6 @@ struct AISettingsView: View {
                 }
             }
 
-            if !selectedProviderIsAvailableInRegion {
-                Label("ai_provider_region_blocked", systemImage: "exclamationmark.shield.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
             SecureField(editor.apiKeyTitle, text: editor.apiKeyBinding)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -1378,10 +1378,6 @@ struct AISettingsView: View {
     }
 
     private var connectionSummaryText: String {
-        if editor.primuseRelayEnabled,
-           editor.primuseRelayConnectionPresentation != .notTested {
-            return editor.primuseRelayConnectionTitle
-        }
         switch editor.status {
         case .saving:
             return String(localized: "ai_saving_changes")
@@ -1442,18 +1438,7 @@ struct AISettingsView: View {
         presets.append(contentsOf: AIProviderPreset.catalog(
             for: intelligence.regionAvailability.context.region
         ))
-        if !presets.contains(editor.selectedProviderPreset) {
-            presets.append(editor.selectedProviderPreset)
-        }
         return presets
-    }
-
-    private var selectedProviderIsAvailableInRegion: Bool {
-        AIProviderRegionPolicy.allows(
-            configuration: editor.draftConfiguration,
-            region: intelligence.regionAvailability.context.region,
-            purpose: .modelCatalog
-        )
     }
 }
 

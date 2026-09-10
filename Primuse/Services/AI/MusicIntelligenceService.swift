@@ -1411,13 +1411,10 @@ final class MusicIntelligenceService {
         guard decision.isAllowed else {
             throw MusicIntelligenceError.unavailable(.regionRestricted)
         }
-        guard AIProviderRegionPolicy.allows(
-            configuration: configuration,
-            region: regionSnapshot.context.region,
-            purpose: .modelCatalog
-        ) else {
-            throw MusicIntelligenceError.unavailable(.regionRestricted)
-        }
+        _ = try AIRemoteEndpointPolicy.validatedBaseURL(
+            configuration.baseURL,
+            allowInsecureLocalHTTP: configuration.allowInsecureLocalHTTP
+        )
         let models = try await engine.listModels(
             configuration: configuration,
             apiKeyOverride: apiKey,
@@ -1457,13 +1454,10 @@ final class MusicIntelligenceService {
         }
         var enabledConfiguration = configuration
         enabledConfiguration.isEnabled = true
-        guard AIProviderRegionPolicy.allows(
-            configuration: enabledConfiguration,
-            region: region.region,
-            purpose: .generation
-        ) else {
-            throw MusicIntelligenceError.unavailable(.regionRestricted)
-        }
+        _ = try AIRemoteEndpointPolicy.validatedBaseURL(
+            enabledConfiguration.baseURL,
+            allowInsecureLocalHTTP: enabledConfiguration.allowInsecureLocalHTTP
+        )
         // Connection diagnostics send only this built-in phrase. They never
         // include a search term, lyrics, library metadata, or listening
         // history, so they are independent from content-sharing consent.

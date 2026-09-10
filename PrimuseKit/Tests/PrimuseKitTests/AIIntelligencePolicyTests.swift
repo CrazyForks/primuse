@@ -159,14 +159,15 @@ struct AIRegionAvailabilityTests {
         }
     }
 
-    @Test func unknownRegionFailsClosedForRemoteProviders() {
+    @Test func unknownRegionKeepsCustomConfigurationAvailable() {
         let decision = AIAvailabilityPolicy.decision(
             for: .userConfiguredRemote,
             regionContext: .unknown
         )
-        #expect(!decision.isAllowed)
-        #expect(!decision.shouldExposeConfiguration)
-        #expect(decision.denialReason == .regionUndetermined)
+        #expect(decision.isAllowed)
+        #expect(decision.shouldExposeConfiguration)
+        #expect(decision.requiresExplicitConsent)
+        #expect(decision.denialReason == nil)
     }
 
     @Test func internationalRemoteProviderRequiresConsent() {
@@ -213,7 +214,7 @@ struct AIRegionAvailabilityTests {
         ))
     }
 
-    @Test func unknownAndMainlandRegionsFailClosed() {
+    @Test func changedRegionSnapshotsDiscardStaleRequests() {
         let international = AIRegionSnapshot(
             context: AIRegionContext(
                 region: .international,
@@ -865,58 +866,34 @@ struct AIRemoteEndpointPolicyTests {
         #expect(gemini.embeddingModel.isEmpty)
     }
 
-    @Test func mainlandRegionChecksProviderEndpointAndAggregatorModels() {
-        let deepSeek = AIProviderPreset.deepSeekOpenAI.applying(
-            to: AIRemoteProviderConfiguration()
-        )
-        let openAI = AIProviderPreset.openAI.applying(
-            to: AIRemoteProviderConfiguration()
-        )
-        var qwen = AIProviderPreset.qwen.applying(to: AIRemoteProviderConfiguration())
+    @Test func customAndSavedProvidersWorkAcrossRegionsWithoutChangingPresets() {
+        let models = [AIProviderModel(id: "Qwen/Qwen3.5-Plus"), AIProviderModel(id: "openai/gpt-oss-20b")]
+        for region in [AICommercialRegion.mainlandChina, .unknown, .international] {
+            for baseURL in ["https://api.openai.com/v1", "https://gateway.example.org/v1", "https://api.siliconflow.cn/v1"] {
+                let configuration = AIRemoteProviderConfiguration(baseURL: baseURL, generationModel: "openai/gpt-oss-20b")
+                #expect(AIProviderRegionPolicy.allows(configuration: configuration, region: region, purpose: .generation))
+                #expect(AIProviderRegionPolicy.allows(configuration: configuration, region: region, purpose: .modelCatalog))
+                #expect(AIProviderRegionPolicy.filterModels(models, configuration: configuration, region: region) == models)
+                let snapshot = AIRegionSnapshot(context: AIRegionContext(region: region, source: .appStorefront), revision: 1)
+                #expect(AIRegionRequestPolicy.canSendRemoteRequest(captured: snapshot, latest: snapshot, configuration: configuration))
+            }
+        }
+        #expect(!AIProviderPreset.catalog(for: .mainlandChina).contains(.openAI))
+        #expect(AIProviderPreset.visibleSelection(.openAI, for: .mainlandChina) == .custom)
+        #expect(AIProviderPreset.visibleSelection(.openAI, for: .unknown) == .custom)
+        #expect(AIProviderPreset.visibleSelection(.deepSeekOpenAI, for: .mainlandChina) == .deepSeekOpenAI)
+        #expect(AIProviderPreset.visibleSelection(.openAI, for: .international) == .openAI)
+    }
 
-        #expect(AIProviderRegionPolicy.allows(
-            configuration: deepSeek,
-            region: .mainlandChina,
-            purpose: .generation
-        ))
-        #expect(!AIProviderRegionPolicy.allows(
-            configuration: openAI,
-            region: .mainlandChina,
-            purpose: .modelCatalog
-        ))
-        #expect(AIProviderRegionPolicy.allows(
-            configuration: openAI,
-            region: .international,
-            purpose: .generation
-        ))
-        #expect(AIProviderRegionPolicy.allows(
-            configuration: qwen,
-            region: .mainlandChina,
-            purpose: .generation
-        ))
-
-        qwen.generationModel = "openai/gpt-oss-20b"
-        #expect(AIProviderRegionPolicy.allows(
-            configuration: qwen,
-            region: .mainlandChina,
-            purpose: .modelCatalog
-        ))
-        #expect(!AIProviderRegionPolicy.allows(
-            configuration: qwen,
-            region: .mainlandChina,
-            purpose: .generation
-        ))
-
-        let filtered = AIProviderRegionPolicy.filterModels(
-            [
-                AIProviderModel(id: "Qwen/Qwen3.5-Plus"),
-                AIProviderModel(id: "openai/gpt-oss-20b"),
-                AIProviderModel(id: "deepseek-v4-flash"),
-            ],
-            configuration: qwen,
-            region: .mainlandChina
-        )
-        #expect(filtered.map(\.id) == ["Qwen/Qwen3.5-Plus", "deepseek-v4-flash"])
+    @Test func configuredProvidersStillRequireSafeEndpoints() {
+        for region in [AICommercialRegion.mainlandChina, .unknown, .international] {
+            for baseURL in ["http://gateway.example.org/v1", "file:///tmp/model", "https://user:password@example.org/v1"] {
+                #expect(!AIProviderRegionPolicy.allows(
+                    configuration: AIRemoteProviderConfiguration(baseURL: baseURL),
+                    region: region, purpose: .generation
+                ))
+            }
+        }
     }
 
     @Test func AICredentialsAreEligibleForICloudKeychainMigration() {

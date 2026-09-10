@@ -65,6 +65,49 @@ final class AppleMusicService {
     }
 
     private(set) var authState: AuthState = .notDetermined
+    private(set) var libraryAccess: AppleMusicLibraryAccess?
+
+    var libraryAccessMessage: String? {
+        guard let libraryAccess, !libraryAccess.canPlayCatalogContent else { return nil }
+        return String(localized: libraryAccess.canBecomeSubscriber
+                      ? "apple_music_needs_subscription" : "apple_music_unavailable")
+    }
+
+    private struct LibraryAccessFailure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    func refreshLibraryAccess() async throws -> AppleMusicLibraryAccess {
+        authState = Self.mapStatus(MusicAuthorization.currentStatus)
+        guard authState == .authorized else {
+            libraryAccess = nil
+            throw LibraryAccessFailure(message: String(localized: "apple_music_library_not_authorized"))
+        }
+        do {
+            let subscription = try await MusicSubscription.current
+            let countryCode: String?
+            if subscription.canPlayCatalogContent {
+                countryCode = try await MusicDataRequest.currentCountryCode
+            } else {
+                countryCode = try? await MusicDataRequest.currentCountryCode
+            }
+            try Task.checkCancellation()
+            let access = AppleMusicLibraryAccess(
+                storefrontCountryCode: countryCode,
+                canPlayCatalogContent: subscription.canPlayCatalogContent,
+                canBecomeSubscriber: subscription.canBecomeSubscriber
+            )
+            libraryAccess = access
+            return access
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            libraryAccess = nil
+            throw LibraryAccessFailure(message: String(localized: "apple_music_subscription_check_failed"))
+        }
+    }
+
     private(set) var searchResults: [MusicKit.Song] = []
     private(set) var isSearching = false
     /// 最近一次播放调用如果失败 (未订阅 / 国家不可用 / 网络),把错误信息

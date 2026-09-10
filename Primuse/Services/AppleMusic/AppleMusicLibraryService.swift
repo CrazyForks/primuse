@@ -145,6 +145,65 @@ final class AppleMusicLibraryService {
     /// not classify an imported item with an empty trust set.
     private var hasLoadedLocalFileProvenance = false
 
+    @ObservationIgnored private var subscriptionUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var isRefreshingAccess = false
+    private var lastAccess: AppleMusicLibraryAccess?
+    private static let syncedStorefrontKey = "primuse.appleMusic.syncedStorefront"
+
+    func refreshAfterAccountChange() async {
+        guard !isRefreshingAccess,
+              AppleMusicFeatureSettings.syncUserLibraryEnabled else { return }
+        isRefreshingAccess = true
+        defer { isRefreshingAccess = false }
+        do {
+            let access = try await appleMusic.refreshLibraryAccess()
+            startObservingSubscription()
+            let changed = lastAccess.map { $0 != access } ?? access.storefrontChanged(
+                since: UserDefaults.standard.string(forKey: Self.syncedStorefrontKey)
+            )
+            lastAccess = access
+            if changed {
+                cancel()
+                invalidateAccountCaches()
+                appleMusic.clearCatalogSearchResults()
+                sync()
+            } else if let message = appleMusic.libraryAccessMessage, syncTask == nil {
+                state = .failed(message)
+            }
+        } catch {
+            cancel()
+            invalidateAccountCaches()
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    private func startObservingSubscription() {
+        guard subscriptionUpdatesTask == nil else { return }
+        subscriptionUpdatesTask = Task { @MainActor [weak self] in
+            for await _ in MusicSubscription.subscriptionUpdates {
+                guard !Task.isCancelled, let self else { return }
+                await self.refreshAfterAccountChange()
+            }
+        }
+    }
+
+    private func invalidateAccountCaches() {
+        songCache.removeAll()
+        canonicalLibrarySongCache.removeAll()
+        canonicalLibraryTrackIdentityIndex.replace(with: [])
+        songArtworkCache.removeAll()
+        songArtworkSnapshotGeneration &+= 1
+        songArtworkItemGenerations.removeAll()
+        playlistArtworkCache.removeAll()
+        subscriptionIndependentLocalFileIDs.removeAll()
+        hasLoadedLocalFileProvenance = false
+        hasCompletedLibrarySnapshot = false
+    }
+
+    deinit {
+        subscriptionUpdatesTask?.cancel()
+    }
+
     init(library: MusicLibrary, appleMusic: AppleMusicService) {
         self.library = library
         self.appleMusic = appleMusic
@@ -167,6 +226,7 @@ final class AppleMusicLibraryService {
             state = .failed(String(localized: "apple_music_library_not_authorized"))
             return
         }
+        startObservingSubscription()
         state = .syncing
         let generation = UUID()
         syncGeneration = generation
@@ -910,8 +970,34 @@ final class AppleMusicLibraryService {
             }
         }
         do {
+            let access = try await appleMusic.refreshLibraryAccess()
+            if lastAccess != nil, lastAccess != access { invalidateAccountCaches() }
+            lastAccess = access
+            plog("Apple Music library access: storefront=\(access.storefrontCountryCode ?? "unknown") catalogPlayback=\(access.canPlayCatalogContent)")
             await refreshSubscriptionIndependentLocalFileIDs()
-            let fetchResult = try await fetchLibrarySongs()
+            let fetchResult: LibrarySongFetchResult
+            if access.canPlayCatalogContent {
+                fetchResult = try await fetchLibrarySongs(acceptEmptyCloudSnapshot: access.storefrontChanged(
+                    since: UserDefaults.standard.string(forKey: Self.syncedStorefrontKey)
+                ))
+            } else {
+                let localSongs = try await fetchDeviceLibrarySongs().filter {
+                    playbackSource(for: $0) == .subscriptionIndependentUserLibrary
+                }
+                fetchResult = LibrarySongFetchResult(
+                    songs: localSongs,
+                    fallbackWarning: appleMusic.libraryAccessMessage,
+                    syncMode: access.syncMode
+                )
+            }
+            let latestAccess = try await appleMusic.refreshLibraryAccess()
+            guard access.canCommit(comparedTo: latestAccess) else {
+                cancel()
+                invalidateAccountCaches()
+                lastAccess = latestAccess
+                sync()
+                return
+            }
             let allMusicKitSongs = fetchResult.songs
 
             if Task.isCancelled { return }
@@ -988,7 +1074,7 @@ final class AppleMusicLibraryService {
             // 标记为失败，保留旧镜像并允许用户重试。
             let syncedUserPlaylistCount: Int
             if fetchResult.syncMode == .authoritative {
-                syncedUserPlaylistCount = try await syncUserPlaylists()
+                syncedUserPlaylistCount = try await syncUserPlaylists(access: access)
             } else {
                 syncedUserPlaylistCount = 0
             }
@@ -999,6 +1085,9 @@ final class AppleMusicLibraryService {
                 state = .failed(warning)
                 plog("⚠️Apple Music library partially synced: \(songs.count) local songs preserved; \(warning)")
             } else {
+                if let countryCode = access.storefrontCountryCode {
+                    UserDefaults.standard.set(countryCode, forKey: Self.syncedStorefrontKey)
+                }
                 state = .done(songCount: songs.count, at: lastSyncAt!)
                 plog("🎵 Apple Music library synced: \(songs.count) songs, \(syncedUserPlaylistCount) playlists → playlist \(Self.systemPlaylistID)")
             }
@@ -1140,11 +1229,11 @@ final class AppleMusicLibraryService {
     /// library API；云端失败或意外返回空结果时只合并本机副本，不允许它缩减
     /// 已持久化的云端资料库。iOS 的本机副本会跟系统「同步资料库」一致，继续
     /// 使用系统请求以避免改变现有稳定路径。
-    private func fetchLibrarySongs() async throws -> LibrarySongFetchResult {
+    private func fetchLibrarySongs(acceptEmptyCloudSnapshot: Bool) async throws -> LibrarySongFetchResult {
         #if os(macOS)
         do {
             let cloudSongs: [MusicKit.Song] = try await fetchCloudLibraryItems(endpoint: .songs)
-            if !cloudSongs.isEmpty {
+            if !cloudSongs.isEmpty || acceptEmptyCloudSnapshot {
                 plog("🎵 Apple Music cloud library fetched: \(cloudSongs.count) songs")
                 return LibrarySongFetchResult(
                     songs: cloudSongs,
@@ -1254,7 +1343,7 @@ final class AppleMusicLibraryService {
     /// 实现: 按平台拉用户全部歌单 (含分页), 每个用
     /// `.with([.tracks])` 把 tracks 拉过来, 转 PrimuseKit.Song 后 replace 进对应歌单。
     @discardableResult
-    private func syncUserPlaylists() async throws -> Int {
+    private func syncUserPlaylists(access: AppleMusicLibraryAccess) async throws -> Int {
         let allPlaylists = try await fetchLibraryPlaylists()
         plog("🎵 Apple Music user playlists: \(allPlaylists.count)")
 
@@ -1311,6 +1400,15 @@ final class AppleMusicLibraryService {
             }
         }
 
+        let latestAccess = try await appleMusic.refreshLibraryAccess()
+        try Task.checkCancellation()
+        guard access.canCommit(comparedTo: latestAccess) else {
+            cancel()
+            invalidateAccountCaches()
+            lastAccess = latestAccess
+            sync()
+            throw CancellationError()
+        }
         let mirrorsToKeep = Self.resolveUserPlaylistMirrors(fetchedMirrors)
         for mirror in mirrorsToKeep {
             library.ensurePlaylist(id: mirror.id, name: mirror.name)

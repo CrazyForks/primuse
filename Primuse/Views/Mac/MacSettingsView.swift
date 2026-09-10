@@ -826,8 +826,8 @@ private struct MacSTIntelligenceView: View {
 
     var body: some View {
         Group {
-            if intelligence.regionAvailability.isRefreshing,
-               intelligence.regionAvailability.context.region == .unknown {
+            if !intelligence.shouldExposeRemoteConfiguration,
+               intelligence.regionAvailability.isRefreshing {
             MacSTSection {
                 MacSTGroup {
                     MacSTRow(String(localized: "ai_region_checking"), divider: false) {
@@ -919,15 +919,6 @@ private struct MacSTIntelligenceView: View {
                                 .lineLimit(2)
                                 .textSelection(.enabled)
                                 .frame(width: 320, alignment: .trailing)
-                        }
-                    }
-                    if !selectedProviderIsAvailableInRegion {
-                        MacSTRow(
-                            String(localized: "ai_region_unavailable_title"),
-                            hint: String(localized: "ai_provider_region_blocked")
-                        ) {
-                            Image(systemName: "exclamationmark.shield.fill")
-                                .foregroundStyle(.orange)
                         }
                     }
                     MacSTRow(
@@ -1237,18 +1228,7 @@ private struct MacSTIntelligenceView: View {
         presets.append(contentsOf: AIProviderPreset.catalog(
             for: intelligence.regionAvailability.context.region
         ))
-        if !presets.contains(editor.selectedProviderPreset) {
-            presets.append(editor.selectedProviderPreset)
-        }
         return presets
-    }
-
-    private var selectedProviderIsAvailableInRegion: Bool {
-        AIProviderRegionPolicy.allows(
-            configuration: editor.draftConfiguration,
-            region: intelligence.regionAvailability.context.region,
-            purpose: .modelCatalog
-        )
     }
 
     private var statusCard: some View {
@@ -1299,10 +1279,6 @@ private struct MacSTIntelligenceView: View {
     }
 
     private var summaryText: String {
-        if editor.primuseRelayEnabled,
-           editor.primuseRelayConnectionPresentation != .notTested {
-            return editor.primuseRelayConnectionTitle
-        }
         switch editor.status {
         case .saving:
             return String(localized: "ai_saving_changes")
@@ -1330,8 +1306,8 @@ private struct MacSTIntelligenceView: View {
     }
 
     private var summaryColor: Color {
-        if editor.primuseRelayEnabled { return primuseRelayConnectionColor }
-        if case .failed = editor.status { return PMColor.bad }
+        if editor.status != .idle { return actionStatusColor }
+        if usesPrimuseRelay { return primuseRelayConnectionColor }
         return hasReadyAIConfiguration ? PMColor.brand : PMColor.textFaint
     }
 
@@ -1402,7 +1378,7 @@ private struct MacSTIntelligenceView: View {
     }
 
     private var usesPrimuseRelay: Bool {
-        editor.primuseRelayEnabled
+        editor.primuseRelayEnabled && editor.status == .idle
     }
 
     private var hasReadyAIConfiguration: Bool {
@@ -3580,7 +3556,7 @@ private struct MacSTAppleMusicView: View {
         case .notDetermined: return Lz("Authorize on the right to connect your subscription")
         case .denied:        return Lz("Go to System Settings → Privacy to re-enable")
         case .restricted:    return Lz("Restricted by Screen Time or MDM")
-        case .authorized:    return Lz("MusicKit Connected")
+        case .authorized:    return appleMusic.libraryAccessMessage ?? Lz("MusicKit Connected")
         }
     }
 

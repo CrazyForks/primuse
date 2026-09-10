@@ -140,6 +140,21 @@ final class FnMusicSourceTests: XCTestCase {
         XCTAssertNil(network.scan.nextAutomaticResumeDate(at: now, sourceStore: network.store))
     }
 
+    func testEmptyAppleMusicLocalScanRemovesOnlyItsLegacyRows() async throws {
+        let source = MusicSource(id: UUID().uuidString, name: "Local Music", type: .appleMusicLibrary)
+        let fixture = try makeScanFixture(count: 0, failAfterPage: false, source: source)
+        let removed = Song(id: "managed-download", title: "Old download", duration: 60,
+                           fileFormat: .m4a, filePath: "persistent-id", sourceID: source.id)
+        let cloud = Song(id: "cloud-song", title: "Cloud song", duration: 60,
+                         fileFormat: .m4a, filePath: "i.cloud", sourceID: AppleMusicLibraryIdentity.sourceID)
+        fixture.library.addSongs([removed, cloud], affectedSourceIDs: [source.id, cloud.sourceID])
+        XCTAssertTrue(fixture.start())
+        await fixture.scan.waitForActiveScansToComplete()
+        await fixture.library.waitForPendingIndex()
+        XCTAssertNil(fixture.scan.scanStates[source.id]?.failureMessage)
+        XCTAssertEqual(fixture.library.songs.map(\.id), [cloud.id])
+    }
+
     func testWebDAVCleanupDeletesFilesAndRetainsPermissionFailuresAcrossRescanAndReload() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DuplicateCleanup-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

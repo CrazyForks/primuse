@@ -65,6 +65,32 @@ final class DeviceMusicPlaybackTests: XCTestCase {
     }
 
     @MainActor
+    func testRemovingRestoredAppleMusicRowsKeepsReplacementPaused() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let player = try makePlayer(root: root, sourceType: .appleMusicLibrary)
+        defer { player.stop() }
+        let removed = PrimuseKit.Song(id: "old-download", title: "Old download", duration: 60,
+                                     fileFormat: .m4a, filePath: "old", sourceID: "local-music")
+        let retained = PrimuseKit.Song(id: "retained-local", title: "Retained file", duration: 90,
+                                      fileFormat: .m4a, filePath: "retained", sourceID: "local-music")
+        player.setQueue([removed, removed, retained])
+        player.stagePausedHandoff(song: removed, at: 15)
+        await player.prepareQueueForRemovingSongs(withIDs: [removed.id])
+        XCTAssertEqual(player.queue.map(\.id), [retained.id])
+        XCTAssertEqual(player.currentSong?.id, retained.id)
+        XCTAssertEqual(player.currentIndex, 0)
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertFalse(player.isLoading)
+        XCTAssertEqual(player.currentTime, 0)
+        await player.prepareQueueForRemovingSongs(withIDs: [retained.id])
+        XCTAssertTrue(player.queue.isEmpty)
+        XCTAssertNil(player.currentSong)
+        XCTAssertFalse(player.isPlaying)
+    }
+
+    @MainActor
     func testCarPlayAppleMusicPlaylistAdvancesWithoutLosingQueue() async throws {
         let root = try fixtureDirectory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

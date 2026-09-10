@@ -1625,6 +1625,7 @@ struct PrimuseApp: App {
                             scraperService: scraperService
                         )
                         playerService.handleAppDidBecomeActive()
+                        Task { await appleMusicLibrary.refreshAfterAccountChange() }
                         Task { await updateChecker.checkForUpdate() }
                     @unknown default:
                         break

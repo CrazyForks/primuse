@@ -738,6 +738,7 @@
 		AB11470CFF39E686C288E1BC /* EncodingFixPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE93C100D879B2996CB013F6 /* EncodingFixPicker.swift */; };
 		AB1E8C02F73F9A6844B20D20 /* MacCloudSyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E23D24CDD16F125DE20A4C3F /* MacCloudSyncSettingsView.swift */; };
 		AB336FFF4145009B17128D30 /* AudioCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E0E5D6E03C437F8A3D75067 /* AudioCacheManager.swift */; };
+		AB5430F0497D7D8B0CD41ABF /* AppleMusicLibraryAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92321D20941FF769E9E1D17 /* AppleMusicLibraryAccess.swift */; };
 		AB6341B1F3F64502DA84A07E /* WiFiTransferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758577225D4912E66F9AA8CE /* WiFiTransferView.swift */; };
 		ABCA4FEB3478B9AE3AD0E278 /* MacLibraryHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 050D42F39CEE8830909BFA20 /* MacLibraryHeader.swift */; };
 		ABD88E53839D81C6CB1117A6 /* PlayMediaIntentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52DC73F5A1DA3D173DB8D78E /* PlayMediaIntentHandler.swift */; };
@@ -2013,6 +2014,7 @@
 		D88899E6A991A835C5C2E7CC /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		D895718972388CC203A15AC1 /* Primuse.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Primuse.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D8CBD34CDDF944EDE45F0D28 /* LyricsTranslationCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsTranslationCache.swift; sourceTree = "<group>"; };
+		D92321D20941FF769E9E1D17 /* AppleMusicLibraryAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicLibraryAccess.swift; sourceTree = "<group>"; };
 		D9CC779608BF4A84958AE7BA /* LyricsLiveActivityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsLiveActivityService.swift; sourceTree = "<group>"; };
 		DAD23F4BFCB3C04845EAD939 /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/Localizable.strings; sourceTree = "<group>"; };
 		DB14DE8A67533EDCDC866501 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -2493,6 +2495,7 @@
 				653663F81F12EC2A31ED433E /* TopShelf */,
 				539C63BA2714A4F69419FFE1 /* Transfer */,
 				1BB0C0D9F755D99D1104F866 /* AppleMusicCatalogSearchAvailabilityPolicy.swift */,
+				D92321D20941FF769E9E1D17 /* AppleMusicLibraryAccess.swift */,
 				F7FB6E8E617D8E1857173D1F /* AppleMusicLibraryAPI.swift */,
 				A4141DA19F1EA3B39FC64C20 /* AppleMusicLocalAsset.swift */,
 				F822C83F2A4B56E2D9B1CC84 /* AppReviewPromptPolicy.swift */,
@@ -4097,6 +4100,7 @@
 				0263AA1D48551B4AD9E88687 /* AppReviewPromptPolicy.swift in Sources */,
 				26308C3D32A8ED124611376D /* AppleMusicCatalogSearchAvailabilityPolicy.swift in Sources */,
 				0F4FB86FA16FEF99A50DF566 /* AppleMusicLibraryAPI.swift in Sources */,
+				AB5430F0497D7D8B0CD41ABF /* AppleMusicLibraryAccess.swift in Sources */,
 				E1B22DA636C8C51DBCC4CE2A /* AppleMusicLocalAsset.swift in Sources */,
 				05FEEECAC78C364237505773 /* Artist.swift in Sources */,
 				74DE67BEEAC95A373BD53B59 /* ArtistNameConfiguration.swift in Sources */,

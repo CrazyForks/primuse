@@ -1,9 +1,59 @@
 import Foundation
 import PrimuseKit
+import Security
 import XCTest
 @testable import Primuse
 
 final class OpenAICompatibleProviderTests: XCTestCase {
+    func testCredentialLookupUsesSingleLocalMatchBeforeSynchronizedFallback() {
+        var variants: [Bool] = []
+        let expected = Data("isolated-test-key".utf8)
+        let (status, result) = KeychainService.passwordLookupResult(
+            for: "ai.provider.lookup-fixture",
+            supportsSynchronizableAttributes: true
+        ) { query in
+            XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitOne as String)
+            XCTAssertEqual(query[kSecReturnData as String] as? Bool, true)
+            XCTAssertNil(query[kSecReturnAttributes as String])
+            let synchronized = query[kSecAttrSynchronizable as String] as? Bool ?? false
+            variants.append(synchronized)
+            return synchronized ? (errSecSuccess, expected as NSData) : (errSecItemNotFound, nil)
+        }
+        XCTAssertEqual(status, errSecSuccess)
+        XCTAssertEqual(result as? Data, expected)
+        XCTAssertEqual(variants, [false, true])
+    }
+
+    func testCredentialLookupDoesNotFallBackAfterLocalSuccessOrFailure() {
+        for status in [errSecSuccess, errSecInteractionNotAllowed, errSecNotAvailable, errSecParam] {
+            var calls = 0
+            let (actual, _) = KeychainService.passwordLookupResult(
+                for: "ai.provider.lookup-fixture",
+                supportsSynchronizableAttributes: true
+            ) { query in
+                calls += 1
+                XCTAssertEqual(query[kSecAttrSynchronizable as String] as? Bool, false)
+                return (status, status == errSecSuccess ? Data("local".utf8) as NSData : nil)
+            }
+            XCTAssertEqual(actual, status)
+            XCTAssertEqual(calls, 1)
+        }
+    }
+
+    func testCredentialLookupOmitsSynchronizationOnUnsupportedPlatforms() {
+        var calls = 0
+        let (status, _) = KeychainService.passwordLookupResult(
+            for: "ai.provider.lookup-fixture",
+            supportsSynchronizableAttributes: false
+        ) { query in
+            calls += 1
+            XCTAssertNil(query[kSecAttrSynchronizable as String])
+            return (errSecItemNotFound, nil)
+        }
+        XCTAssertEqual(status, errSecItemNotFound)
+        XCTAssertEqual(calls, 1)
+    }
+
     func testModelsRequestUsesConfiguredEndpointAndReturnsNormalizedModels() async throws {
         let host = "intelligence-models.invalid"
         IntelligenceURLProtocol.configure(

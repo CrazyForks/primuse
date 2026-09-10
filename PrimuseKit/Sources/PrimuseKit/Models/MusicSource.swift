@@ -142,7 +142,7 @@ public enum MusicSourceType: String, Codable, Sendable, CaseIterable {
         case .local:
             return PMString("src.displayName.local")
         case .appleMusicLibrary:
-            return PMString("src.displayName.appleMusicLibrary")
+            return PMString("src.subtitle.appleMusicLibrary")
         }
     }
 

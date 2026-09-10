@@ -143,7 +143,7 @@ public enum AIProviderPreset: String, CaseIterable, Hashable, Sendable {
         .fireworksAI,
     ]
 
-    /// Mainland storefronts only expose approved mainland endpoints. Other
+    /// Mainland storefronts only suggest mainland providers. Other
     /// storefronts expose both the global and mainland provider catalogs.
     public static func catalog(for region: AICommercialRegion) -> [AIProviderPreset] {
         switch region {
@@ -154,6 +154,13 @@ public enum AIProviderPreset: String, CaseIterable, Hashable, Sendable {
         case .unknown:
             return []
         }
+    }
+
+    public static func visibleSelection(
+        _ preset: AIProviderPreset,
+        for region: AICommercialRegion
+    ) -> AIProviderPreset {
+        catalog(for: region).contains(preset) ? preset : .custom
     }
 
     public static func recommended(for region: AICommercialRegion) -> AIProviderPreset? {

@@ -291,22 +291,10 @@ struct AIRecommendationLibraryView: View {
             }
 
             if effectiveSelectedIntentID
-                != AIRecommendationIntentSelectionPolicy.defaultSelectionID,
-               let prompt = selectedIntent.semanticIntent {
-                VStack(alignment: .leading, spacing: 5) {
-                    if selectedIntent.detail != prompt {
-                        Text(verbatim: selectedIntent.detail)
-                            .font(.caption)
-                            .foregroundStyle(platformSecondaryTextColor)
-                    }
-                    Text("ai_recommendation_intent_prompt_label")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(platformSecondaryTextColor)
-                    Text(verbatim: prompt)
-                        .font(.caption)
-                        .foregroundStyle(platformPrimaryTextColor)
-                        .textSelection(.enabled)
-                }
+                != AIRecommendationIntentSelectionPolicy.defaultSelectionID {
+                Text(verbatim: selectedIntent.detail)
+                    .font(.caption)
+                    .foregroundStyle(platformSecondaryTextColor)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)

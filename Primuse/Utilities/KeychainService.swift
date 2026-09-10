@@ -236,26 +236,14 @@ enum KeychainService {
             return .found(cached)
         }
 
-        // 2) Keychain fallback — covers passwords saved in a previous session.
-        // Match BOTH variants (`kSecAttrSynchronizableAny`) and return every hit
-        // so we can pick deterministically: a local (non-synchronizable) entry
-        // is the most-recently-written copy whenever the `credentials` channel
-        // was toggled off, so it must win over a possibly-stale synchronizable
-        // copy left over from when the channel was on.
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: PrimuseConstants.keychainServiceName,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        if Self.supportsSynchronizableKeychainAttributes {
-            query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        let (status, result) = passwordLookupResult(
+            for: account,
+            supportsSynchronizableAttributes: Self.supportsSynchronizableKeychainAttributes
+        ) { query in
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            return (status, result)
         }
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
 
         #if DEBUG && targetEnvironment(simulator)
         let fallbackEnabled = simulatorPlaintextFallbackEnabled
@@ -305,21 +293,8 @@ enum KeychainService {
             }
         }
 
-        let items: [[String: Any]]
-        if let matches = result as? [[String: Any]] {
-            items = matches
-        } else if let match = result as? [String: Any] {
-            items = [match]
-        } else {
+        guard let data = result as? Data else {
             plog("🔑 Keychain getPassword unreadable result account=\(account.prefix(8))…")
-            return .failed(errSecDecode)
-        }
-
-        // Prefer the local (non-synchronizable) entry; fall back to any match.
-        let chosen = items.first(where: { ($0[kSecAttrSynchronizable as String] as? Bool) == false })
-            ?? items.first
-        guard let data = chosen?[kSecValueData as String] as? Data else {
-            plog("🔑 Keychain getPassword MISS status=\(status) account=\(account.prefix(8))…")
             return .failed(errSecDecode)
         }
 
@@ -331,6 +306,30 @@ enum KeychainService {
         cacheWrite(pw, for: account)
         plog("🔑 Keychain getPassword HIT (keychain) account=\(account.prefix(8))…")
         return .found(pw)
+    }
+
+    /// Password data requires a single match on macOS. Query the local copy
+    /// first so an older synchronized key cannot replace it after a read error.
+    static func passwordLookupResult(
+        for account: String,
+        supportsSynchronizableAttributes: Bool,
+        copyMatching: ([String: Any]) -> (OSStatus, AnyObject?)
+    ) -> (OSStatus, AnyObject?) {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: PrimuseConstants.keychainServiceName,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if supportsSynchronizableAttributes {
+            query[kSecAttrSynchronizable as String] = false
+        }
+        let localResult = copyMatching(query)
+        guard localResult.0 == errSecItemNotFound,
+              supportsSynchronizableAttributes else { return localResult }
+        query[kSecAttrSynchronizable as String] = true
+        return copyMatching(query)
     }
 
     @discardableResult
