@@ -3825,3 +3825,6 @@
 "dup_delete_retry_source" = "Réessayer cette source";
 "dup_delete_choose_files" = "Choisir des fichiers";
 "dup_delete_source_warning_format" = "%d fichiers d’origine seront supprimés de leurs sources. Ceux dont la suppression échoue seront conservés.";
+"dup_remove_local_only_action" = "Retirer de cet appareil uniquement";
+"dup_remove_local_only_title" = "Retirer de cet appareil uniquement ?";
+"dup_remove_local_only_message_format" = "Les %d copies restent intactes sur le serveur et sont retirées uniquement de la bibliothèque de cet appareil. Les analyses ultérieures sur cet appareil ne les rajouteront pas, et vos autres appareils ne sont pas concernés.";

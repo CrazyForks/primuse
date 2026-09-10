@@ -3825,3 +3825,6 @@
 "dup_delete_retry_source" = "Diese Quelle erneut versuchen";
 "dup_delete_choose_files" = "Dateien auswählen";
 "dup_delete_source_warning_format" = "%d Originaldateien werden aus ihren Quellen gelöscht. Fehlgeschlagene Dateien bleiben erhalten.";
+"dup_remove_local_only_action" = "Nur von diesem Gerät entfernen";
+"dup_remove_local_only_title" = "Nur von diesem Gerät entfernen?";
+"dup_remove_local_only_message_format" = "%d Kopien bleiben unverändert auf dem Server und werden nur aus der Mediathek dieses Geräts entfernt. Spätere Scans auf diesem Gerät fügen sie nicht wieder hinzu, und deine anderen Geräte sind nicht betroffen.";

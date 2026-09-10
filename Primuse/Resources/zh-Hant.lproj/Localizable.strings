@@ -3802,3 +3802,6 @@
 "dup_delete_retry_source" = "重試此來源";
 "dup_delete_choose_files" = "選擇檔案";
 "dup_delete_source_warning_format" = "將從來源刪除 %d 個原始檔案，刪除失敗的檔案會保留。";
+"dup_remove_local_only_action" = "僅從本裝置移除";
+"dup_remove_local_only_title" = "僅從本裝置移除?";
+"dup_remove_local_only_message_format" = "%d 首歌曲的檔案會原樣保留在伺服器上，僅從本裝置的資料庫中移除。本裝置日後再掃描也不會重新加入，其他裝置不受影響。";

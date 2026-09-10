@@ -3603,3 +3603,6 @@
 "dup_delete_retry_source" = "Retry This Source";
 "dup_delete_choose_files" = "Choose files";
 "dup_delete_source_warning_format" = "%d original files will be deleted from their sources. Failed files will be kept.";
+"dup_remove_local_only_action" = "Remove from This Device Only";
+"dup_remove_local_only_title" = "Remove from this device only?";
+"dup_remove_local_only_message_format" = "%d copies stay on the server untouched and are removed only from this device’s library. Later scans on this device will not add them back, and your other devices are not affected.";

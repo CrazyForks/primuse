@@ -3731,3 +3731,6 @@
 "dup_delete_retry_source" = "Ponów dla tego źródła";
 "dup_delete_choose_files" = "Wybierz pliki";
 "dup_delete_source_warning_format" = "Ze źródeł zostanie usuniętych %d oryginalnych plików. Pliki z błędami usuwania zostaną zachowane.";
+"dup_remove_local_only_action" = "Usuń tylko z tego urządzenia";
+"dup_remove_local_only_title" = "Usunąć tylko z tego urządzenia?";
+"dup_remove_local_only_message_format" = "%d kopii pozostaje nienaruszonych na serwerze i zostaje usuniętych tylko z biblioteki tego urządzenia. Późniejsze skanowania na tym urządzeniu nie dodadzą ich ponownie, a inne urządzenia nie są zmieniane.";

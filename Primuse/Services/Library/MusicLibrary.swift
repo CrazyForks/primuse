@@ -2879,6 +2879,27 @@ final class MusicLibrary {
     /// stick.
     private(set) var deletedSongIdentities: Set<String> = []
 
+    /// Identity keys the user removed from *this device's* library only.
+    ///
+    /// `deletedSongIdentities` is part of the portable snapshot and is unioned
+    /// across devices by iCloud/Apple TV snapshot sync, so writing a tombstone
+    /// there turns a local clean-up into a global deletion. When the source
+    /// file itself must survive (a WebDAV server that refuses DELETE), the
+    /// identity goes here instead: same shape (`"<accountID-or-sourceID>:<filePath>"`),
+    /// but persisted in a separate device-local file that is never encoded
+    /// into `Snapshot`, uploaded to CloudKit, or put into the Apple TV payload.
+    private(set) var deviceLocalExcludedSongIdentities: Set<String> = []
+    @ObservationIgnored private var deviceLocalExcludedSongsByID: [String: Song] = [:]
+
+    /// Sync retains the original catalogue even when this device hides a row.
+    /// Ordinary playback and UI lookups must continue to use `song(id:)`.
+    func songForSynchronization(id: String) -> Song? {
+        if let song = song(id: id) { return song }
+        guard let retained = deviceLocalExcludedSongsByID[id],
+              !deletedSongIdentities.contains(identityKey(for: retained)) else { return nil }
+        return retained
+    }
+
     /// Plug-in to translate a `Song.sourceID` (mount UUID) into its
     /// canonical identity prefix — usually the source's `cloudAccountID`
     /// for OAuth mounts, falling back to the sourceID itself for
@@ -2897,6 +2918,29 @@ final class MusicLibrary {
     private func identityKey(for song: Song) -> String {
         let prefix = sourceIdentityResolver?(song.sourceID) ?? song.sourceID
         return "\(prefix):\(song.filePath)"
+    }
+
+    /// A song is kept out of the library when the user tombstoned it globally
+    /// or excluded it on this device only. Scans, incremental flushes and
+    /// imported snapshots all have to honour both sets.
+    private func isBlockedFromLibrary(_ song: Song) -> Bool {
+        deletedSongIdentities.contains(identityKey(for: song))
+            || isExcludedOnThisDevice(song)
+    }
+
+    /// Exposed for callers (and tests) that need to know whether a row was
+    /// removed from this device without deleting the underlying file.
+    ///
+    /// Both key shapes are accepted on purpose: the ledger records
+    /// `identityKey(for:)`, whose prefix is the resolved account identity when
+    /// one exists, but `loadSnapshot` runs from `init` — before AppServices
+    /// installs `sourceIdentityResolver` — so at load time the same song
+    /// computes the raw `"<sourceID>:<filePath>"` form. Matching either one
+    /// keeps an exclusion effective regardless of which side of that
+    /// load-order window recorded it.
+    func isExcludedOnThisDevice(_ song: Song) -> Bool {
+        deviceLocalExcludedSongIdentities.contains(identityKey(for: song))
+            || deviceLocalExcludedSongIdentities.contains("\(song.sourceID):\(song.filePath)")
     }
     private(set) var disabledSourceIDs: Set<String> = []
     /// Mirrors the Apple Music library-sync preference as observable state.
@@ -3017,6 +3061,10 @@ final class MusicLibrary {
     private let startupCacheURL: URL
     private let derivedIndexCacheURL: URL
     private let playlistDurabilityURL: URL
+    /// Device-local song exclusions. Deliberately a separate file from
+    /// `snapshotURL`: nothing in the iCloud/Apple TV transfer path reads or
+    /// copies it, so the exclusion cannot leak to another device.
+    private let deviceLocalExclusionURL: URL
     private let playlistSyncWriterID: String
     /// Canonical device-local song rows. JSON is retained as an interoperable
     /// iCloud/Apple TV snapshot, but routine scan/backfill writes go here.
@@ -3379,6 +3427,8 @@ final class MusicLibrary {
         startupCacheURL = directory.appendingPathComponent("library-startup-cache.plist")
         derivedIndexCacheURL = directory.appendingPathComponent("library-derived-index.plist")
         playlistDurabilityURL = directory.appendingPathComponent("playlist-durability.json")
+        deviceLocalExclusionURL = directory
+            .appendingPathComponent("library-device-local-excluded-songs.json")
         portableSnapshotNeedsInitialWrite = !fileManager.fileExists(atPath: snapshotURL.path)
         let writerDefaultsKey = "primuse.playlist.syncWriterID"
         if let existingWriterID = UserDefaults.standard.string(forKey: writerDefaultsKey),
@@ -3403,6 +3453,9 @@ final class MusicLibrary {
         decoder.dateDecodingStrategy = .iso8601
 
         self.songStoreSnapshotWriter = songStoreSnapshotWriter
+        // Must precede `loadSnapshot`: the loader filters the decoded rows
+        // through this set so an imported snapshot cannot resurrect them.
+        loadDeviceLocalExclusions()
         loadSnapshot(preferExternalSnapshot: preferExternalSnapshot)
 
         #if os(iOS)
@@ -3683,19 +3736,29 @@ final class MusicLibrary {
         // same upstream account mints a new mount.id but the path is
         // unchanged, and we want the tombstone to keep working. The
         // user can reverse the tombstone via `restoreDeletedSong`.
+        // `isBlockedFromLibrary` additionally drops rows the user removed from
+        // this device only (source file intentionally left in place), so a
+        // rescan of that source does not re-add them here.
         // 给每首新歌就近填 albumID/artistID。这样后台 rebuildIndex 不需要回头
         // mutate songs 数组, 1w+ 首库扫描时 main actor 不会被全表 ID 重赋值
         // 卡到。计算成本 = SHA256(string) × 2 per song, 1w 首约 5ms 总。
         // Keep only compact identity sets during the first pass. Retaining a
         // second full `[Song]` snapshot here doubled the peak of every remote
         // incremental flush, even though preparation can be done lazily below.
+        if pruneMissingSongs, !deviceLocalExcludedSongsByID.isEmpty {
+            let scannedSourceIDs = explicitAffectedSourceIDs ?? Set(newSongs.map(\.sourceID))
+            let scannedIDs = authoritativeIncomingIDs ?? Set(newSongs.map(\.id))
+            discardRetainedSongs {
+                scannedSourceIDs.contains($0.sourceID) && !scannedIDs.contains($0.id)
+            }
+        }
         var incomingIDs = authoritativeIncomingIDs ?? []
         var sourceIDs = explicitAffectedSourceIDs ?? []
         var appendedIDs: Set<String> = []
         if pruneMissingSongs, authoritativeIncomingIDs == nil {
             incomingIDs.reserveCapacity(newSongs.count)
         }
-        for song in newSongs where !deletedSongIdentities.contains(identityKey(for: song)) {
+        for song in newSongs where !isBlockedFromLibrary(song) {
             if pruneMissingSongs {
                 if authoritativeIncomingIDs == nil {
                     incomingIDs.insert(song.id)
@@ -3764,7 +3827,7 @@ final class MusicLibrary {
             persistedSongIDs.insert(song.id)
         }
 
-        for song in newSongs where !deletedSongIdentities.contains(identityKey(for: song)) {
+        for song in newSongs where !isBlockedFromLibrary(song) {
             var newSong = song
             if mergeServerCatalogRows,
                let idx = existingIndexByID[newSong.id] {
@@ -4035,6 +4098,7 @@ final class MusicLibrary {
     /// Delete a single song and rebuild index
     @discardableResult
     func deleteSong(_ song: Song) -> Int {
+        discardRetainedSongs { $0.id == song.id }
         songs.removeAll { $0.id == song.id }
         songIndexByID = Self.makeSongIndex(songs)
         // Tombstone keyed by canonical identity (account+path, not
@@ -4059,6 +4123,7 @@ final class MusicLibrary {
     func deleteSongs(_ songsToDelete: [Song]) -> [String: Int] {
         guard !songsToDelete.isEmpty else { return [:] }
         let idsToDelete = Set(songsToDelete.map(\.id))
+        discardRetainedSongs { idsToDelete.contains($0.id) }
         let affectedSourceIDs = Set(songsToDelete.map(\.sourceID))
         for song in songsToDelete {
             deletedSongIdentities.insert(identityKey(for: song))
@@ -4077,6 +4142,84 @@ final class MusicLibrary {
         persistSongChanges(deletingIDs: idsToDelete, needsPromptCompatibilitySnapshot: true)
         postSongsRemoved(songsToDelete, songIDs: idsToDelete)
         return remainingCounts
+    }
+
+    /// Persist the local exclusion before removing rows. Retained catalogue
+    /// records keep snapshot mirrors and CloudKit membership unchanged.
+    @discardableResult
+    func removeSongsFromThisDevice(_ songsToRemove: [Song]) throws -> [String: Int] {
+        guard !songsToRemove.isEmpty else { return [:] }
+        let idsToRemove = Set(songsToRemove.map(\.id))
+        let affectedSourceIDs = Set(songsToRemove.map(\.sourceID))
+        let previousIdentities = deviceLocalExcludedSongIdentities
+        let previousSongs = deviceLocalExcludedSongsByID
+        for song in songsToRemove {
+            deviceLocalExcludedSongIdentities.insert(identityKey(for: song))
+            // The account resolver is installed after startup snapshot loading.
+            deviceLocalExcludedSongIdentities.insert("\(song.sourceID):\(song.filePath)")
+            deviceLocalExcludedSongsByID[song.id] = song
+        }
+        do {
+            try persistDeviceLocalExclusions()
+        } catch {
+            deviceLocalExcludedSongIdentities = previousIdentities
+            deviceLocalExcludedSongsByID = previousSongs
+            throw error
+        }
+        songs.removeAll { idsToRemove.contains($0.id) }
+        songIndexByID = Self.makeSongIndex(songs)
+        var remainingCounts = Dictionary(
+            uniqueKeysWithValues: affectedSourceIDs.map { ($0, 0) }
+        )
+        for song in songs where affectedSourceIDs.contains(song.sourceID) {
+            remainingCounts[song.sourceID, default: 0] += 1
+        }
+        requestLibraryIndexMaintenance(.immediate)
+        persistSongChanges(deletingIDs: idsToRemove, needsPromptCompatibilitySnapshot: true)
+        postSongsRemoved(songsToRemove, songIDs: idsToRemove)
+        return remainingCounts
+    }
+
+    private struct DeviceLocalExclusionLedger: Codable, Sendable {
+        var formatVersion: Int? = 2
+        var identities: [String]
+        var retainedSongs: [Song]?
+    }
+
+    private func loadDeviceLocalExclusions() {
+        guard let data = try? Data(contentsOf: deviceLocalExclusionURL) else { return }
+        guard let ledger = try? JSONDecoder().decode(DeviceLocalExclusionLedger.self, from: data) else {
+            plog("Device-local song exclusions unreadable; keeping the file untouched")
+            return
+        }
+        deviceLocalExcludedSongIdentities = Set(ledger.identities)
+        deviceLocalExcludedSongsByID = Dictionary(
+            (ledger.retainedSongs ?? []).map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+    }
+
+    private func persistDeviceLocalExclusions() throws {
+        let ledger = DeviceLocalExclusionLedger(
+            identities: deviceLocalExcludedSongIdentities.sorted(),
+            retainedSongs: deviceLocalExcludedSongsByID.values.sorted { $0.id < $1.id }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(ledger).write(to: deviceLocalExclusionURL, options: .atomic)
+    }
+
+    private func discardRetainedSongs(where shouldRemove: (Song) -> Bool) {
+        let removed = deviceLocalExcludedSongsByID.values.filter(shouldRemove)
+        guard !removed.isEmpty else { return }
+        for song in removed {
+            deviceLocalExcludedSongsByID[song.id] = nil
+        }
+        // A genuine source deletion or authoritative rescan must not export
+        // stale records retained only for a previous local exclusion.
+        do { try persistDeviceLocalExclusions() }
+        catch { plog("Device-local retained catalogue update failed: \(error.localizedDescription)") }
+        markPortableSnapshotDirty()
     }
 
     /// Reverse a previous `deleteSong` so the next scan can re-add the
@@ -4184,8 +4327,15 @@ final class MusicLibrary {
         }
         if removedCatalog { automaticArtistArtworkCatalogRevision &+= 1 }
         disabledSourceIDs.subtract(sourceIDs)
+        let removedRetainedIDs = Set(deviceLocalExcludedSongsByID.values
+            .filter { sourceIDs.contains($0.sourceID) }.map(\.id))
+        discardRetainedSongs { sourceIDs.contains($0.sourceID) }
         guard !prepared.removedSongs.isEmpty else {
-            if removedCatalog { persistSnapshot() }
+            if !removedRetainedIDs.isEmpty {
+                cleanPlaylistEntries()
+                cleanPlaybackHistoryEntries()
+            }
+            if removedCatalog || !removedRetainedIDs.isEmpty { persistSnapshot() }
             return []
         }
 
@@ -5839,7 +5989,7 @@ final class MusicLibrary {
         using resolutionIndex: IdentityResolutionIndex
     ) -> String? {
         // Tier 1: exact ID — same mount on both devices, or hash collision.
-        if songIndexByID[identity.songID] != nil {
+        if songForSynchronization(id: identity.songID) != nil {
             return identity.songID
         }
         // Tier 2: cloud account + file path. `sourceIdentityResolver`
@@ -5851,6 +6001,14 @@ final class MusicLibrary {
                 return songID
             }
         }
+        if let accountID = identity.cloudAccountID, !identity.filePath.isEmpty,
+           let retained = deviceLocalExcludedSongsByID.values.first(where: {
+               sourceIdentityResolver?($0.sourceID) == accountID
+                   && $0.filePath == identity.filePath
+                   && songForSynchronization(id: $0.id) != nil
+           }) {
+            return retained.id
+        }
         // Tier 3: fuzzy match — for NAS / FTP / SMB / WebDAV / local
         // sources where there's no cloud account anchor.
         if !identity.title.isEmpty {
@@ -5861,6 +6019,14 @@ final class MusicLibrary {
                     return song.id
                 }
             }
+        }
+        if !identity.title.isEmpty,
+           let retained = deviceLocalExcludedSongsByID.values.first(where: {
+               $0.title == identity.title && abs($0.duration - identity.duration) < 1.0
+                   && (identity.artistName == nil || $0.artistName == identity.artistName)
+                   && songForSynchronization(id: $0.id) != nil
+           }) {
+            return retained.id
         }
         return nil
     }
@@ -7029,6 +7195,29 @@ final class MusicLibrary {
         // Keeping the work local gives the array one copy-on-write mutation
         // and the observable model one final publication.
         var loadedSongs = canonicalSongs ?? snapshot.songs
+        // Device-local exclusions never travel inside the snapshot, so a
+        // snapshot imported from another device (LibrarySnapshotSync writes
+        // `library-cache.json` wholesale, then the library reloads from disk)
+        // still carries the rows this device removed locally. Re-apply the
+        // exclusion here — before the SQLite mirror is rewritten below — so
+        // the removal survives snapshot sync instead of bouncing back.
+        if !deviceLocalExcludedSongIdentities.isEmpty {
+            let tombstones = Set(snapshot.deletedSongIdentities ?? [])
+            for song in loadedSongs where isExcludedOnThisDevice(song)
+                && !tombstones.contains(identityKey(for: song)) {
+                deviceLocalExcludedSongsByID[song.id] = song
+            }
+            deviceLocalExcludedSongsByID = deviceLocalExcludedSongsByID.filter {
+                !tombstones.contains(identityKey(for: $0.value))
+            }
+            try? persistDeviceLocalExclusions()
+            let beforeCount = loadedSongs.count
+            loadedSongs.removeAll { isExcludedOnThisDevice($0) }
+            let skipped = beforeCount - loadedSongs.count
+            if skipped > 0 {
+                plog("ℹ️ Library load skipped \(skipped) song(s) excluded on this device")
+            }
+        }
         let shouldInspectLoadedSongs = preferExternalSnapshot
             || canonicalSongs == nil
             || (initialStoreState?.completedMigrationVersion ?? 0) < Self.loadedSongMigrationVersion
@@ -7594,8 +7783,11 @@ final class MusicLibrary {
     }
 
     private func makeSnapshot() -> Snapshot {
-        Snapshot(
-            songs: songs,
+        let retained = deviceLocalExcludedSongsByID.values.filter {
+            songIndexByID[$0.id] == nil && !deletedSongIdentities.contains(identityKey(for: $0))
+        }.sorted { $0.id < $1.id }
+        return Snapshot(
+            songs: retained.isEmpty ? songs : songs + retained,
             playlists: allPlaylists,
             artworkOverrides: allArtworkOverrides.isEmpty ? nil : allArtworkOverrides,
             libraryReviews: allLibraryReviews.isEmpty ? nil : allLibraryReviews,
@@ -8070,13 +8262,13 @@ final class MusicLibrary {
     private func cleanPlaylistEntries() {
         for playlistID in playlistSongIDs.keys {
             playlistSongIDs[playlistID] = (playlistSongIDs[playlistID] ?? []).filter {
-                songIndexByID[$0] != nil
+                songForSynchronization(id: $0) != nil
             }
         }
     }
 
     private func cleanPlaybackHistoryEntries() {
-        recentPlaybackSongIDs = recentPlaybackSongIDs.filter { songIndexByID[$0] != nil }
+        recentPlaybackSongIDs = recentPlaybackSongIDs.filter { songForSynchronization(id: $0) != nil }
     }
 
     @discardableResult

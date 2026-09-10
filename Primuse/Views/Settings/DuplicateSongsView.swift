@@ -184,6 +184,10 @@ struct DuplicateSongsView: View {
             showCleanupResult()
             Task { await rescan() }
         }
+        .onChange(of: cleaner.deviceLocalRemovalRevision) { _, _ in
+            // 仅本机隐藏: 不弹结果提示, 只重扫让分组去掉被隐藏的行。
+            Task { await rescan() }
+        }
     }
 
     #if os(macOS)
@@ -221,6 +225,9 @@ struct DuplicateSongsView: View {
             }
             .onChange(of: cleaner.completionRevision) { _, _ in
                 showCleanupResult()
+                Task { await rescan() }
+            }
+            .onChange(of: cleaner.deviceLocalRemovalRevision) { _, _ in
                 Task { await rescan() }
             }
             .onChange(of: retentionStrategy) { _, _ in
@@ -1208,6 +1215,15 @@ private struct DuplicateDeletionFailuresView: View {
     @State private var recoveringSource: MusicSource?
     @State private var localSource: MusicSource?
     @State private var recoveryError: String?
+    @State private var pendingDeviceLocalRemoval: PendingDeviceLocalRemoval?
+
+    /// Pending "remove from this device only" confirmation. Carries the count
+    /// so the dialog message stays correct while the sheet is open.
+    private struct PendingDeviceLocalRemoval: Identifiable, Equatable {
+        let sourceID: String
+        let count: Int
+        var id: String { sourceID }
+    }
 
     var body: some View {
         NavigationStack {
@@ -1241,6 +1257,20 @@ private struct DuplicateDeletionFailuresView: View {
                             dismiss()
                         }
                         .disabled(cleaner.progress != nil)
+                        // WebDAV shares that answer 403/405 will keep refusing
+                        // DELETE until the server admin changes the share, so
+                        // offer the only outcome the app can still deliver:
+                        // drop the copies from this device's library and leave
+                        // the server files alone.
+                        if failure.supportsDeviceLocalRemoval {
+                            Button("dup_remove_local_only_action") {
+                                pendingDeviceLocalRemoval = PendingDeviceLocalRemoval(
+                                    sourceID: failure.id,
+                                    count: failure.deviceLocalRemovableSongs.count
+                                )
+                            }
+                            .disabled(cleaner.progress != nil)
+                        }
                     }
                 }
             }
@@ -1306,6 +1336,34 @@ private struct DuplicateDeletionFailuresView: View {
             }
         }
         #endif
+        .confirmationDialog(
+            "dup_remove_local_only_title",
+            isPresented: Binding(
+                get: { pendingDeviceLocalRemoval != nil },
+                set: { if !$0 { pendingDeviceLocalRemoval = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeviceLocalRemoval
+        ) { pending in
+            Button("dup_remove_local_only_action", role: .destructive) {
+                do {
+                    try cleaner.removeFromThisDeviceOnly(sourceID: pending.sourceID)
+                } catch {
+                    recoveryError = error.localizedDescription
+                }
+                pendingDeviceLocalRemoval = nil
+                // 仍有其它源端失败时留在本表, 让剩余条目继续可见可处理。
+                if cleaner.lastSourceFailures.isEmpty {
+                    dismiss()
+                }
+            }
+            Button("cancel", role: .cancel) { pendingDeviceLocalRemoval = nil }
+        } message: { pending in
+            Text(String(
+                format: String(localized: "dup_remove_local_only_message_format"),
+                pending.count
+            ))
+        }
         .alert("dup_delete_result_title", isPresented: Binding(get: { recoveryError != nil && localSource == nil && recoveringSource == nil }, set: { if !$0 { recoveryError = nil } })) {
             Button("close", role: .cancel) { recoveryError = nil }
         } message: {

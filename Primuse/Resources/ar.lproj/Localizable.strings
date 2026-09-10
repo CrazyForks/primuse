@@ -3731,3 +3731,6 @@
 "dup_delete_retry_source" = "إعادة محاولة هذا المصدر";
 "dup_delete_choose_files" = "اختيار ملفات";
 "dup_delete_source_warning_format" = "سيتم حذف %d من الملفات الأصلية من مصادرها. سيتم الاحتفاظ بالملفات التي يتعذر حذفها.";
+"dup_remove_local_only_action" = "إزالة من هذا الجهاز فقط";
+"dup_remove_local_only_title" = "إزالة من هذا الجهاز فقط؟";
+"dup_remove_local_only_message_format" = "تبقى %d نسخة على الخادم دون تغيير وتُزال فقط من مكتبة هذا الجهاز. لن تعيد عمليات الفحص اللاحقة على هذا الجهاز إضافتها، ولن تتأثر أجهزتك الأخرى.";

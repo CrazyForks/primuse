@@ -2154,7 +2154,7 @@ final class CloudKitSyncService {
     /// worst it's dropped, which matches the receiver's reality anyway.
     private func makeIdentities(forSongIDs songIDs: [String]) -> [SongIdentity] {
         songIDs.map { id in
-            if let song = library.song(id: id) {
+            if let song = library.songForSynchronization(id: id) {
                 return SongIdentity(
                     songID: song.id,
                     title: song.title,

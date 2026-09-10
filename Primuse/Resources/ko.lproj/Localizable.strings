@@ -3825,3 +3825,6 @@
 "dup_delete_retry_source" = "이 소스 다시 시도";
 "dup_delete_choose_files" = "파일 선택";
 "dup_delete_source_warning_format" = "소스에서 원본 파일 %d개를 삭제합니다. 삭제에 실패한 파일은 유지됩니다.";
+"dup_remove_local_only_action" = "이 기기에서만 제거";
+"dup_remove_local_only_title" = "이 기기에서만 제거할까요?";
+"dup_remove_local_only_message_format" = "%d개의 파일은 서버에 그대로 남고 이 기기의 보관함에서만 제거됩니다. 이 기기에서 다시 검색해도 추가되지 않으며 다른 기기에는 영향을 주지 않습니다.";

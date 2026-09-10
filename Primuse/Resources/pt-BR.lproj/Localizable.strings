@@ -3731,3 +3731,6 @@
 "dup_delete_retry_source" = "Tentar esta fonte novamente";
 "dup_delete_choose_files" = "Escolher arquivos";
 "dup_delete_source_warning_format" = "%d arquivos originais serão excluídos de suas fontes. Os que não puderem ser excluídos serão mantidos.";
+"dup_remove_local_only_action" = "Remover apenas deste dispositivo";
+"dup_remove_local_only_title" = "Remover apenas deste dispositivo?";
+"dup_remove_local_only_message_format" = "As %d cópias permanecem intactas no servidor e são removidas apenas da biblioteca deste dispositivo. As verificações posteriores neste dispositivo não vão adicioná-las de novo, e seus outros dispositivos não são afetados.";

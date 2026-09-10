@@ -3826,3 +3826,6 @@
 "dup_delete_retry_source" = "このソースを再試行";
 "dup_delete_choose_files" = "ファイルを選択";
 "dup_delete_source_warning_format" = "ソースから%d個の元ファイルを削除します。削除できないファイルは保持されます。";
+"dup_remove_local_only_action" = "このデバイスからのみ削除";
+"dup_remove_local_only_title" = "このデバイスからのみ削除しますか?";
+"dup_remove_local_only_message_format" = "%d 件のファイルはサーバー上にそのまま残り、このデバイスのライブラリからのみ削除されます。このデバイスで再スキャンしても追加されず、他のデバイスには影響しません。";

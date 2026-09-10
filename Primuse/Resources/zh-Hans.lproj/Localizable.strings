@@ -3918,3 +3918,6 @@
 "dup_delete_retry_source" = "重试此来源";
 "dup_delete_choose_files" = "选择文件";
 "dup_delete_source_warning_format" = "将从来源中删除 %d 个原文件，删除失败的文件会保留。";
+"dup_remove_local_only_action" = "仅从本设备移除";
+"dup_remove_local_only_title" = "仅从本设备移除?";
+"dup_remove_local_only_message_format" = "%d 首歌曲的文件会原样保留在服务器上，仅从本设备的资料库中移除。本设备之后再扫描也不会重新添加，其他设备不受影响。";

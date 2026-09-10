@@ -16,10 +16,52 @@ final class DuplicateCleanupService {
     }
 
     struct SourceFailure: Identifiable {
+        /// A WebDAV server that refuses DELETE answers 403 (→ `permissionDenied`)
+        /// or 405 (→ `readOnly`). Those two are the only outcomes where the file
+        /// is known to stay on the server and retrying cannot help until the
+        /// admin changes the share, so they are the only ones that may be
+        /// resolved by dropping the row from this device. 401 (authentication),
+        /// timeouts, connection errors and unknown failures stay retry-only —
+        /// the source may well delete the file on the next attempt.
+        static let deviceLocalRemovableReasons: Set<SourceFileDeletionFailureReason> = [
+            .permissionDenied, .readOnly,
+        ]
+
         let source: MusicSource
         var songs: [Song]
         var reasons: Set<SourceFileDeletionFailureReason>
+        /// Per-song reasons. `reasons` is the union used for the help text; the
+        /// device-local removal offer has to be decided song by song so a
+        /// timed-out row in the same batch is never swept along.
+        var reasonsBySongID: [String: Set<SourceFileDeletionFailureReason>] = [:]
         var id: String { source.id }
+
+        /// Songs of this failure that may be removed from this device only:
+        /// WebDAV source, and every recorded reason for that song is a
+        /// permission-type refusal.
+        var deviceLocalRemovableSongs: [Song] {
+            // 若将来放宽到账号型源, 需一并考虑 MusicLibrary.isExcludedOnThisDevice
+            // 的排除键处理 (账号身份前缀与原始 sourceID 前缀两种形式)。
+            guard source.type == .webdav else { return [] }
+            return songs.filter { song in
+                guard let songReasons = reasonsBySongID[song.id],
+                      !songReasons.isEmpty else { return false }
+                return songReasons.isSubset(of: Self.deviceLocalRemovableReasons)
+            }
+        }
+
+        var supportsDeviceLocalRemoval: Bool { !deviceLocalRemovableSongs.isEmpty }
+
+        /// Keep only the songs still relevant to this failure and drop the
+        /// per-song reasons that went with the removed ones, so the union used
+        /// for the help text never outlives its songs.
+        mutating func retainSongs(where isIncluded: (Song) -> Bool) {
+            songs.removeAll { !isIncluded($0) }
+            guard !reasonsBySongID.isEmpty else { return }
+            let keptIDs = Set(songs.map(\.id))
+            reasonsBySongID = reasonsBySongID.filter { keptIDs.contains($0.key) }
+            reasons = Set(reasonsBySongID.values.joined())
+        }
     }
 
     /// 当前进度。nil 表示空闲。
@@ -35,6 +77,9 @@ final class DuplicateCleanupService {
     /// 每次资料库批量删除和结果字段都提交后递增。界面监听它刷新扫描，不能
     /// 监听源文件进度的 100%，因为那一刻资料库事务尚未落地。
     private(set) var completionRevision: UInt = 0
+    /// 设备本地移除 (不动源端) 后递增。界面监听它刷新重复分组, 让被隐藏的行
+    /// 立即消失, 而不会触发 completionRevision 的「已清理 N 首」结果提示。
+    private(set) var deviceLocalRemovalRevision = 0
 
     private let library: MusicLibrary
     private let sourceManager: SourceManager
@@ -52,6 +97,46 @@ final class DuplicateCleanupService {
     func retryFailedSource(_ sourceID: String) -> Task<Void, Never>? {
         let failedIDs = Set(lastSourceFailures.filter { $0.id == sourceID }.flatMap { $0.songs.map(\.id) })
         return cleanup(library.songs.filter { failedIDs.contains($0.id) && $0.sourceID == sourceID })
+    }
+
+    /// Songs of `sourceID` that the user may drop from this device's library
+    /// while the server copy stays in place. Empty unless the source is WebDAV
+    /// and the deletion was refused for a permission reason.
+    func deviceLocalRemovableSongs(forSourceID sourceID: String) -> [Song] {
+        lastSourceFailures
+            .first { $0.id == sourceID }?
+            .deviceLocalRemovableSongs ?? []
+    }
+
+    /// Remove only the local WebDAV rows after a permission refusal. The
+    /// catalogue retained for synchronization leaves other devices unchanged.
+    @discardableResult
+    func removeFromThisDeviceOnly(sourceID: String) throws -> Int {
+        guard activeTask == nil else { return 0 }
+        let eligibleIDs = Set(deviceLocalRemovableSongs(forSourceID: sourceID).map(\.id))
+        guard !eligibleIDs.isEmpty else { return 0 }
+        let songsToRemove = library.songs.filter {
+            eligibleIDs.contains($0.id) && $0.sourceID == sourceID
+        }
+        guard !songsToRemove.isEmpty else { return 0 }
+
+        let remainingCounts = try library.removeSongsFromThisDevice(songsToRemove)
+        for (id, remaining) in remainingCounts {
+            sourcesStore.updateLocal(id) { $0.songCount = remaining }
+        }
+        let removedIDs = Set(songsToRemove.map(\.id))
+        lastSourceFailures = lastSourceFailures.compactMap { failure -> SourceFailure? in
+            var retained = failure
+            retained.retainSongs { !removedIDs.contains($0.id) }
+            return retained.songs.isEmpty ? nil : retained
+        }
+        lastFailedTitles = lastSourceFailures.flatMap { $0.songs.map(\.title) }
+        // Not a source deletion: `lastCompletedCount`/`completionRevision` stay
+        // untouched so the parent view neither re-presents the failures sheet
+        // the dialog just dismissed nor reports these rows as "cleaned".
+        deviceLocalRemovalRevision &+= 1
+        plog("ℹ️ Duplicate cleanup removed \(songsToRemove.count) song(s) from this device only (source \(sourceID))")
+        return songsToRemove.count
     }
 
     /// 串行删除 songs (按源端逐首)。已有任务进行中时忽略再次触发。
@@ -76,7 +161,9 @@ final class DuplicateCleanupService {
         let currentIDs = Set(library.songs.map(\.id))
         let remainingFailures = lastSourceFailures.compactMap { failure -> SourceFailure? in
             var retained = failure
-            retained.songs.removeAll { requestedIDs.contains($0.id) || !currentIDs.contains($0.id) }
+            retained.retainSongs {
+                !requestedIDs.contains($0.id) && currentIDs.contains($0.id)
+            }
             return retained.songs.isEmpty ? nil : retained
         }
         progress = Progress(done: 0, total: songs.count)
@@ -133,7 +220,9 @@ final class DuplicateCleanupService {
                     if let source = sourceByID[outcome.song.sourceID] {
                         var failure = failuresBySource[source.id] ?? SourceFailure(source: source, songs: [], reasons: [])
                         failure.songs.append(outcome.song)
-                        failure.reasons.formUnion(outcome.result.failedPaths.map(\.reason))
+                        let songReasons = Set(outcome.result.failedPaths.map(\.reason))
+                        failure.reasons.formUnion(songReasons)
+                        failure.reasonsBySongID[outcome.song.id, default: []].formUnion(songReasons)
                         failuresBySource[source.id] = failure
                     }
                 } else {
